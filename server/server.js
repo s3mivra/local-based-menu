@@ -32,13 +32,13 @@ app.use(cors({
 }));
 
 // Update Socket.io CORS to match
+// ✅ KEEP THIS NEW ONE
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
-  },
-  transports: ['websocket']
+  }
 });
 
 app.use(express.json({ limit: '10mb' }));
