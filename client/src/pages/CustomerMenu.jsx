@@ -231,7 +231,7 @@ export default function CustomerMenu() {
                         <h3 className="font-bold text-lg mb-1 text-white leading-tight">{p.name}</h3>
                         {p.description && <p className="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-3">{p.description}</p>}
                         <div className="flex justify-between items-center mt-auto pt-4 border-t border-gray-800/50">
-                          <p className="text-accent font-bold text-xl">${(p.basePrice || 0).toFixed(2)}{p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}</p>
+                          <p className="text-accent font-bold text-xl">P{(p.basePrice || 0).toFixed(2)}{p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}</p>
                           <span className="bg-dark text-white px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">{p.sizes?.length > 0 ? 'Select' : 'Add'}</span>
                         </div>
                       </div>
@@ -258,7 +258,7 @@ export default function CustomerMenu() {
                     {groupedSizes.Hot.map((size, idx) => (
                       <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
                         <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
-                        <span className="text-accent font-bold">${size.price.toFixed(2)}</span>
+                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
@@ -271,7 +271,7 @@ export default function CustomerMenu() {
                     {groupedSizes.Iced.map((size, idx) => (
                       <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
                         <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
-                        <span className="text-accent font-bold">${size.price.toFixed(2)}</span>
+                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
@@ -284,7 +284,7 @@ export default function CustomerMenu() {
                     {groupedSizes.Standard.map((size, idx) => (
                       <label key={`std-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
                         <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white">{size.displayName}</span></div>
-                        <span className="text-accent font-bold">${size.price.toFixed(2)}</span>
+                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
@@ -305,7 +305,7 @@ export default function CustomerMenu() {
             <div className="mb-4 max-h-40 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
               {cart.map(item => (
                 <div key={item.cartItemId} className="flex justify-between items-center py-3 border-b border-gray-800/50">
-                  <div className="flex-1"><span className="text-sm font-bold text-white block">{item.name}</span><span className="text-xs text-accent font-semibold">${item.price.toFixed(2)}</span></div>
+                  <div className="flex-1"><span className="text-sm font-bold text-white block">{item.name}</span><span className="text-xs text-accent font-semibold">P{item.price.toFixed(2)}</span></div>
                   <div className="flex items-center gap-3">
                     <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">-</button>
                     <span className="text-sm w-4 text-center font-bold">{item.quantity}</span>
@@ -315,7 +315,7 @@ export default function CustomerMenu() {
               ))}
             </div>
             <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
-              <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">${total.toFixed(2)}</span></div>
+              <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">P{total.toFixed(2)}</span></div>
               <button onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
             </div>
           </div>

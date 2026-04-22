@@ -293,14 +293,14 @@ export default function AdminDashboard() {
                     {order.items.map((item, idx) => (
                       <div key={idx} className="flex justify-between text-sm">
                         <span className="font-semibold text-gray-200">{item.quantity}x {item.name}</span>
-                        <span className="text-gray-500">${(item.price * item.quantity).toFixed(2)}</span>
+                        <span className="text-gray-500">P{(item.price * item.quantity).toFixed(2)}</span>
                       </div>
                     ))}
                   </div>
 
                   <div className="bg-dark/50 p-3 rounded-lg border border-gray-800/50 space-y-2 mb-4">
                     <div className="flex justify-between text-xs text-gray-400">
-                      <span>Subtotal:</span><span>${order.subtotal.toFixed(2)}</span>
+                      <span>Subtotal:</span><span>P{order.subtotal.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between items-center text-xs text-gray-400">
                       <div className="flex items-center gap-2">
@@ -309,7 +309,7 @@ export default function AdminDashboard() {
                           <button onClick={() => toggleVat(order._id, order.vatRate)} className="bg-gray-700 hover:bg-gray-600 text-white px-1.5 py-0.5 rounded text-[9px] uppercase font-bold">{order.vatRate > 0 ? 'Off' : 'On'}</button>
                         )}
                       </div>
-                      <span>${order.vatAmount.toFixed(2)}</span>
+                      <span>P{order.vatAmount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between items-center text-xs text-gray-400 border-b border-gray-800/50 pb-2">
                       <div className="flex items-center gap-2">
@@ -322,10 +322,10 @@ export default function AdminDashboard() {
                           </div>
                         )}
                       </div>
-                      <span className="text-green-400">-${(order.discount || 0).toFixed(2)}</span>
+                      <span className="text-green-400">-P{(order.discount || 0).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between font-black text-lg pt-1">
-                      <span>Total:</span><span className="text-accent">${order.total.toFixed(2)}</span>
+                      <span>Total:</span><span className="text-accent">P{order.total.toFixed(2)}</span>
                     </div>
                   </div>
 
@@ -354,7 +354,7 @@ export default function AdminDashboard() {
               <div className="space-y-4 mb-6">
                 <div>
                   <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Today's Revenue</p>
-                  <p className="text-4xl font-black text-white">${todayRevenue.toFixed(2)}</p>
+                  <p className="text-4xl font-black text-white">P{todayRevenue.toFixed(2)}</p>
                 </div>
                 <div className="flex justify-between border-t border-gray-800 pt-4">
                   <div>
@@ -363,7 +363,7 @@ export default function AdminDashboard() {
                   </div>
                   <div className="text-right">
                     <p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">VAT Collected</p>
-                    <p className="text-lg font-bold text-gray-300">${todayVat.toFixed(2)}</p>
+                    <p className="text-lg font-bold text-gray-300">P{todayVat.toFixed(2)}</p>
                   </div>
                 </div>
               </div>
@@ -389,7 +389,7 @@ export default function AdminDashboard() {
                       <button onClick={() => toggleDay(date)} className="w-full flex justify-between items-center p-4 hover:bg-dark/50 transition text-left">
                         <span className="font-bold text-sm text-gray-200">{date}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-accent font-bold">${data.revenue.toFixed(2)}</span>
+                          <span className="text-accent font-bold">P{data.revenue.toFixed(2)}</span>
                           <span className="text-gray-500 text-xs">{expandedDays[date] ? '▲' : '▼'}</span>
                         </div>
                       </button>
@@ -398,8 +398,8 @@ export default function AdminDashboard() {
                         <div className="p-4 bg-dark/30 border-t border-gray-800/30 flex flex-col gap-4">
                           <div className="grid grid-cols-2 gap-4">
                             <div><p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">Orders</p><p className="text-sm font-semibold">{data.orders.length}</p></div>
-                            <div><p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">VAT</p><p className="text-sm font-semibold">${data.vat.toFixed(2)}</p></div>
-                            <div className="col-span-2"><p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">Discounts</p><p className="text-sm font-semibold text-red-400">-${data.discounts.toFixed(2)}</p></div>
+                            <div><p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">VAT</p><p className="text-sm font-semibold">P{data.vat.toFixed(2)}</p></div>
+                            <div className="col-span-2"><p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">Discounts</p><p className="text-sm font-semibold text-red-400">-P{data.discounts.toFixed(2)}</p></div>
                           </div>
 
                           <div className="border-t border-gray-800/30 pt-3 mt-1">
@@ -419,19 +419,19 @@ export default function AdminDashboard() {
                                   <div key={order._id} className="bg-dark/50 p-3 rounded border border-gray-800/50">
                                     <div className="flex justify-between items-center mb-2 border-b border-gray-800/50 pb-2">
                                       <span className="font-bold text-sm text-accent">{order.orderNumber}</span>
-                                      <span className="text-xs font-bold text-gray-300">${order.total.toFixed(2)}</span>
+                                      <span className="text-xs font-bold text-gray-300">P{order.total.toFixed(2)}</span>
                                     </div>
                                     <div className="space-y-1">
                                       {order.items.map((item, idx) => (
                                         <div key={idx} className="flex justify-between text-[11px] text-gray-400">
-                                          <span>{item.quantity}x {item.name}</span><span>${(item.price * item.quantity).toFixed(2)}</span>
+                                          <span>{item.quantity}x {item.name}</span><span>P{(item.price * item.quantity).toFixed(2)}</span>
                                         </div>
                                       ))}
                                     </div>
                                     {(order.discount > 0 || order.vatAmount > 0) && (
                                       <div className="mt-2 pt-2 border-t border-gray-800/50 flex justify-between text-[10px] text-gray-500">
-                                        <span>VAT: ${order.vatAmount.toFixed(2)}</span>
-                                        {order.discount > 0 && <span className="text-red-400">Disc: -${order.discount.toFixed(2)}</span>}
+                                        <span>VAT: P{order.vatAmount.toFixed(2)}</span>
+                                        {order.discount > 0 && <span className="text-red-400">Disc: -P{order.discount.toFixed(2)}</span>}
                                       </div>
                                     )}
                                   </div>
@@ -469,7 +469,7 @@ export default function AdminDashboard() {
                   <div className="flex-1">
                     <h4 className="font-bold">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
                     {p.description && <p className="text-xs text-gray-500 mt-1 line-clamp-1">{p.description}</p>}
-                    <p className="text-sm text-gray-400 mt-1">${Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-600">({p.baseSize})</span>} {p.sizes?.length > 0 && `(+ ${p.sizes.length} sizes)`}</p>
+                    <p className="text-sm text-gray-400 mt-1">P{Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-600">({p.baseSize})</span>} {p.sizes?.length > 0 && `(+ ${p.sizes.length} sizes)`}</p>
                   </div>
                   <div className="flex flex-col gap-2">
                     <button onClick={() => { setEditingProduct(p); setFormData({ name: p.name || '', category: p.category || '', description: p.description || '', basePrice: Number(p.basePrice || p.price || 0), baseSize: p.baseSize || '', sizes: p.sizes || [], image: p.image || '' }); }} className="px-3 py-1 bg-gray-800 rounded text-sm hover:bg-gray-700">Edit</button>
