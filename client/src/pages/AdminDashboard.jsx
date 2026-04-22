@@ -43,9 +43,12 @@ export default function AdminDashboard() {
   const [discountInputs, setDiscountInputs] = useState({});
   
   const [editingProduct, setEditingProduct] = useState(null);
-  // NEW: Added 'image' to formData
   const [formData, setFormData] = useState({ name: '', description: '', category: '', basePrice: '', baseSize: '', sizes: [], image: '' });
   const [newCatName, setNewCatName] = useState('');
+
+  // --- NEW: QR Generator State ---
+  const [autoTableId, setAutoTableId] = useState('');
+  const SECRET_TOKEN = 'cafe2026';
 
   const fetchData = async () => {
     try {
@@ -82,9 +85,18 @@ export default function AdminDashboard() {
   }, [isAuthenticated]);
 
   // --- ACTIONS ---
+  // --- ACTIONS ---
   const updateStatus = async (orderId, newStatus) => {
+    // 1. Optimistic Update: Instantly change the UI without waiting for the server
+    setOrders(prev => prev.map(o => o._id === orderId ? { ...o, status: newStatus } : o));
+    
+    // 2. Tell the server and other devices
     socket.emit('updateOrderStatus', { orderId, status: newStatus });
-    await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus }) });
+    await fetch(`${API_URL}/api/orders/${orderId}`, { 
+      method: 'PUT', 
+      headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify({ status: newStatus }) 
+    });
   };
   const toggleVat = async (orderId, currentVatRate) => { await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isVatExempt: currentVatRate > 0 }) }); };
   const applyDiscount = async (orderId, isRemoving = false) => {
@@ -101,12 +113,12 @@ export default function AdminDashboard() {
   // --- EXPORT ENGINE ---
   const generateCSV = (ordersList, filename) => {
     if (ordersList.length === 0) return alert("No orders to export.");
-    const headers = ['Date', 'Order Number', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total'];
+    const headers = ['Date', 'Order Number', 'Table', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total'];
     const rows = ordersList.map(order => {
       const date = new Date(order.createdAt).toLocaleString();
       const itemsStr = order.items.map(i => `${i.quantity}x ${i.name}`).join(' | ');
       return [
-        `"${date}"`, `"${order.orderNumber}"`, `"${order.status}"`, `"${itemsStr}"`,
+        `"${date}"`, `"${order.orderNumber}"`, `"${order.table || 'Takeout'}"`, `"${order.status}"`, `"${itemsStr}"`,
         order.subtotal.toFixed(2), order.vatAmount.toFixed(2), order.discount.toFixed(2), order.total.toFixed(2)
       ].join(',');
     });
@@ -133,7 +145,6 @@ export default function AdminDashboard() {
   const handleAddCategory = async (e) => { e.preventDefault(); if(!newCatName.trim()) return; await fetch(`${API_URL}/api/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCatName }) }); setNewCatName(''); };
   const deleteCategory = async (id) => { if(window.confirm('Delete category?')) await fetch(`${API_URL}/api/categories/${id}`, { method: 'DELETE' }); };
 
-  // NEW: Process image to WebP instantly
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -144,7 +155,7 @@ export default function AdminDashboard() {
       img.src = event.target.result;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 600; // Optimal size for mobile menus
+        const MAX_WIDTH = 600; 
         const scaleSize = MAX_WIDTH / img.width;
         canvas.width = MAX_WIDTH;
         canvas.height = img.height * scaleSize;
@@ -176,7 +187,6 @@ export default function AdminDashboard() {
     );
   }
 
-  // --- DATA PROCESSING FOR UI ---
   const filteredOrders = orders.filter(o => orderFilter === 'All' ? true : o.status === orderFilter);
   const todayCompleted = orders.filter(o => o.status === 'Completed');
   const todayRevenue = todayCompleted.reduce((sum, o) => sum + o.total, 0);
@@ -194,11 +204,17 @@ export default function AdminDashboard() {
 
   const toggleDay = (date) => setExpandedDays(prev => ({ ...prev, [date]: !prev[date] }));
   const toggleOrderList = (date) => setExpandedOrderLists(prev => ({ ...prev, [date]: !prev[date] })); 
+  
+  const handleShowQR = () => {
+    // Automatically generate a unique 4-digit session ID
+    const uniqueId = Math.floor(1000 + Math.random() * 9000);
+    setAutoTableId(`T-${uniqueId}`);
+    setShowQR(true);
+  };
 
   return (
     <div className="min-h-screen bg-dark text-white p-6 lg:p-8">
       
-      {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 border-b border-gray-800 pb-4 gap-4">
         <div className="flex gap-6 overflow-x-auto w-full md:w-auto pb-2 md:pb-0">
           <button onClick={() => setActiveTab('orders')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'orders' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Orders & Sales</button>
@@ -206,20 +222,35 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab('categories')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'categories' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Categories</button>
         </div>
         <div className="flex gap-4 w-full md:w-auto">
-          <button onClick={() => setShowQR(true)} className="flex-1 md:flex-none bg-dark border border-gray-600 text-white px-4 py-2 rounded-md font-bold hover:bg-gray-800 transition">Show QR</button>
+          <button onClick={handleShowQR} className="flex-1 md:flex-none bg-dark border border-gray-600 text-white px-4 py-2 rounded-md font-bold hover:bg-gray-800 transition">Show QR</button>
           <button onClick={() => { setIsAuthenticated(false); setPinInput(''); }} className="flex-1 md:flex-none bg-red-900/50 text-red-500 px-4 py-2 rounded-md font-bold hover:bg-red-900 transition">Lock</button>
         </div>
       </div>
 
-      {/* QR MODAL */}
+      {/* --- SECURE QR MODAL --- */}
+      {/* --- AUTOMATED SECURE QR MODAL --- */}
       {showQR && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-surface p-8 rounded-xl border border-gray-700 shadow-2xl flex flex-col items-center max-w-sm w-full relative">
             <button onClick={() => setShowQR(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white font-bold text-xl">✕</button>
-            <h2 className="text-2xl font-bold mb-2 text-white">Customer Menu</h2>
-            <p className="text-sm text-gray-400 mb-6 text-center">Let the customer scan this code to order.</p>
-            <QRCode url={FRONTEND_URL} size={220} />
-            <button onClick={() => setShowQR(false)} className="mt-6 w-full bg-dark border border-gray-600 text-white font-bold py-3 rounded-md hover:bg-gray-800">Close</button>
+            <h2 className="text-2xl font-bold mb-1 text-white">Customer QR</h2>
+            
+            <div className="bg-dark px-6 py-2 rounded-full border border-gray-700 mb-6 mt-2 flex items-center gap-2">
+              <span className="text-gray-400 text-sm font-bold uppercase tracking-wider">Session ID:</span>
+              <span className="text-accent font-black text-lg">{autoTableId}</span>
+            </div>
+
+            <div className="bg-white p-2 rounded-lg shadow-inner">
+              {/* Generates secure link with token and automated session ID */}
+              <QRCode url={`${FRONTEND_URL}/?table=${autoTableId}&token=${SECRET_TOKEN}`} size={200} />
+            </div>
+            
+            <button onClick={handleShowQR} className="mt-6 w-full bg-surface border border-accent text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition uppercase tracking-widest text-sm">
+              Generate Next QR
+            </button>
+            <button onClick={() => setShowQR(false)} className="mt-3 w-full bg-dark border border-gray-600 text-white font-bold py-3 rounded-md hover:bg-gray-800 transition text-sm">
+              Close
+            </button>
           </div>
         </div>
       )}
@@ -244,7 +275,13 @@ export default function AdminDashboard() {
               ) : filteredOrders.map(order => (
                 <div key={order._id} className="bg-surface rounded-xl p-5 border border-gray-800 flex flex-col shadow-lg">
                   <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
-                    <h2 className="text-lg font-black">{order.orderNumber}</h2>
+                    
+                    {/* NEW: Displays Table Number to the Kitchen! */}
+                    <h2 className="text-lg font-black">
+                      {order.orderNumber} 
+                      {order.table && <span className="text-sm font-bold text-accent ml-2 uppercase tracking-wider">({order.table})</span>}
+                    </h2>
+                    
                     <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${order.status === 'Pending' ? 'bg-red-900/50 text-red-400' : order.status === 'Preparing' ? 'bg-yellow-900/50 text-accent' : order.status === 'Completed' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-400'}`}>{order.status}</span>
                   </div>
                   
@@ -306,8 +343,6 @@ export default function AdminDashboard() {
 
           {/* RIGHT: SALES & HISTORY PANE */}
           <div className="w-full xl:w-[400px] flex flex-col gap-6">
-            
-            {/* Today's Sales Box */}
             <div className="bg-surface border border-accent/20 rounded-xl p-6 shadow-xl shadow-accent/5">
               <h3 className="text-accent font-black tracking-widest uppercase text-sm mb-4 flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span> Active Register
@@ -333,7 +368,6 @@ export default function AdminDashboard() {
               </button>
             </div>
 
-            {/* History Accordion */}
             <div className="bg-surface border border-gray-800 rounded-xl p-1 overflow-hidden flex flex-col">
               <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-dark/20 rounded-t-xl">
                 <h3 className="text-gray-300 font-bold text-sm tracking-wider uppercase">Sales History</h3>
@@ -422,7 +456,6 @@ export default function AdminDashboard() {
               {products.map(p => (
                 <div key={p._id} className="flex gap-4 p-4 border border-gray-800 rounded bg-dark items-center">
                   
-                  {/* NEW: Image Preview in Product List */}
                   {p.image ? (
                     <img src={p.image} alt={p.name} className="w-16 h-16 object-cover rounded shadow-md border border-gray-700" />
                   ) : (
@@ -446,7 +479,6 @@ export default function AdminDashboard() {
             <h3 className="text-xl font-bold text-accent mb-4 border-b border-gray-800 pb-2">{editingProduct ? 'Edit Product' : 'Add Product'}</h3>
             <form onSubmit={handleSaveProduct} className="space-y-4">
               
-              {/* NEW: IMAGE UPLOAD INPUT */}
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Product Image (WebP Auto-Convert)</label>
                 <div className="flex items-center gap-4">
