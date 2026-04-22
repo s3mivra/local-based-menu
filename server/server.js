@@ -44,9 +44,6 @@ const io = new Server(server, {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST", "PUT", "DELETE"] }
-});
 
 // --- MONGODB CONNECTION ---
 mongoose.connect(process.env.MONGO_URI)
