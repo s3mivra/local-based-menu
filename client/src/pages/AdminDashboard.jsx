@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from '../components/QRCode.jsx';
 
-const API_URL = 'https://local-based-menu-mo7l.vercel.app';
+const API_URL = 'https://local-based-menu.onrender.com';
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 // Replace your old socket line with this:
 const socket = io(API_URL, {

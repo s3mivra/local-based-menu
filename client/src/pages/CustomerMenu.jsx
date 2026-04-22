@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
 // Remove the import.meta.env stuff for now
-const API_URL = 'https://local-based-menu-mo7l.vercel.app';
+const API_URL = 'https://local-based-menu.onrender.com';
 // Replace your old socket line with this:
 const socket = io(API_URL, {
   transports: ['websocket'], // Forces WebSocket only
