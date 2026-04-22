@@ -3,7 +3,7 @@
     "concurrently": "^9.2.1"
   },
   "scripts": {
-    "server": "node server.js", 
+    "server": "cd server && node server.js", 
     "client": "cd client && npm run dev -- --host",
     "start": "concurrently \"npm run server\" \"npm run client\""
   }
