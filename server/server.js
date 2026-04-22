@@ -5,11 +5,41 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import mongoose from 'mongoose';
 
+// ... (imports remain the same)
+
 const app = express();
 const server = http.createServer(app);
 
-// Keep your body parser limits high because WebP strings can be large!
-app.use(cors());
+// --- UPDATED CORS CONFIG ---
+const allowedOrigins = [
+  "http://localhost:3000",        // Local Tablet/Laptop testing
+  "http://192.168.100.2:3000",    // Your specific local IP
+  process.env.FRONTEND_URL        // Your future Vercel URL
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl) 
+    // or if the origin is in our allowed list
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
+}));
+
+// Update Socket.io CORS to match
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+  }
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
