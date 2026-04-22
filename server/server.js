@@ -37,7 +37,8 @@ const io = new Server(server, {
     origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
-  }
+  },
+  transports: ['websocket']
 });
 
 app.use(express.json({ limit: '10mb' }));

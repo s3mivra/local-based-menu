@@ -4,7 +4,11 @@ import QRCode from '../components/QRCode.jsx';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5001';
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
-const socket = io(API_URL);
+// Replace your old socket line with this:
+const socket = io(API_URL, {
+  transports: ['websocket'], // Forces WebSocket only
+  upgrade: false             // Disables the polling-to-websocket upgrade logic
+});
 
 // Native Browser Audio Beep
 const playKitchenDing = () => {

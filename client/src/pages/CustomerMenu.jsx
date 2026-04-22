@@ -2,7 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5001';
-const socket = io(API_URL);
+// Replace your old socket line with this:
+const socket = io(API_URL, {
+  transports: ['websocket'], // Forces WebSocket only
+  upgrade: false             // Disables the polling-to-websocket upgrade logic
+});
 
 export default function CustomerMenu() {
   const [products, setProducts] = useState([]);
