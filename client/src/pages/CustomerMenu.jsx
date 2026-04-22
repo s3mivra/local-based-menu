@@ -1,0 +1,362 @@
+import React, { useState, useEffect } from 'react';
+import { io } from 'socket.io-client';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5001';
+const socket = io(API_URL);
+
+export default function CustomerMenu() {
+  const [products, setProducts] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [orderStatus, setOrderStatus] = useState(null);
+  
+  // NEW: Category Filter State
+  const [activeCategory, setActiveCategory] = useState('All');
+  
+  // Modal State for Sizes
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [selectedSize, setSelectedSize] = useState(null);
+
+  const fetchProducts = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/products`);
+      const data = await res.json();
+      if (data.success) setProducts(data.products);
+    } catch (err) {
+      console.error("Failed to fetch menu");
+    }
+  };
+
+  useEffect(() => {
+    fetchProducts();
+    socket.on('menuUpdated', fetchProducts);
+    socket.on('orderUpdated', (updatedOrder) => {
+      if (orderStatus && updatedOrder._id === orderStatus._id) setOrderStatus(updatedOrder);
+    });
+
+    return () => {
+      socket.off('menuUpdated');
+      socket.off('orderUpdated');
+    };
+  }, [orderStatus]);
+
+  const handleProductClick = (product) => {
+    if (product.sizes && product.sizes.length > 0) {
+      setSelectedProduct(product);
+      // Default to the base size/price when opening the modal
+      setSelectedSize({ 
+        name: product.baseSize || 'Regular', 
+        price: Number(product.basePrice || 0) 
+      });
+    } else {
+      addToCart(product, null);
+    }
+  };
+
+  const addToCart = (product, size) => {
+    const price = size ? size.price : (product.basePrice || 0);
+    const sizeName = size ? size.name : 'Regular';
+    const cartItemId = `${product._id}-${sizeName}`;
+
+    setCart(prev => {
+      const existing = prev.find(item => item.cartItemId === cartItemId);
+      if (existing) {
+        return prev.map(item => item.cartItemId === cartItemId 
+          ? { ...item, quantity: item.quantity + 1 } : item);
+      }
+      return [...prev, { 
+        cartItemId,
+        productId: product._id, 
+        name: size ? `${product.name} (${sizeName})` : product.name,
+        price: price,
+        quantity: 1 
+      }];
+    });
+
+    setSelectedProduct(null);
+    setSelectedSize(null);
+  };
+
+  const updateQuantity = (cartItemId, delta) => {
+    setCart(prev => {
+      const updated = prev.map(item => {
+        if (item.cartItemId === cartItemId) {
+          const newQuantity = item.quantity + delta;
+          return newQuantity > 0 ? { ...item, quantity: newQuantity } : null;
+        }
+        return item;
+      });
+      return updated.filter(Boolean);
+    });
+  };
+
+  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+  const confirmOrder = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: cart, discount: 0, isVatExempt: true })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setOrderStatus(data.order);
+        setCart([]);
+      }
+    } catch (error) {
+      console.error("Order failed", error);
+    }
+  };
+
+  // Derive categories dynamically from existing products
+  const allCategories = ['All', ...new Set(products.map(p => p.category))];
+  
+  // Filter logic based on clicked category
+  const displayedCategories = activeCategory === 'All' 
+    ? allCategories.filter(c => c !== 'All') 
+    : [activeCategory];
+
+  // Combine Base Size and Extra Sizes for the Modal
+  const modalSizes = selectedProduct ? [
+    { name: selectedProduct.baseSize || 'Regular', price: Number(selectedProduct.basePrice || 0) },
+    ...(selectedProduct.sizes || [])
+  ] : [];
+
+  // Smart Grouping Function for Hot/Iced
+  const groupedSizes = modalSizes.reduce((acc, size) => {
+    const lowerName = size.name.toLowerCase();
+    if (lowerName.includes('hot')) {
+      if (!acc.Hot) acc.Hot = [];
+      acc.Hot.push({ ...size, displayName: size.name.replace(/hot\s*-?\s*/i, '').trim() });
+    } else if (lowerName.includes('iced') || lowerName.includes('cold')) {
+      if (!acc.Iced) acc.Iced = [];
+      acc.Iced.push({ ...size, displayName: size.name.replace(/(iced|cold)\s*-?\s*/i, '').trim() });
+    } else {
+      if (!acc.Standard) acc.Standard = [];
+      acc.Standard.push({ ...size, displayName: size.name }); 
+    }
+    return acc;
+  }, {});
+
+  if (orderStatus) {
+    return (
+      <div className="min-h-screen bg-dark text-white flex flex-col items-center justify-center p-6">
+        <div className="bg-surface p-8 rounded-lg text-center max-w-md w-full shadow-lg border border-gray-800 animate-fade-in">
+          <h2 className="text-accent text-xl font-bold mb-2">Order Confirmed</h2>
+          <p className="text-4xl font-black mb-4">{orderStatus.orderNumber}</p>
+          <div className="inline-block px-4 py-2 rounded-full bg-dark border border-accent text-accent font-semibold">
+            Status: {orderStatus.status}
+          </div>
+          <p className="mt-6 text-sm text-gray-400">Please wait while we prepare your order.</p>
+          <button 
+            onClick={() => setOrderStatus(null)}
+            className="mt-8 w-full bg-transparent border border-gray-600 text-gray-300 px-4 py-3 rounded-md font-semibold hover:bg-gray-800 hover:text-white transition"
+          >
+            ← Back to Menu
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-dark text-white pb-48">
+      
+      {/* Sticky Header with Clickable Categories */}
+      <header className="bg-surface pt-6 px-4 pb-4 sticky top-0 z-30 border-b border-gray-800 text-center shadow-lg">
+        <h1 className="text-2xl font-black tracking-widest text-accent uppercase mb-4">Digital Menu</h1>
+        
+        {/* NEW: Clickable Category Filter */}
+        <div className="flex gap-3 overflow-x-auto scrollbar-none pb-2 max-w-5xl mx-auto">
+          {allCategories.map(cat => (
+            <button 
+              key={cat} 
+              onClick={() => setActiveCategory(cat)}
+              className={`px-5 py-2 rounded-full whitespace-nowrap text-sm font-bold transition ${activeCategory === cat ? 'bg-accent text-dark shadow-md shadow-accent/20' : 'bg-dark border border-gray-700 text-gray-400 hover:text-white'}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="p-4 max-w-5xl mx-auto space-y-10 mt-6">
+        {displayedCategories.length === 0 ? (
+          <p className="text-center text-gray-500 mt-10">No items available.</p>
+        ) : (
+          displayedCategories.map(category => {
+            const categoryProducts = products.filter(p => p.category === category);
+            if (categoryProducts.length === 0) return null; // Skip empty categories
+            
+            return (
+              <div key={category}>
+                <h2 className="text-2xl font-bold mb-4 text-white border-b-2 border-gray-800 pb-2 inline-block">{category}</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {categoryProducts.map(p => (
+                    <div 
+                      key={p._id} 
+                      onClick={() => handleProductClick(p)} 
+                      // 1. Removed overflow-hidden from here so the image can pop out
+                      className="bg-surface rounded-xl flex flex-col transition hover:shadow-2xl hover:shadow-accent/10 cursor-pointer border border-gray-800 hover:border-accent/50 group relative h-full"
+                    >
+                      {/* Subtle hover effect locked to the rounded corners */}
+                      <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none z-0 rounded-xl"></div>
+
+                      {/* 2. Transparent Image Box (NO bg-dark, NO border-b) */}
+                      {p.image ? (
+                        <div className="w-full h-40 relative z-20 shrink-0 flex items-center justify-center p-2 mt-2">
+                          <img 
+                            src={p.image} 
+                            alt={p.name} 
+                            // 3. Changed to object-contain, added drop-shadow, and increased the scale/translate for a huge 3D pop!
+                            className="w-full h-full object-contain transition-all duration-500 group-hover:scale-[1.15] group-hover:-translate-y-3 drop-shadow-2xl" 
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-full h-40 relative z-10 shrink-0 flex items-center justify-center text-gray-600 text-xs font-bold uppercase tracking-widest mt-2">
+                          No Image
+                        </div>
+                      )}
+
+                      {/* Padded Text & Price Box */}
+                      <div className="p-5 flex flex-col flex-1 relative z-10">
+                        <h3 className="font-bold text-lg mb-1 text-white leading-tight">{p.name}</h3>
+                        {p.description && (
+                          <p className="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-3">
+                            {p.description}
+                          </p>
+                        )}
+                        
+                        <div className="flex justify-between items-center mt-auto pt-4 border-t border-gray-800/50">
+                          <p className="text-accent font-bold text-xl">
+                            ${(p.basePrice || 0).toFixed(2)}
+                            {p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}
+                          </p>
+                          <span className="bg-dark text-white px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">
+                            {p.sizes?.length > 0 ? 'Select' : 'Add'}
+                          </span>
+                        </div>
+                      </div>
+                      
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </main>
+
+      {/* Size Selection Modal */}
+      {selectedProduct && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-surface rounded-xl p-6 w-full max-w-md border border-gray-700 shadow-2xl">
+            <h3 className="text-2xl font-bold mb-1 text-white">{selectedProduct.name}</h3>
+            {selectedProduct.description && <p className="text-gray-400 text-sm mb-6 line-clamp-2">{selectedProduct.description}</p>}
+            
+            <p className="text-gray-300 text-sm font-semibold mb-3 uppercase tracking-wider">Choose a size:</p>
+            <div className="space-y-6 mb-8 max-h-[50vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+              
+              {/* Render Hot Section */}
+              {groupedSizes.Hot && (
+                <div>
+                  <h4 className="text-red-400 font-bold text-sm uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-red-400"></span> Hot Options
+                  </h4>
+                  <div className="space-y-2">
+                    {groupedSizes.Hot.map((size, idx) => (
+                      <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} />
+                          <span className="font-bold text-white capitalize">{size.displayName}</span>
+                        </div>
+                        <span className="text-accent font-bold">${size.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Render Iced Section */}
+              {groupedSizes.Iced && (
+                <div>
+                  <h4 className="text-blue-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-400"></span> Iced Options
+                  </h4>
+                  <div className="space-y-2">
+                    {groupedSizes.Iced.map((size, idx) => (
+                      <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} />
+                          <span className="font-bold text-white capitalize">{size.displayName}</span>
+                        </div>
+                        <span className="text-accent font-bold">${size.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Render Standard/Other Options */}
+              {groupedSizes.Standard && (
+                <div>
+                  {Object.keys(groupedSizes).length > 1 && <h4 className="text-gray-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4">Other Options</h4>}
+                  <div className="space-y-2">
+                    {groupedSizes.Standard.map((size, idx) => (
+                      <label key={`std-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} />
+                          <span className="font-bold text-white">{size.displayName}</span>
+                        </div>
+                        <span className="text-accent font-bold">${size.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            </div>
+            
+            <div className="flex gap-3">
+              <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-dark text-white border border-gray-700 py-3 rounded-md font-semibold hover:bg-gray-800 transition">Cancel</button>
+              <button onClick={() => addToCart(selectedProduct, selectedSize)} className="flex-1 bg-accent text-dark py-3 rounded-md font-bold hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Add to Cart</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Existing Cart Bottom Sheet */}
+      {cart.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-surface border-t border-gray-800 p-4 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] z-40">
+          <div className="max-w-4xl mx-auto">
+            <div className="mb-4 max-h-40 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+              {cart.map(item => (
+                <div key={item.cartItemId} className="flex justify-between items-center py-3 border-b border-gray-800/50">
+                  <div className="flex-1">
+                    <span className="text-sm font-bold text-white block">{item.name}</span>
+                    <span className="text-xs text-accent font-semibold">${item.price.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">-</button>
+                    <span className="text-sm w-4 text-center font-bold">{item.quantity}</span>
+                    <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
+              <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl">
+                <span className="text-gray-300">Total:</span>
+                <span className="text-accent text-2xl">${total.toFixed(2)}</span>
+              </div>
+              <button onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">
+                Send to Kitchen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
