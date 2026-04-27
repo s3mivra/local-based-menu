@@ -1,13 +1,32 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
-// Remove the import.meta.env stuff for now
-const API_URL = 'https://local-based-menu.onrender.com';
-// Replace your old socket line with this:
+// Pointing to your Local Backend so it syncs perfectly with your Admin screen
+const API_URL = 'http://192.168.100.2:5002'; 
+
 const socket = io(API_URL, {
-  transports: ['websocket'], // Forces WebSocket only
-  upgrade: false             // Disables the polling-to-websocket upgrade logic
+  transports: ['websocket'], 
+  upgrade: false             
 });
+
+// --- CUSTOMER NOTIFICATION SOUND ---
+const playCustomerDing = () => {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(600, ctx.currentTime); 
+    gain.gain.setValueAtTime(0.5, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.5);
+  } catch (e) {
+    console.log('Audio blocked');
+  }
+};
 
 export default function CustomerMenu() {
   const [products, setProducts] = useState([]);
@@ -20,9 +39,13 @@ export default function CustomerMenu() {
   // --- SECURITY & WORKFLOW STATE ---
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [tableNum, setTableNum] = useState(null);
-  const [successMessage, setSuccessMessage] = useState(false); // The 5-sec popup
-  const [lockedOrder, setLockedOrder] = useState(null); // Triggers the Expired Screen
+  const [successMessage, setSuccessMessage] = useState(false); 
+  const [lockedOrder, setLockedOrder] = useState(null); 
   const SECRET_TOKEN = 'cafe2026';
+
+  // --- NEW: VIBRATION CONTROLS ---
+  const [isVibrating, setIsVibrating] = useState(false);
+  const vibrationInterval = useRef(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -46,7 +69,10 @@ export default function CustomerMenu() {
       if (updatedOrder.table === tableNum) {
         // ONLY lock the menu if the admin hits "Start Prep" or "Completed"
         if (updatedOrder.status === 'Preparing' || updatedOrder.status === 'Completed') {
-          setLockedOrder(updatedOrder);
+          // Verify they haven't already dismissed this specific order
+          if (!localStorage.getItem(`received_${updatedOrder._id}`)) {
+            setLockedOrder(updatedOrder);
+          }
         } else if (updatedOrder.status === 'Cancelled') {
           setLockedOrder(null);
         }
@@ -69,6 +95,48 @@ export default function CustomerMenu() {
     };
   }, [tableNum]);
 
+  // --- NEW: STATUS CHANGE TRIGGER (Vibrate & Sound) ---
+  useEffect(() => {
+    if (lockedOrder?.status === 'Completed') {
+      playCustomerDing();
+      if (!isVibrating) {
+        setIsVibrating(true);
+        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]); // Initial vibrate
+        
+        // Loop the vibration every 3 seconds until they click "Received"
+        vibrationInterval.current = setInterval(() => {
+          if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]);
+        }, 3000);
+      }
+    } else if (lockedOrder?.status === 'Preparing') {
+      playCustomerDing();
+      setIsVibrating(false);
+      if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+    } else {
+      setIsVibrating(false);
+      if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+    }
+
+    // Cleanup interval if the component unmounts
+    return () => {
+      if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+    };
+  }, [lockedOrder?.status]);
+
+  // --- NEW: HANDLE RECEIVED BUTTON ---
+  const handleReceived = () => {
+    setIsVibrating(false);
+    if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+    
+    // Save to local storage so a page refresh doesn't trigger the alarm again
+    if (lockedOrder) {
+      localStorage.setItem(`received_${lockedOrder._id}`, 'true');
+    }
+    
+    setLockedOrder(null);
+    setCart([]);
+  };
+
   const fetchProducts = async () => {
     try {
       const res = await fetch(`${API_URL}/api/products`);
@@ -84,7 +152,9 @@ export default function CustomerMenu() {
       if (data.success && data.orders) {
         // If they scan the QR, check if their food is already being made
         const active = data.orders.find(o => o.table === targetTable && (o.status === 'Preparing' || o.status === 'Completed'));
-        if (active) setLockedOrder(active);
+        if (active && !localStorage.getItem(`received_${active._id}`)) {
+          setLockedOrder(active);
+        }
       }
     } catch (e) { console.error("Failed to fetch active orders"); }
   };
@@ -161,13 +231,23 @@ export default function CustomerMenu() {
     );
   }
 
-  // --- LINK EXPIRED / PREPARING SCREEN ---
+  // --- NEW: LINK EXPIRED / READY SCREEN ---
   if (lockedOrder) {
     return (
       <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6">
         <div className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl text-center max-w-sm w-full animate-fade-in">
-          <h2 className="text-2xl font-black text-white mb-2 uppercase tracking-widest">Link Expired</h2>
-          <p className="text-gray-400 mb-6 text-sm">This menu session has been closed because your order is currently being processed.</p>
+          
+          {lockedOrder.status === 'Completed' ? (
+            <h2 className="text-3xl font-black text-green-400 mb-2 uppercase tracking-widest animate-pulse">Order Ready!</h2>
+          ) : (
+            <h2 className="text-2xl font-black text-white mb-2 uppercase tracking-widest">Order Received</h2>
+          )}
+
+          <p className="text-gray-400 mb-6 text-sm">
+            {lockedOrder.status === 'Completed' 
+              ? "Your food is ready! Please collect your order or wait for your server." 
+              : "This menu session is locked while your order is being prepared."}
+          </p>
           
           <div className="bg-dark p-6 rounded-lg border border-gray-700 mb-6 relative overflow-hidden">
             {lockedOrder.status === 'Preparing' && <div className="absolute top-0 left-0 w-full h-1 bg-accent animate-pulse"></div>}
@@ -178,7 +258,16 @@ export default function CustomerMenu() {
               {lockedOrder.status}
             </p>
           </div>
-          <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">Thank you for dining with us!</p>
+
+          {/* NEW: RECEIVED BUTTON */}
+          {lockedOrder.status === 'Completed' ? (
+            <button onClick={handleReceived} className="w-full bg-green-500 text-dark font-black py-4 rounded-lg hover:bg-green-400 transition shadow-lg shadow-green-500/20 uppercase tracking-widest">
+              I Received My Order
+            </button>
+          ) : (
+            <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">Thank you for dining with us!</p>
+          )}
+
         </div>
       </div>
     );
