@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from '../components/QRCode.jsx';
 
-const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+const API_URL = 'https://local-based-menu.onrender.com';
+//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
 const socket = io(API_URL, {

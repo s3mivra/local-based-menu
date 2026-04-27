@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 // Pointing to your Local Backend so it syncs perfectly with your Admin screen
-const API_URL = 'http://192.168.100.2:5002'; 
-
+//const API_URL = 'http://192.168.100.2:5002'; 
+const API_URL = 'https://local-based-menu.onrender.com';
 const socket = io(API_URL, {
   transports: ['websocket'], 
   upgrade: false             
