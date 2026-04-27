@@ -11,7 +11,6 @@ const app = express();
 const server = http.createServer(app);
 
 // --- UPDATED CORS CONFIG ---
-// --- UPDATED CORS CONFIG ---
 const allowedOrigins = [
   "http://localhost:3000",
   "http://192.168.100.2:3000",
@@ -346,9 +345,15 @@ app.get('/api/inventory', async (req, res) => {
 
 app.post('/api/inventory', async (req, res) => {
   try {
+    // 1. DUPLICATE CHECK
+    const existing = await Inventory.findOne({ itemName: { $regex: new RegExp(`^${req.body.itemName.trim()}$`, 'i') } });
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Item already exists. Please restock it instead.' });
+    }
+
     const newItem = await Inventory.create(req.body);
     
-    // --- NEW: AUTO-JOURNAL FOR PURCHASING INVENTORY ---
+    // --- AUTO-JOURNAL FOR PURCHASING INVENTORY ---
     const totalCost = newItem.stockQty * newItem.unitCost;
     if (totalCost > 0) {
       const entryCount = await JournalEntry.countDocuments();
@@ -357,19 +362,48 @@ app.post('/api/inventory', async (req, res) => {
         { accountCode: '1500', accountName: 'Inventory Asset', debit: totalCost, credit: 0 },
         { accountCode: '1000', accountName: 'Cash on Hand', debit: 0, credit: totalCost }
       ];
-      await JournalEntry.create({ 
-        reference, 
-        description: `Purchased ${newItem.stockQty}${newItem.unit} of ${newItem.itemName}`, 
-        lines, 
-        totalDebit: totalCost, 
-        totalCredit: totalCost 
-      });
+      await JournalEntry.create({ reference, description: `Purchased ${newItem.stockQty}${newItem.unit} of ${newItem.itemName}`, lines, totalDebit: totalCost, totalCredit: totalCost });
     }
 
-    io.emit('erpUpdated'); // Tell the UI to instantly refresh!
+    io.emit('erpUpdated');
     res.json({ success: true, item: newItem });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- NEW: RESTOCK EXISTING INVENTORY (Weighted Average Cost) ---
+app.post('/api/inventory/restock/:id', async (req, res) => {
+  try {
+    const { addedStock, totalCost } = req.body;
+    const item = await Inventory.findById(req.params.id);
+    if (!item) return res.status(404).json({ success: false, error: 'Item not found' });
+
+    // WEIGHTED AVERAGE COST MATH
+    const currentTotalValue = item.stockQty * item.unitCost;
+    const newTotalValue = currentTotalValue + totalCost;
+    const newStockQty = item.stockQty + addedStock;
+    const newUnitCost = newStockQty > 0 ? newTotalValue / newStockQty : 0;
+
+    item.stockQty = newStockQty;
+    item.unitCost = newUnitCost;
+    await item.save();
+
+    // AUTO-JOURNAL FOR RESTOCKING
+    if (totalCost > 0) {
+      const entryCount = await JournalEntry.countDocuments();
+      const reference = `PURCH-${(entryCount + 1).toString().padStart(4, '0')}`;
+      const lines = [
+        { accountCode: '1500', accountName: 'Inventory Asset', debit: totalCost, credit: 0 },
+        { accountCode: '1000', accountName: 'Cash on Hand', debit: 0, credit: totalCost }
+      ];
+      await JournalEntry.create({ reference, description: `Restocked ${addedStock}${item.unit} of ${item.itemName}`, lines, totalDebit: totalCost, totalCredit: totalCost });
+    }
+
+    io.emit('erpUpdated');
+    res.json({ success: true, item });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

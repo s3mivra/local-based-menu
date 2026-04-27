@@ -190,10 +190,32 @@ export default function AdminDashboard() {
 
   const addInventory = async () => {
     if(!invForm.itemName || !invForm.packQty || !invForm.unitPerPack || !invForm.unit || !invForm.costPerPack) return alert("Please fill in all inventory fields.");
-    const totalStockQty = parseFloat(invForm.packQty) * parseFloat(invForm.unitPerPack);
-    const costPerMicroUnit = parseFloat(invForm.costPerPack) / parseFloat(invForm.unitPerPack);
-    const payload = { itemName: invForm.itemName, stockQty: totalStockQty, unit: invForm.unit, unitCost: costPerMicroUnit };
-    await fetch(`${API_URL}/api/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    
+    const itemNameClean = invForm.itemName.trim();
+    const totalStockAdded = parseFloat(invForm.packQty) * parseFloat(invForm.unitPerPack);
+    const totalCost = parseFloat(invForm.packQty) * parseFloat(invForm.costPerPack);
+    
+    // Check if the item already exists!
+    const existingItem = inventory.find(i => i.itemName.toLowerCase() === itemNameClean.toLowerCase());
+
+    if (existingItem) {
+      if (!window.confirm(`"${existingItem.itemName}" already exists in inventory. Do you want to RESTOCK it with ${totalStockAdded}${invForm.unit}?`)) return;
+      
+      // RESTOCK EXISTING ITEM
+      await fetch(`${API_URL}/api/inventory/restock/${existingItem._id}`, { 
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ addedStock: totalStockAdded, totalCost }) 
+      });
+    } else {
+      // ADD BRAND NEW ITEM
+      const costPerMicroUnit = parseFloat(invForm.costPerPack) / parseFloat(invForm.unitPerPack);
+      const payload = { itemName: itemNameClean, stockQty: totalStockAdded, unit: invForm.unit, unitCost: costPerMicroUnit };
+      
+      const res = await fetch(`${API_URL}/api/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!data.success) return alert(data.error);
+    }
+
     setInvForm({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '' });
     fetchERPData();
   };
@@ -274,6 +296,21 @@ export default function AdminDashboard() {
     } else { const newSizes = [...formData.sizes]; newSizes[sizeIndex].recipe = newSizes[sizeIndex].recipe.filter((_, i) => i !== matIndex); setFormData({ ...formData, sizes: newSizes }); }
   };
   const calcRecipeCost = (recipe) => (recipe || []).reduce((sum, item) => sum + (item.qty * item.cost), 0);
+
+  // --- ESTIMATED MENU STOCK CALCULATOR ---
+  const getEstimatedStock = (recipe) => {
+    if (!recipe || recipe.length === 0) return null; // No recipe means infinite stock
+    let minServings = Infinity;
+    
+    for (let mat of recipe) {
+      const invItem = inventory.find(i => i._id === mat.invId);
+      if (!invItem) return 0; // If an ingredient is missing entirely, stock is 0
+      
+      const possibleServings = Math.floor(invItem.stockQty / mat.qty);
+      if (possibleServings < minServings) minServings = possibleServings;
+    }
+    return minServings === Infinity ? 0 : minServings;
+  };
 
   const filteredOrders = orders.filter(o => orderFilter === 'All' ? true : o.status === orderFilter);
   const todayCompleted = orders.filter(o => o.status === 'Completed');
@@ -765,7 +802,27 @@ export default function AdminDashboard() {
             <div className="space-y-4">
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Item Name</label>
-                <input type="text" placeholder="e.g., Condensed Milk" value={invForm.itemName} onChange={e => setInvForm({...invForm, itemName: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" />
+                <input 
+                  type="text" 
+                  list="inventory-names" 
+                  placeholder="e.g., Condensed Milk" 
+                  value={invForm.itemName} 
+                  onChange={e => {
+                    const typed = e.target.value;
+                    const match = inventory.find(i => i.itemName.toLowerCase() === typed.toLowerCase());
+                    // If they select an existing item, auto-fill the unit so they don't mess it up!
+                    setInvForm({...invForm, itemName: typed, unit: match ? match.unit : invForm.unit});
+                  }} 
+                  className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" 
+                />
+                <datalist id="inventory-names">
+                  {inventory.map(inv => <option key={inv._id} value={inv.itemName} />)}
+                </datalist>
+                
+                {/* Visual Hint for Restock Mode */}
+                {inventory.some(i => i.itemName.toLowerCase() === invForm.itemName.toLowerCase().trim()) && (
+                  <p className="text-[10px] text-accent font-bold mt-1 uppercase tracking-wider">★ Existing Item: Will be Restocked</p>
+                )}
               </div>
               <div className="flex gap-2">
                  <div className="w-1/3">
@@ -895,7 +952,22 @@ export default function AdminDashboard() {
                     <div className="w-16 h-16 bg-gray-800 rounded border border-gray-700 flex items-center justify-center text-xs text-gray-500">No Img</div>
                   )}
                   <div className="flex-1">
-                    <h4 className="font-bold">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-bold">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
+                      
+                      {/* --- ESTIMATED STOCK BADGE --- */}
+                      {(() => {
+                        const est = getEstimatedStock(p.baseRecipe);
+                        if (est === null) return null;
+                        return (
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-red-900/50 text-red-400' : est <= 5 ? 'bg-yellow-900/50 text-yellow-500' : 'bg-green-900/50 text-green-400'}`}>
+                            {est <= 0 ? 'Out of Stock' : `Est: ${est} left`}
+                          </span>
+                        );
+                      })()}
+                      {/* ----------------------------- */}
+                      
+                    </div>
                     {p.description && <p className="text-xs text-gray-500 mt-1 line-clamp-1">{p.description}</p>}
                     <p className="text-sm text-gray-400 mt-1">P{Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-600">({p.baseSize})</span>} {p.sizes?.length > 0 && `(+ ${p.sizes.length} sizes)`}</p>
                   </div>

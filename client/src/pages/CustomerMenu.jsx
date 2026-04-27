@@ -47,6 +47,29 @@ export default function CustomerMenu() {
   const [isVibrating, setIsVibrating] = useState(false);
   const vibrationInterval = useRef(null);
 
+  const wakeLockRef = useRef(null);
+
+  const requestWakeLock = async () =>{
+    try{
+      if ('wakelock' in navigator){
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        console.log('Screen Wake Lock active');
+
+        wakeLockRef.current.addEventListener('release', () => {
+          console.log('Screnn Wake Lock released');
+        });
+      }
+    } catch (err){
+      console.log('Wake Lock error:', err);
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current !== null) {
+      await wakeLockRef.current.release();
+      wakeLockRef.current = null;
+    }
+  };
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token');
@@ -95,31 +118,50 @@ export default function CustomerMenu() {
     };
   }, [tableNum]);
 
-  // --- NEW: STATUS CHANGE TRIGGER (Vibrate & Sound) ---
+  // --- STATUS CHANGE TRIGGER (Vibrate, Sound, Wake Lock, & NOTIFICATIONS) ---
   useEffect(() => {
-    if (lockedOrder?.status === 'Completed') {
-      playCustomerDing();
-      if (!isVibrating) {
-        setIsVibrating(true);
-        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]); // Initial vibrate
-        
-        // Loop the vibration every 3 seconds until they click "Received"
-        vibrationInterval.current = setInterval(() => {
-          if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]);
-        }, 3000);
-      }
-    } else if (lockedOrder?.status === 'Preparing') {
+    if (lockedOrder?.status === 'Preparing') {
       playCustomerDing();
       setIsVibrating(false);
       if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+      requestWakeLock();
+      
+    } else if (lockedOrder?.status === 'Completed') {
+      playCustomerDing();
+      
+      // 🔔 NEW: FIRE SYSTEM NOTIFICATION (For when app is minimized)
+      if ('Notification' in window && Notification.permission === 'granted') {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.ready.then(function(registration) {
+            registration.showNotification('Your Order is Ready! ☕', {
+              body: 'Please collect your order at the counter.',
+              icon: '/vite.svg',
+              vibrate: [1000, 500, 1000, 500, 2000], // Strong vibration pattern
+              tag: 'order-ready',
+              requireInteraction: true // Forces the notification to stay on screen until dismissed
+            });
+          });
+        }
+      }
+
+      if (!isVibrating) {
+        setIsVibrating(true);
+        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]); 
+        
+        vibrationInterval.current = setInterval(() => {
+          if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]);
+          playCustomerDing(); 
+        }, 3000);
+      }
     } else {
       setIsVibrating(false);
       if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+      releaseWakeLock(); 
     }
 
-    // Cleanup interval if the component unmounts
     return () => {
       if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+      releaseWakeLock();
     };
   }, [lockedOrder?.status]);
 
@@ -127,8 +169,8 @@ export default function CustomerMenu() {
   const handleReceived = () => {
     setIsVibrating(false);
     if (vibrationInterval.current) clearInterval(vibrationInterval.current);
+    releaseWakeLock(); // <-- ADD THIS LINE
     
-    // Save to local storage so a page refresh doesn't trigger the alarm again
     if (lockedOrder) {
       localStorage.setItem(`received_${lockedOrder._id}`, 'true');
     }
@@ -187,6 +229,48 @@ export default function CustomerMenu() {
 
   const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
+  const requestNotificationPermission = async () => {
+    console.log("--- NOTIFICATION CHECK START ---");
+    
+    if (!('Notification' in window)) {
+      console.log("❌ This browser does not support notifications.");
+      return;
+    }
+
+    console.log("Current permission status:", Notification.permission);
+    
+    if (Notification.permission === 'granted') {
+      console.log("✅ Permission already granted.");
+      return true;
+    }
+
+    if (Notification.permission === 'denied') {
+      console.log("🚫 Permission was previously blocked by the user.");
+      return false;
+    }
+
+    try {
+      console.log("🔔 Requesting permission from user...");
+      const permission = await Notification.requestPermission();
+      console.log("User answered:", permission);
+
+      if (permission === 'granted') {
+        if ('serviceWorker' in navigator) {
+          try {
+            await navigator.serviceWorker.register('/sw.js');
+            console.log('✅ Service Worker Registered for Push Notifications!');
+          } catch (e) {
+            console.error('❌ Service Worker Registration Failed:', e);
+          }
+        }
+        return true;
+      }
+    } catch (error) {
+      console.error("❌ Error requesting notification permission:", error);
+    }
+    return false;
+  };
+
   const confirmOrder = async () => {
     try {
       const res = await fetch(`${API_URL}/api/orders`, {
@@ -195,10 +279,12 @@ export default function CustomerMenu() {
       });
       const data = await res.json();
       if (data.success) {
-        // Trigger the 5-second popup and clear the cart!
         setCart([]);
         setSuccessMessage(true);
         setTimeout(() => setSuccessMessage(false), 5000);
+
+        // 🔔 NEW: Ask for Notification Permission right after they order!
+        requestNotificationPermission();
       }
     } catch (error) { console.error("Order failed", error); }
   };
