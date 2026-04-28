@@ -4,6 +4,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import mongoose from 'mongoose';
+import bcrypt from 'bcrypt';
 
 // ... (imports remain the same)
 
@@ -51,12 +52,35 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ Connected to MongoDB Atlas'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
+mongoose.connect(process.env.MONGO_URI)
+  .then(async () => {
+    console.log('✅ Connected to MongoDB Atlas');
+    
+    // --- SUPER ADMIN SEEDER ---
+    try {
+      const adminCount = await User.countDocuments();
+      if (adminCount === 0) {
+        const defaultPass = process.env.ADMIN_PASS || 'fallback123';
+        
+        // Hash the password before saving!
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(defaultPass, saltRounds);
+        
+        const userCode = await generateNextSequence(User, 'ADN', 'userCode');
+        await User.create({ userCode, name: 'Super Admin', password: hashedPassword });
+        console.log(`🌱 Default Admin seeded: Code [${userCode}]`);
+      }
+    } catch (err) {
+      console.error("Seeding error:", err);
+    }
+  })
 // --- DATABASE SCHEMAS ---
 const CategorySchema = new mongoose.Schema({ name: String });
 const Category = mongoose.model('Category', CategorySchema);
 
 // 1. UPDATE THE PRODUCT SCHEMA (Add Recipes)
 const ProductSchema = new mongoose.Schema({
+  productCode: String,
   name: String,
   description: String,
   category: String,
@@ -64,6 +88,7 @@ const ProductSchema = new mongoose.Schema({
   baseSize: String,
   baseRecipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }],
   sizes: [{ 
+    sizeCode: String,
     name: String, 
     price: Number, 
     recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }] 
@@ -92,6 +117,7 @@ const Order = mongoose.model('Order', OrderSchema);
 
 // --- NEW ERP SCHEMAS ---
 const InventorySchema = new mongoose.Schema({
+  itemCode: String,
   itemName: String,
   stockQty: { type: Number, default: 0 },
   unit: String, // e.g., 'kg', 'pcs', 'liters'
@@ -114,8 +140,125 @@ const JournalEntrySchema = new mongoose.Schema({
 }, { timestamps: true });
 const JournalEntry = mongoose.model('JournalEntry', JournalEntrySchema);
 
+const InventoryMovementSchema = new mongoose.Schema({
+  date: { type: Date, required: true }, // Normalized to start of the day
+  inventoryId: String,
+  itemName: String,
+  unit: String,
+  beginningBalance: { type: Number, default: 0 },
+  purchasesIn: { type: Number, default: 0 },
+  salesOut: { type: Number, default: 0 },
+  systemEndingBalance: { type: Number, default: 0 },
+  actualPhysicalCount: { type: Number, default: null },
+  variance: { type: Number, default: 0 },
+  isClosed: { type: Boolean, default: false }
+});
+const InventoryMovement = mongoose.model('InventoryMovement', InventoryMovementSchema);
+
+const StockCardSchema = new mongoose.Schema({
+  inventoryId: String,
+  itemName: String,
+  date: { type: Date, default: Date.now },
+  type: String, // 'Restock', 'Sale', 'Adjustment', 'Initial'
+  reference: String, // Order Number, JE ref, etc.
+  qtyChange: Number, // Positive for in, Negative for out
+  balanceAfter: Number,
+  unitCost: Number,
+  remarks: String
+});
+const StockCard = mongoose.model('StockCard', StockCardSchema);
+
+const UserSchema = new mongoose.Schema({
+  userCode: String,
+  name: String,
+  password: String
+}, { timestamps: true });
+const User = mongoose.model('User', UserSchema);
+
 // --- API ROUTES ---
 
+// --- INVENTORY PHYSICAL COUNT & DAILY CLOSE ---
+
+app.post('/api/inventory/count', async (req, res) => {
+  try {
+    const { counts } = req.body; 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const items = await Inventory.find();
+
+    for (const item of items) {
+      if (counts[item._id] === undefined || counts[item._id] === '') continue; // Skip uncounted
+      
+      const actualCount = Number(counts[item._id]);
+      const variance = actualCount - item.stockQty;
+
+      if (variance !== 0) {
+        // 1. Write to the Audit Log (Stock Card)
+        await StockCard.create({
+          inventoryId: item._id, itemName: item.itemName, type: 'Adjustment',
+          reference: 'EOD-COUNT', qtyChange: variance, balanceAfter: actualCount,
+          remarks: variance < 0 ? 'Shortage detected' : 'Excess stock found'
+        });
+
+        // 2. Financial Journaling (The Accounting Link)
+        const valueAbs = Math.abs(variance) * item.unitCost;
+        if (valueAbs > 0) {
+          const entryCount = await JournalEntry.countDocuments();
+          const reference = `ADJ-${(entryCount + 1).toString().padStart(4, '0')}`;
+          
+          if (variance < 0) {
+            // LOSS / SHRINKAGE (Debit Expense, Credit Asset)
+            await JournalEntry.create({
+              reference, description: `Inventory Shrinkage: ${item.itemName}`,
+              lines: [
+                { accountCode: '5100', accountName: 'Spoilage & Variance Expense', debit: valueAbs, credit: 0 },
+                { accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: valueAbs }
+              ], totalDebit: valueAbs, totalCredit: valueAbs
+            });
+          } else {
+            // GAIN (Debit Asset, Credit Adjustment Gain)
+            await JournalEntry.create({
+              reference, description: `Inventory Gain: ${item.itemName}`,
+              lines: [
+                { accountCode: '1500', accountName: 'Inventory Asset', debit: valueAbs, credit: 0 },
+                { accountCode: '4200', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueAbs }
+              ], totalDebit: valueAbs, totalCredit: valueAbs
+            });
+          }
+        }
+      }
+
+      // Update Live Database
+      item.stockQty = actualCount;
+      await item.save();
+    }
+
+    io.emit('erpUpdated');
+    res.json({ success: true, message: "End of day counts submitted." });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/inventory/history/:id', async (req, res) => {
+  try {
+    const history = await StockCard.find({ inventoryId: req.params.id }).sort({ date: -1 });
+    res.json({ success: true, history });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Fetch ALL stock card history for the master PDF report
+app.get('/api/inventory/history', async (req, res) => {
+  try {
+    const history = await StockCard.find().sort({ date: -1 });
+    res.json({ success: true, history });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // Categories
 app.get('/api/categories', async (req, res) => {
   const categories = await Category.find();
@@ -141,6 +284,19 @@ app.get('/api/products', async (req, res) => {
 });
 
 app.post('/api/products', async (req, res) => {
+  // Generate base product code (e.g., DRS-A0001)
+  const catPrefix = getCategoryPrefix(req.body.category);
+  req.body.productCode = await generateNextSequence(Product, catPrefix, 'productCode');
+  
+  // Generate size codes if they exist (e.g., DRS-A0002, DRS-A0003)
+  if (req.body.sizes && req.body.sizes.length > 0) {
+    for (let i = 0; i < req.body.sizes.length; i++) {
+      // Temporarily save the product to reserve the code, or generate sequentially
+      const nextNum = parseInt(req.body.productCode.split('-A')[1], 10) + 1 + i;
+      req.body.sizes[i].sizeCode = `${catPrefix}-A${nextNum.toString().padStart(4, '0')}`;
+    }
+  }
+
   const newProduct = await Product.create(req.body);
   io.emit('menuUpdated');
   res.json({ success: true, product: newProduct });
@@ -184,21 +340,23 @@ app.post('/api/orders', async (req, res) => {
   try {
     const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName } = req.body;
 
-    // The subtotal is the sum of menu prices (which are VAT INCLUSIVE)
     const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
+    // --- VAT EXCLUSIVE MATH (Added on top) ---
+    
+    // 1. Calculate discount based on the raw subtotal
     const discount = subtotal * (discountPercent / 100);
     const discountedSubtotal = subtotal - discount;
-    
-    // --- TRUE VAT INCLUSIVE MATH ---
-    const vatRate = isVatExempt ? 0 : 0.12;
-    // Net Sales = Total / 1.12
-    const netSales = discountedSubtotal / (1 + vatRate);
-    // VAT = Total - Net Sales
-    const vatAmount = discountedSubtotal - netSales; 
-    const total = discountedSubtotal; // The total cash the customer hands you
 
-    const orderCount = await Order.countDocuments();
-    const orderNumber = `#${(orderCount + 1).toString().padStart(4, '0')}`;
+    // 2. Calculate VAT to ADD ON TOP of the discounted subtotal
+    const vatRate = isVatExempt ? 0 : 0.12;
+    const vatAmount = discountedSubtotal * vatRate; 
+
+    // 3. Final Total = Subtotal - Discount + VAT
+    const total = discountedSubtotal + vatAmount;
+
+    const currentYear = new Date().getFullYear();
+    const orderNumber = await generateNextSequence(Order, `ORD-${currentYear}`, 'orderNumber');
 
     const newOrder = await Order.create({
       orderNumber, table, items, subtotal, vatRate, vatAmount, discountPercent, discount, total, isVatExempt, customerName
@@ -211,7 +369,6 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// 2. AUTO-LEDGER & INVENTORY DEDUCTION ROUTE
 app.put('/api/orders/:id', async (req, res) => {
   try {
     const { status, discountPercent, isVatExempt, paymentMethod } = req.body;
@@ -226,13 +383,18 @@ app.put('/api/orders/:id', async (req, res) => {
       if (discountPercent !== undefined) order.discountPercent = discountPercent;
       if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
 
+      // --- THE FIXED TOGGLE MATH (VAT EXCLUSIVE) ---
+      
+      // 1. Apply discount to raw subtotal
       order.discount = order.subtotal * ((order.discountPercent || 0) / 100);
       const discountedSubtotal = order.subtotal - order.discount;
-      
+
+      // 2. Add VAT on top (or make it 0 if exempt)
       order.vatRate = order.isVatExempt ? 0 : 0.12;
-      const netSales = discountedSubtotal / (1 + order.vatRate);
-      order.vatAmount = discountedSubtotal - netSales;
-      order.total = discountedSubtotal;
+      order.vatAmount = discountedSubtotal * order.vatRate;
+
+      // 3. Calculate final total
+      order.total = discountedSubtotal + order.vatAmount;
     }
 
     // --- 🔥 THE STRICT ERP ENGINE 🔥 ---
@@ -355,12 +517,11 @@ app.get('/api/inventory', async (req, res) => {
 
 app.post('/api/inventory', async (req, res) => {
   try {
-    // 1. DUPLICATE CHECK
     const existing = await Inventory.findOne({ itemName: { $regex: new RegExp(`^${req.body.itemName.trim()}$`, 'i') } });
-    if (existing) {
-      return res.status(400).json({ success: false, error: 'Item already exists. Please restock it instead.' });
-    }
+    if (existing) return res.status(400).json({ success: false, error: 'Item already exists.' });
 
+    // Inject RML code
+    req.body.itemCode = await generateNextSequence(Inventory, 'RML', 'itemCode');
     const newItem = await Inventory.create(req.body);
     
     // --- AUTO-JOURNAL FOR PURCHASING INVENTORY ---
@@ -447,13 +608,34 @@ app.post('/api/journal', async (req, res) => {
     }
 
     const entryCount = await JournalEntry.countDocuments();
-    const reference = `JE-${(entryCount + 1).toString().padStart(4, '0')}`;
+    const currentYear = new Date().getFullYear();
+    const reference = await generateNextSequence(JournalEntry, `JRN-${currentYear}`, 'reference');
 
     const newEntry = await JournalEntry.create({
       reference, description, lines, totalDebit, totalCredit
     });
 
     res.json({ success: true, entry: newEntry });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/finance/balances', async (req, res) => {
+  try {
+    const entries = await JournalEntry.find();
+    let cashOnHand = 0;
+    
+    entries.forEach(entry => {
+       entry.lines.forEach(line => {
+          // Asset Accounts: Balance = Debit - Credit
+          if (line.accountCode === '1000') {
+            cashOnHand += (line.debit || 0) - (line.credit || 0);
+          }
+       });
+    });
+    
+    res.json({ success: true, cashOnHand });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -473,6 +655,7 @@ io.on('connection', (socket) => {
   });
 });
 
+
 // --- MIDNIGHT AUTO-ARCHIVE SYSTEM ---
 function scheduleMidnightArchive() {
   const now = new Date();
@@ -480,10 +663,11 @@ function scheduleMidnightArchive() {
   midnight.setHours(24, 0, 0, 0); // Sets time to exactly 12:00:00 AM tonight
   const msToMidnight = midnight.getTime() - now.getTime();
 
+  // Notice the "async" keyword here! Everything using "await" must be inside this block.
   setTimeout(async () => {
     console.log('🌙 Midnight reached: Auto-closing the day...');
     
-    // Run the exact same logic as the manual archive button
+    // 1. Archive the Orders
     await Order.updateMany(
       { status: { $in: ['Pending', 'Preparing'] }, isArchived: false }, 
       { $set: { status: 'Cancelled' } }
@@ -492,13 +676,111 @@ function scheduleMidnightArchive() {
     
     io.emit('ordersArchived'); // Tell all iPads/phones to reset
 
-    // Schedule it again for tomorrow night!
+    // 2. Take the Midnight Inventory Snapshot
+    const allItems = await Inventory.find();
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0); // Normalize to start of day
+
+    for (const item of allItems) {
+      await InventoryMovement.create({
+        date: todayDate,
+        inventoryId: item._id,
+        itemName: item.itemName,
+        systemEndingBalance: item.stockQty,
+      });
+    }
+
+    // 3. Schedule it again for tomorrow night!
     scheduleMidnightArchive(); 
   }, msToMidnight);
 }
 
 // Start the timer when the server boots up
 scheduleMidnightArchive();
+
+// --- AUTO-CODE GENERATORS ---
+const getCategoryPrefix = (categoryName) => {
+  const clean = categoryName.toUpperCase().replace(/[^A-Z]/g, '');
+  if (clean.length < 3) return (clean + 'XXX').substring(0, 3);
+  return clean[0] + clean[1] + clean[clean.length - 1]; // e.g., "DRINKS" -> "DRS"
+};
+
+const generateNextSequence = async (Model, prefix, fieldName) => {
+  // Finds the highest existing code matching the prefix (e.g., ORD-2026-A0042)
+  const lastDoc = await Model.findOne({ [fieldName]: new RegExp(`^${prefix}-A`) })
+                             .sort({ [fieldName]: -1 });
+  
+  let nextNumber = 1;
+  if (lastDoc && lastDoc[fieldName]) {
+     const match = lastDoc[fieldName].match(/-A(\d+)$/);
+     if (match) nextNumber = parseInt(match[1], 10) + 1;
+  }
+  return `${prefix}-A${nextNumber.toString().padStart(4, '0')}`;
+};
+
+// --- USER / ADMIN ROUTES ---
+
+// --- USER / ADMIN ROUTES ---
+
+app.post('/api/users/login', async (req, res) => {
+  const { name, password } = req.body;
+  const user = await User.findOne({ name });
+  
+  if (!user) return res.status(401).json({ success: false, message: 'Invalid name or password' });
+
+  // Compare the typed password with the database hash
+  const isMatch = await bcrypt.compare(password, user.password);
+  
+  if (isMatch) {
+    // Never send the password hash back to the frontend
+    res.json({ success: true, user: { _id: user._id, name: user.name, userCode: user.userCode } });
+  } else {
+    res.status(401).json({ success: false, message: 'Invalid name or password' });
+  }
+});
+
+app.get('/api/users', async (req, res) => {
+  // .select('-password') hides the hash from the API response
+  const users = await User.find().select('-password').sort({ userCode: 1 });
+  res.json({ success: true, users });
+});
+
+app.post('/api/users', async (req, res) => {
+  try {
+    const existing = await User.findOne({ name: { $regex: new RegExp(`^${req.body.name.trim()}$`, 'i') } });
+    if (existing) return res.status(400).json({ success: false, error: 'User already exists' });
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(req.body.password, 10);
+    const userCode = await generateNextSequence(User, 'ADN', 'userCode');
+    
+    const newUser = await User.create({ name: req.body.name, password: hashedPassword, userCode });
+    res.json({ success: true, user: { _id: newUser._id, name: newUser.name, userCode: newUser.userCode } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const updateData = { name: req.body.name };
+    
+    // Only hash and update the password if they actually typed a new one
+    if (req.body.password && req.body.password.trim() !== '') {
+      updateData.password = await bcrypt.hash(req.body.password, 10);
+    }
+
+    const updated = await User.findByIdAndUpdate(req.params.id, updateData, { new: true }).select('-password');
+    res.json({ success: true, user: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  await User.findByIdAndDelete(req.params.id);
+  res.json({ success: true });
+});
 
 // --- SERVER START ---
 const PORT = process.env.PORT || 5002;

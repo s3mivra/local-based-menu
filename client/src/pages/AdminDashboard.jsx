@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from '../components/QRCode.jsx';
+import jsPDF from 'jspdf';               // <-- ADD THIS
+import 'jspdf-autotable';
 
 const API_URL = 'https://local-based-menu.onrender.com';
 //const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
@@ -30,7 +32,6 @@ const playKitchenDing = () => {
 };
 
 export default function AdminDashboard() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [paymentSelections, setPaymentSelections] = useState({});
   const ADMIN_PIN = '1234'; 
@@ -62,6 +63,88 @@ export default function AdminDashboard() {
   const [inventory, setInventory] = useState([]);
   const [journalEntries, setJournalEntries] = useState([]);
   const [invForm, setInvForm] = useState({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '' });
+
+  const [physicalCounts, setPhysicalCounts] = useState({});
+  const [restockData, setRestockData] = useState({ addedStock: '', totalCost: '' });
+  const [activeInventoryItem, setActiveInventoryItem] = useState(null); // For the restock modal
+
+  const [stockHistory, setStockHistory] = useState([]);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [historyItemName, setHistoryItemName] = useState('');
+
+  const [cashOnHand, setCashOnHand] = useState(0);
+
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  
+  // --- NEW LOGIN STATES ---
+  const [loginForm, setLoginForm] = useState({ name: '', password: '' });
+  const [activeAdmin, setActiveAdmin] = useState(null); // Tracks who is currently logged in
+
+  const handleSystemLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_URL}/api/users/login`, {
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginForm)
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        setIsAuthenticated(true);
+        setActiveAdmin(data.user); // Save their data (like ADN-A0001) to state
+      } else {
+        alert("Access Denied: Invalid name or password.");
+      }
+    } catch (err) { 
+      console.error("Login failed", err); 
+    }
+  };
+
+  const fetchERPData = async () => {
+    try {
+      const invRes = await fetch(`${API_URL}/api/inventory`);
+      if (invRes.ok) setInventory((await invRes.json()).items || []);
+      const jeRes = await fetch(`${API_URL}/api/journal`);
+      if (jeRes.ok) setJournalEntries((await jeRes.json()).entries || []);
+      
+      // NEW: Fetch balances
+      const balRes = await fetch(`${API_URL}/api/finance/balances`);
+      if (balRes.ok) setCashOnHand((await balRes.json()).cashOnHand || 0);
+    } catch (err) { console.error('Failed to fetch ERP data', err); }
+  };
+
+  const injectOwnerCapital = async () => {
+    const amountStr = prompt("Enter amount of capital to inject from Owner's Equity:");
+    const amount = parseFloat(amountStr);
+    if (!amount || amount <= 0) return;
+
+    const jePayload = {
+      description: 'Owner Capital Injection',
+      lines: [
+        { accountCode: '1000', accountName: 'Cash on Hand', debit: amount, credit: 0 },
+        { accountCode: '3000', accountName: 'Owner Equity', debit: 0, credit: amount }
+      ]
+    };
+
+    await fetch(`${API_URL}/api/journal`, { 
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jePayload) 
+    });
+    fetchERPData();
+    alert(`₱${amount.toFixed(2)} injected into Cash on Hand.`);
+  };
+
+  const fetchStockHistory = async (item) => {
+    try {
+      const res = await fetch(`${API_URL}/api/inventory/history/${item._id}`);
+      const data = await res.json();
+      if (data.success) {
+        setStockHistory(data.history);
+        setHistoryItemName(item.itemName);
+        setHistoryModalOpen(true);
+      }
+    } catch (err) { console.error("Failed to fetch history"); }
+  };
   
   const [jeForm, setJeForm] = useState({
     description: '',
@@ -121,15 +204,6 @@ export default function AdminDashboard() {
     } catch (err) { console.error('Failed to fetch orders', err); }
   };
 
-  const fetchERPData = async () => {
-    try {
-      const invRes = await fetch(`${API_URL}/api/inventory`);
-      if (invRes.ok) setInventory((await invRes.json()).items || []);
-      const jeRes = await fetch(`${API_URL}/api/journal`);
-      if (jeRes.ok) setJournalEntries((await jeRes.json()).entries || []);
-    } catch (err) { console.error('Failed to fetch ERP data', err); }
-  };
-
   useEffect(() => {
     if (!isAuthenticated) return;
     fetchOrders();
@@ -150,12 +224,33 @@ export default function AdminDashboard() {
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-4">
-        <div className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl max-w-sm w-full text-center">
+        <form onSubmit={handleSystemLogin} className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl max-w-sm w-full text-center">
           <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Locked</h2>
-          <p className="text-gray-400 text-sm mb-6">Enter Admin PIN to access the dashboard.</p>
-          <input type="password" value={pinInput} onChange={(e) => setPinInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pinInput === ADMIN_PIN && setIsAuthenticated(true)} className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-3xl text-white tracking-[0.5em] py-4 rounded-lg outline-none mb-4 font-mono" maxLength={4} autoFocus />
-          <button onClick={() => pinInput === ADMIN_PIN ? setIsAuthenticated(true) : alert("Incorrect PIN")} className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20">UNLOCK</button>
-        </div>
+          <p className="text-gray-400 text-sm mb-6">Enter credentials to access the dashboard.</p>
+          
+          <input 
+            type="text" 
+            placeholder="Admin Name"
+            value={loginForm.name} 
+            onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} 
+            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" 
+            required 
+            autoFocus 
+          />
+          
+          <input 
+            type="password" 
+            placeholder="Password"
+            value={loginForm.password} 
+            onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} 
+            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" 
+            required 
+          />
+          
+          <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest">
+            AUTHENTICATE
+          </button>
+        </form>
       </div>
     );
   }
@@ -187,6 +282,43 @@ export default function AdminDashboard() {
     const uniqueId = Math.floor(1000 + Math.random() * 9000);
     setAutoTableId(`T-${uniqueId}`);
     setShowQR(true);
+  };
+
+  const handleRestockSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_URL}/api/inventory/restock/${activeInventoryItem._id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          addedStock: Number(restockData.addedStock),
+          totalCost: Number(restockData.totalCost)
+        })
+      });
+      if (res.ok) {
+        alert("Stock received. Weighted Average Cost updated!");
+        setActiveInventoryItem(null);
+        setRestockData({ addedStock: '', totalCost: '' });
+        fetchERPData(); // Re-fetch inventory
+      }
+    } catch (err) { console.error("Restock failed", err); }
+  };
+
+  const submitPhysicalCounts = async () => {
+    if (!window.confirm("Are you sure? This will lock today's inventory numbers and adjust the live system to your physical count.")) return;
+
+    try {
+      const res = await fetch(`${API_URL}/api/inventory/count`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ counts: physicalCounts })
+      });
+      if (res.ok) {
+        alert("Counts submitted successfully!");
+        setPhysicalCounts({});
+        fetchERPData();
+      }
+    } catch (err) { console.error("Counting failed", err); }
   };
 
   const addInventory = async () => {
@@ -222,23 +354,154 @@ export default function AdminDashboard() {
   };
   const deleteInventory = async (id) => { if(window.confirm('Delete inventory item?')) { await fetch(`${API_URL}/api/inventory/${id}`, { method: 'DELETE' }); fetchERPData(); } };
 
-  const generateCSV = (ordersList, filename) => {
-    if (ordersList.length === 0) return alert("No orders to export.");
-    const headers = ['Date', 'Order Number', 'Table', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total'];
-    const rows = ordersList.map(order => {
-      const date = new Date(order.createdAt).toLocaleString();
-      const itemsStr = order.items.map(i => `${i.quantity}x ${i.name}`).join(' | ');
-      return [ `"${date}"`, `"${order.orderNumber}"`, `"${order.table || 'Takeout'}"`, `"${order.status}"`, `"${itemsStr}"`, order.subtotal.toFixed(2), order.vatAmount.toFixed(2), order.discount.toFixed(2), order.total.toFixed(2) ].join(',');
+  // ==========================================
+  // 📄 PDF EXPORT ENGINE
+  // ==========================================
+
+  // 1. Inventory & Movement History PDF
+  const exportInventoryToPDF = async () => {
+    if (inventory.length === 0) return alert("No inventory to export.");
+
+    try {
+      // Fetch all movement history from the backend
+      const res = await fetch(`${API_URL}/api/inventory/history`);
+      const data = await res.json();
+      const allHistory = data.success ? data.history : [];
+
+      const doc = new jsPDF();
+      doc.setFontSize(18);
+      doc.text("Master Inventory & Movement Report", 14, 15);
+      doc.setFontSize(10);
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
+
+      // Table A: Current Stock Levels
+      doc.setFontSize(12);
+      doc.text("Current Stock Levels", 14, 32);
+      const stockBody = inventory.map(i => [
+        i.itemName,
+        `${i.stockQty} ${i.unit}`,
+        `P${(i.unitCost || 0).toFixed(4)}`,
+        `P${(i.stockQty * (i.unitCost || 0)).toFixed(2)}`
+      ]);
+      
+      doc.autoTable({
+        startY: 36,
+        head: [['Item Name', 'System Qty', 'Unit Cost', 'Total Value']],
+        body: stockBody,
+        theme: 'grid',
+        headStyles: { fillColor: [204, 163, 0], textColor: [0,0,0] } // Accent Color
+      });
+
+      // Table B: Movement History
+      const finalY = doc.lastAutoTable.finalY || 40;
+      doc.text("Recent Movement & Adjustments (Stock Card)", 14, finalY + 10);
+      
+      const historyBody = allHistory.slice(0, 100).map(h => [ // Limit to last 100 for PDF
+        new Date(h.date).toLocaleDateString(),
+        h.itemName,
+        h.type,
+        h.qtyChange > 0 ? `+${h.qtyChange}` : h.qtyChange,
+        h.balanceAfter,
+        h.remarks || h.reference
+      ]);
+
+      doc.autoTable({
+        startY: finalY + 14,
+        head: [['Date', 'Item', 'Type', 'In/Out', 'Balance', 'Remarks/Ref']],
+        body: historyBody,
+        theme: 'striped',
+        styles: { fontSize: 8 }
+      });
+
+      doc.save(`Inventory_Movement_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error("PDF Export Failed", err);
+      alert("Failed to generate PDF.");
+    }
+  };
+
+  // 2. Accounting Ledger PDF
+  const exportLedgerToPDF = () => {
+    if (journalEntries.length === 0) return alert("No entries to export.");
+    const doc = new jsPDF();
+    doc.text("General Ledger Report", 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
+
+    const rows = [];
+    journalEntries.forEach(entry => {
+      const date = new Date(entry.date).toLocaleDateString();
+      entry.lines.forEach(line => {
+        rows.push([date, entry.reference, entry.description, `${line.accountCode} - ${line.accountName}`, line.debit || '', line.credit || '']);
+      });
     });
-    const csvContent = [headers.join(','), ...rows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click();
+
+    doc.autoTable({
+      startY: 28,
+      head: [['Date', 'Ref', 'Description', 'Account', 'Debit (P)', 'Credit (P)']],
+      body: rows,
+      theme: 'grid',
+      headStyles: { fillColor: [30, 41, 59] },
+      styles: { fontSize: 8 }
+    });
+    doc.save(`General_Ledger_${new Date().toISOString().split('T')[0]}.pdf`);
   };
-  const exportAllToCSV = () => {
+
+  // 3. Analytics & Forecasting PDF
+  const exportAnalyticsToPDF = () => {
+    if (dailyRevenueList.length === 0) return alert("No analytics data to export.");
+    const doc = new jsPDF();
+    doc.text("Daily Sales Trend & Forecasting", 14, 15);
+    
+    const rows = dailyRevenueList.map(d => [d.date, `P${d.revenue.toFixed(2)}`]);
+    doc.autoTable({
+      startY: 25,
+      head: [['Date', 'Revenue']],
+      body: rows,
+      theme: 'striped'
+    });
+    doc.save(`Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
+  // 4. Sales History PDF Helper
+  const generateSalesPDF = (ordersList, filename, title) => {
+    if (ordersList.length === 0) return alert("No orders to export.");
+    const doc = new jsPDF('landscape');
+    doc.text(title, 14, 15);
+    
+    const rows = ordersList.map(order => {
+      const itemsStr = order.items.map(i => `${i.quantity}x ${i.name}`).join(', ');
+      return [
+        new Date(order.createdAt).toLocaleString(),
+        order.orderNumber,
+        order.status,
+        itemsStr,
+        `P${order.subtotal.toFixed(2)}`,
+        `P${order.vatAmount.toFixed(2)}`,
+        `P${order.discount.toFixed(2)}`,
+        `P${order.total.toFixed(2)}`
+      ];
+    });
+
+    doc.autoTable({
+      startY: 25,
+      head: [['Date', 'Order #', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total']],
+      body: rows,
+      theme: 'grid',
+      styles: { fontSize: 8 },
+      columnStyles: { 3: { cellWidth: 80 } } // Make items column wider
+    });
+    doc.save(filename);
+  };
+
+  const exportAllToPDF = () => {
     const allOrdersToExport = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    generateCSV(allOrdersToExport, `Sales_Export_ALL_${new Date().toISOString().split('T')[0]}.csv`);
+    generateSalesPDF(allOrdersToExport, `All_Sales_${new Date().toISOString().split('T')[0]}.pdf`, "Complete Sales History");
   };
-  const exportDayToCSV = (dateString, dayOrders) => { generateCSV(dayOrders, `Sales_Export_${dateString.replace(/,/g, '').replace(/ /g, '_')}.csv`); };
+
+  const exportDayToPDF = (dateString, dayOrders) => { 
+    generateSalesPDF(dayOrders, `Sales_${dateString.replace(/,/g, '').replace(/ /g, '_')}.pdf`, `Sales Report: ${dateString}`); 
+  };
 
   const handleAddCategory = async (e) => { e.preventDefault(); if(!newCatName.trim()) return; await fetch(`${API_URL}/api/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCatName }) }); setNewCatName(''); };
   const deleteCategory = async (id) => { if(window.confirm('Delete category?')) await fetch(`${API_URL}/api/categories/${id}`, { method: 'DELETE' }); };
@@ -367,44 +630,70 @@ export default function AdminDashboard() {
     .sort((a, b) => b.qty - a.qty)
     .slice(0, 5); // Top 5
 
-  // 3. Stock Movement
+  // 3. Stock Movement (Current State)
   const sortedInventory = [...inventory].sort((a, b) => a.stockQty - b.stockQty);
   const lowestStock = sortedInventory.slice(0, 5);
   const highestStock = [...sortedInventory].reverse().slice(0, 5);
 
-  // --- NEW EXPORT FUNCTIONS ---
-  const downloadCSVFile = (csvContent, filename) => {
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click();
-  };
+  // --- NEW: 4. Raw Material Velocity & Forecasting ---
+  
+  // A. Calculate exactly how many days of sales data we have
+  let daysElapsed = 1; // Default to 1 to prevent dividing by zero
+  if (allCompletedOrders.length > 0) {
+    const dates = allCompletedOrders.map(o => new Date(o.createdAt).getTime());
+    const minDate = Math.min(...dates);
+    const maxDate = Math.max(...dates);
+    // Convert milliseconds to days, and ensure it's at least 1 day
+    daysElapsed = Math.max(1, Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24)));
+  }
 
-  const exportInventoryToCSV = () => {
-    if (inventory.length === 0) return alert("No inventory to export.");
-    const headers = ['Item Name', 'Stock Qty', 'Unit', 'Unit Cost', 'Total Value'];
-    const rows = inventory.map(i => `"${i.itemName}",${i.stockQty},"${i.unit}",${i.unitCost.toFixed(4)},${(i.stockQty * i.unitCost).toFixed(2)}`);
-    downloadCSVFile([headers.join(','), ...rows].join('\n'), `Inventory_Report_${new Date().toISOString().split('T')[0]}.csv`);
-  };
+  const rawMaterialUsage = {};
+  allCompletedOrders.forEach(o => {
+    o.items.forEach(orderItem => {
+      let product = products.find(p => p._id === orderItem.productId);
+      if (!product) {
+         const baseName = orderItem.name.replace(/\s*\(.*?\)\s*/g, '').trim();
+         product = products.find(p => p.name === baseName);
+      }
+      
+      if (product) {
+        let recipe = product.baseRecipe || [];
+        const sizeMatch = orderItem.name.match(/\(([^)]+)\)$/);
+        if (sizeMatch) {
+           const sizeObj = product.sizes?.find(s => s.name === sizeMatch[1]);
+           if (sizeObj && sizeObj.recipe?.length > 0) recipe = sizeObj.recipe;
+        }
 
-  const exportLedgerToCSV = () => {
-    if (journalEntries.length === 0) return alert("No entries to export.");
-    const headers = ['Date', 'Reference', 'Description', 'Account Code', 'Account Name', 'Debit', 'Credit'];
-    const rows = [];
-    journalEntries.forEach(entry => {
-      const date = new Date(entry.date).toLocaleString();
-      entry.lines.forEach(line => {
-        rows.push(`"${date}","${entry.reference}","${entry.description}","${line.accountCode}","${line.accountName}",${line.debit || 0},${line.credit || 0}`);
-      });
+        recipe.forEach(ing => {
+           if (!rawMaterialUsage[ing.name]) {
+              // Grab the current live stock so we can calculate runway
+              const invItem = inventory.find(i => i.itemName.toLowerCase() === ing.name.toLowerCase());
+              const currentStock = invItem ? invItem.stockQty : 0;
+              
+              rawMaterialUsage[ing.name] = { name: ing.name, qtyUsed: 0, unit: ing.unit, currentStock };
+           }
+           rawMaterialUsage[ing.name].qtyUsed += (ing.qty * orderItem.quantity);
+        });
+      }
     });
-    downloadCSVFile([headers.join(','), ...rows].join('\n'), `General_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
-  };
+  });
 
-  const exportAnalyticsToCSV = () => {
-    if (dailyRevenueList.length === 0) return alert("No analytics data to export.");
-    const headers = ['Date', 'Revenue'];
-    const rows = dailyRevenueList.map(d => `"${d.date}",${d.revenue.toFixed(2)}`);
-    downloadCSVFile([headers.join(','), ...rows].join('\n'), `Daily_Sales_Trend_${new Date().toISOString().split('T')[0]}.csv`);
-  };
-
+  // B. Process the forecasting math
+  const mostUsedStock = Object.values(rawMaterialUsage)
+    .sort((a, b) => b.qtyUsed - a.qtyUsed)
+    .slice(0, 5)
+    .map(item => {
+      const dailyAvg = item.qtyUsed / daysElapsed;
+      const daysLeft = dailyAvg > 0 ? (item.currentStock / dailyAvg) : Infinity;
+      
+      return {
+        ...item,
+        dailyAvg,
+        daysLeft: Math.floor(daysLeft), // How many days until we run out?
+        weeklyNeed: Math.ceil(dailyAvg * 7), // How much to buy for 7 days
+        monthlyNeed: Math.ceil(dailyAvg * 30) // How much to buy for 30 days
+      };
+    });
   return (
     <div className="min-h-screen bg-dark text-white p-6 lg:p-8">
       
@@ -545,11 +834,10 @@ export default function AdminDashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             
             {/* Daily Sales List */}
-            {/* Daily Sales List */}
             <div className="bg-surface border border-gray-800 rounded-xl p-6 flex flex-col max-h-96">
               <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
                 <h3 className="text-white font-bold">Daily Revenue Trend</h3>
-                <button onClick={exportAnalyticsToCSV} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+                <button onClick={exportAnalyticsToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
                   Export Trend
                 </button>
               </div>
@@ -573,41 +861,90 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* Inventory Alerts */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-surface border border-red-900/30 rounded-xl p-5 flex flex-col">
-                <h3 className="text-red-400 text-sm font-bold uppercase tracking-wider mb-4 border-b border-red-900/30 pb-2 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> Low Stock Alert
+            {/* Inventory Alerts & Velocity */}
+            <div className="grid grid-cols-1 gap-4">
+              {/* --- UPGRADED: High Velocity & Forecasting --- */}
+              <div className="bg-surface border border-accent/30 rounded-xl p-5 flex flex-col shadow-lg shadow-accent/5">
+                <h3 className="text-accent text-sm font-bold uppercase tracking-wider mb-4 border-b border-accent/20 pb-2 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-accent"></span> High Velocity & Forecast
                 </h3>
-                <div className="space-y-3">
-                  {lowestStock.length === 0 ? (
-                    <p className="text-gray-600 text-xs">Inventory is empty.</p>
-                  ) : lowestStock.map(item => (
-                    <div key={item._id} className="flex justify-between text-sm">
-                      <span className="text-gray-300 truncate pr-2">{item.itemName}</span>
-                      <span className={`font-black ${item.stockQty <= 0 ? 'text-red-500' : 'text-yellow-500'}`}>{item.stockQty.toLocaleString()}{item.unit}</span>
+                <div className="space-y-4">
+                  {mostUsedStock.length === 0 ? (
+                    <p className="text-gray-600 text-xs">No usage data yet.</p>
+                  ) : mostUsedStock.map((item, idx) => (
+                    <div key={idx} className="flex flex-col mb-1 border-b border-accent/10 pb-3 last:border-0 last:pb-0">
+                      
+                      {/* Top Row: Name and Total Used */}
+                      <div className="flex justify-between items-center text-sm mb-2">
+                        <span className="text-gray-200 font-bold truncate pr-2">{item.name}</span>
+                        <span className="text-accent font-bold bg-accent/10 px-2 py-0.5 rounded text-xs">
+                          {item.qtyUsed.toLocaleString()} {item.unit} Used total
+                        </span>
+                      </div>
+
+                      {/* Bottom Row: Predictive Metrics Grid */}
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-dark/50 p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
+                          <p className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">Stock Lasts</p>
+                          <p className={`text-sm font-black ${item.daysLeft <= 3 ? 'text-red-400 animate-pulse' : item.daysLeft <= 7 ? 'text-yellow-500' : 'text-green-400'}`}>
+                            {item.daysLeft === Infinity || isNaN(item.daysLeft) ? '∞' : `${item.daysLeft} Days`}
+                          </p>
+                        </div>
+                        
+                        <div className="bg-dark/50 p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
+                          <p className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">Buy (1 Wk)</p>
+                          <p className="text-sm font-bold text-gray-300">
+                            {item.weeklyNeed.toLocaleString()} <span className="text-[10px] font-normal text-gray-500">{item.unit}</span>
+                          </p>
+                        </div>
+                        
+                        <div className="bg-dark/50 p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
+                          <p className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">Buy (1 Mo)</p>
+                          <p className="text-sm font-bold text-gray-300">
+                            {item.monthlyNeed.toLocaleString()} <span className="text-[10px] font-normal text-gray-500">{item.unit}</span>
+                          </p>
+                        </div>
+                      </div>
+
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="bg-surface border border-green-900/30 rounded-xl p-5 flex flex-col">
-                <h3 className="text-green-400 text-sm font-bold uppercase tracking-wider mb-4 border-b border-green-900/30 pb-2">
-                  High Stock / Overstock
-                </h3>
-                <div className="space-y-3">
-                  {highestStock.length === 0 ? (
-                    <p className="text-gray-600 text-xs">Inventory is empty.</p>
-                  ) : highestStock.map(item => (
-                    <div key={item._id} className="flex justify-between text-sm">
-                      <span className="text-gray-300 truncate pr-2">{item.itemName}</span>
-                      <span className="text-green-500 font-bold">{item.stockQty.toLocaleString()}{item.unit}</span>
-                    </div>
-                  ))}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="bg-surface border border-red-900/30 rounded-xl p-5 flex flex-col">
+                  <h3 className="text-red-400 text-sm font-bold uppercase tracking-wider mb-4 border-b border-red-900/30 pb-2 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> Low Stock (Risk)
+                  </h3>
+                  <div className="space-y-3">
+                    {lowestStock.length === 0 ? (
+                      <p className="text-gray-600 text-xs">Inventory is empty.</p>
+                    ) : lowestStock.map(item => (
+                      <div key={item._id} className="flex justify-between text-sm">
+                        <span className="text-gray-300 truncate pr-2">{item.itemName}</span>
+                        <span className={`font-black ${item.stockQty <= 0 ? 'text-red-500' : 'text-yellow-500'}`}>{item.stockQty.toLocaleString()}{item.unit}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-surface border border-gray-800 rounded-xl p-5 flex flex-col">
+                  <h3 className="text-gray-400 text-sm font-bold uppercase tracking-wider mb-4 border-b border-gray-800 pb-2">
+                    Overstock Watch
+                  </h3>
+                  <div className="space-y-3">
+                    {highestStock.length === 0 ? (
+                      <p className="text-gray-600 text-xs">Inventory is empty.</p>
+                    ) : highestStock.map(item => (
+                      <div key={item._id} className="flex justify-between text-sm">
+                        <span className="text-gray-400 truncate pr-2">{item.itemName}</span>
+                        <span className="text-gray-300 font-bold">{item.stockQty.toLocaleString()}{item.unit}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
-
           </div>
         </div>
       )}
@@ -748,7 +1085,7 @@ export default function AdminDashboard() {
           <div className="bg-surface border border-gray-800 rounded-xl p-1 overflow-hidden flex flex-col">
             <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-dark/20 rounded-t-xl">
               <h3 className="text-gray-300 font-bold text-sm tracking-wider uppercase">Sales History</h3>
-              <button onClick={exportAllToCSV} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+              <button onClick={exportAllToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
                 Export All
               </button>
             </div>
@@ -781,7 +1118,7 @@ export default function AdminDashboard() {
                               <span>{expandedOrderLists[date] ? 'Hide Orders' : 'View All Orders'}</span>
                               <span>{expandedOrderLists[date] ? '▲' : '▼'}</span>
                             </button>
-                            <button onClick={() => exportDayToCSV(date, data.orders)} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-2 py-1 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+                            <button onClick={() => exportDayToPDF(date, data.orders)} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-2 py-1 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
                               Export Day
                             </button>
                           </div>
@@ -832,43 +1169,79 @@ export default function AdminDashboard() {
           <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6">
             <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
               <h3 className="text-xl font-bold text-accent">Inventory Management</h3>
-              <button onClick={exportInventoryToCSV} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
-                Export Inventory
-              </button>
+              
+              {/* --- ADDED SUBMIT BUTTON HERE --- */}
+              <div className="flex gap-2">
+                <button onClick={submitPhysicalCounts} className="bg-accent text-dark px-4 py-1.5 rounded hover:bg-yellow-500 transition font-bold uppercase tracking-wider text-[10px] shadow-lg">
+                  Submit EOD Counts
+                </button>
+                <button onClick={exportInventoryToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+                  Export Inventory
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="text-gray-500 border-b border-gray-800">
                     <th className="pb-3">Item Name</th>
-                    <th className="pb-3 text-right">Stock Qty</th>
+                    <th className="pb-3 text-right">System Qty</th>
                     <th className="pb-3">Unit</th>
+                    
+                    {/* --- ADDED COST & VALUE HEADERS --- */}
                     <th className="pb-3 text-right">Unit Cost</th>
                     <th className="pb-3 text-right">Total Value</th>
+                    
+                    <th className="pb-3 text-right">Actual Count</th>
+                    <th className="pb-3 text-right">Variance</th>
                     <th className="pb-3 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {inventory.map(item => (
-                    <tr key={item._id} className="border-b border-gray-800/50 hover:bg-dark/30">
-                      <td className="py-3 font-bold text-gray-200">{item.itemName}</td>
-                      <td className={`py-3 text-right font-bold ${item.stockQty < 10 ? 'text-red-400' : 'text-gray-300'}`}>{item.stockQty}</td>
-                      <td className="py-3 text-gray-500 pl-2">{item.unit}</td>
-                      <td className="py-3 text-right text-gray-400">P{item.unitCost.toFixed(4)}</td>
-                      <td className="py-3 text-right text-accent font-semibold">P{(item.stockQty * item.unitCost).toFixed(2)}</td>
-                      <td className="py-3 text-center">
-                         <button onClick={() => deleteInventory(item._id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-2 py-1 bg-red-900/20 rounded transition">Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                  {inventory.length === 0 && <tr><td colSpan="6" className="py-6 text-center text-gray-500">No inventory items found. Add some on the right.</td></tr>}
+                  {inventory.map(item => {
+                    const actualInput = physicalCounts[item._id];
+                    const hasInput = actualInput !== undefined && actualInput !== '';
+                    const variance = hasInput ? Number(actualInput) - item.stockQty : 0;
+
+                    return (
+                      <tr key={item._id} className="border-b border-gray-800/50 hover:bg-dark/30">
+                        <td className="py-3 font-bold text-gray-200">{item.itemName}</td>
+                        <td className={`py-3 text-right font-bold ${item.stockQty < 10 ? 'text-red-400' : 'text-gray-300'}`}>{item.stockQty.toLocaleString()}</td>
+                        <td className="py-3 text-gray-500 pl-2">{item.unit}</td>
+                        
+                        {/* --- ADDED COST & VALUE DATA --- */}
+                        <td className="py-3 text-right text-gray-400 font-mono text-xs">P{(item.unitCost || 0).toFixed(4)}</td>
+                        <td className="py-3 text-right text-accent font-bold font-mono text-xs">P{(item.stockQty * (item.unitCost || 0)).toFixed(2)}</td>
+
+                        <td className="py-3 text-right">
+                          <input 
+                            type="number" 
+                            placeholder="Count..." 
+                            className="w-20 bg-dark border border-gray-700 rounded p-1.5 text-white outline-none focus:border-accent text-right text-xs font-mono"
+                            value={hasInput ? actualInput : ''}
+                            onChange={(e) => setPhysicalCounts({...physicalCounts, [item._id]: e.target.value})}
+                          />
+                        </td>
+
+                        <td className={`py-3 text-right font-black font-mono ${variance < 0 ? 'text-red-500' : variance > 0 ? 'text-green-500' : 'text-gray-600'}`}>
+                          {hasInput ? (variance > 0 ? `+${variance}` : variance) : '-'}
+                        </td>
+                        
+                        <td className="py-3 text-center space-x-2">
+                           <button onClick={() => fetchStockHistory(item)} className="text-accent hover:text-white text-xs font-bold px-2 py-1 bg-accent/10 rounded transition">History</button>
+                           <button onClick={() => deleteInventory(item._id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-2 py-1 bg-red-900/20 rounded transition">Del</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
 
+          {/* RIGHT COLUMN: Procurement Panel */}
           <div className="w-full xl:w-96 bg-surface border border-gray-800 rounded-xl p-6 h-fit">
-            <h3 className="text-lg font-bold text-white mb-4 border-b border-gray-800 pb-2">Receive New Inventory</h3>
+            <h3 className="text-lg font-bold text-white mb-4 border-b border-gray-800 pb-2">Procurement (Receive Inventory)</h3>
             <div className="space-y-4">
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Item Name</label>
@@ -880,7 +1253,6 @@ export default function AdminDashboard() {
                   onChange={e => {
                     const typed = e.target.value;
                     const match = inventory.find(i => i.itemName.toLowerCase() === typed.toLowerCase());
-                    // If they select an existing item, auto-fill the unit so they don't mess it up!
                     setInvForm({...invForm, itemName: typed, unit: match ? match.unit : invForm.unit});
                   }} 
                   className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" 
@@ -889,7 +1261,6 @@ export default function AdminDashboard() {
                   {inventory.map(inv => <option key={inv._id} value={inv.itemName} />)}
                 </datalist>
                 
-                {/* Visual Hint for Restock Mode */}
                 {inventory.some(i => i.itemName.toLowerCase() === invForm.itemName.toLowerCase().trim()) && (
                   <p className="text-[10px] text-accent font-bold mt-1 uppercase tracking-wider">★ Existing Item: Will be Restocked</p>
                 )}
@@ -913,10 +1284,39 @@ export default function AdminDashboard() {
                    </select>
                  </div>
               </div>
-              <div>
-                <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Price Paid Per Pack/Can (P)</label>
-                <input type="number" placeholder="e.g., 45.00" value={invForm.costPerPack} onChange={e => setInvForm({...invForm, costPerPack: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" />
-              </div>
+              
+              {/* --- UPDATED PRICE SECTION WITH CASH VALIDATION --- */}
+              {/* --- UPDATED PRICE SECTION WITH RED INPUT WARNING --- */}
+              {(() => {
+                const totalPurchaseCost = (parseFloat(invForm.packQty) || 0) * (parseFloat(invForm.costPerPack) || 0);
+                const isOverBudget = cashOnHand < totalPurchaseCost;
+
+                return (
+                  <div>
+                    <div className="flex justify-between items-end mb-1">
+                      <label className={`text-[10px] uppercase font-bold transition-colors ${isOverBudget ? 'text-red-400' : 'text-gray-400'}`}>
+                        Price Paid Per Pack/Can (P)
+                      </label>
+                      <span className={`text-[10px] font-bold tracking-wider ${isOverBudget ? 'text-red-400 animate-pulse' : 'text-green-400'}`}>
+                        Available Cash: ₱{cashOnHand.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    
+                    <input 
+                      type="number" 
+                      placeholder="e.g., 45.00" 
+                      value={invForm.costPerPack} 
+                      onChange={e => setInvForm({...invForm, costPerPack: e.target.value})} 
+                      className={`w-full bg-dark border rounded p-2 outline-none transition-all ${
+                        isOverBudget 
+                        ? 'border-red-500 text-red-400 focus:border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
+                        : 'border-gray-700 text-white focus:border-accent'
+                      }`} 
+                    />
+                  </div>
+                );
+              })()}
+              
               {(invForm.packQty && invForm.unitPerPack && invForm.costPerPack && invForm.unit) && (
                 <div className="bg-dark/50 p-3 rounded border border-gray-700 text-sm">
                   <p className="text-gray-400 mb-1">System will save to inventory:</p>
@@ -924,13 +1324,29 @@ export default function AdminDashboard() {
                     <span>Total Stock Added:</span>
                     <span className="text-accent">{(invForm.packQty * invForm.unitPerPack).toLocaleString()} {invForm.unit}</span>
                   </div>
-                  <div className="flex justify-between font-bold text-white">
+                  <div className="flex justify-between font-bold text-white mb-1">
                     <span>Cost per {invForm.unit}:</span>
                     <span className="text-accent">P{(invForm.costPerPack / invForm.unitPerPack).toFixed(4)}</span>
                   </div>
+                  
+                  {/* --- NEW: TOTAL COST ROW --- */}
+                  <div className="flex justify-between font-bold text-white border-t border-gray-700 pt-2 mt-2">
+                    <span>Total Purchase Cost:</span>
+                    <span className={cashOnHand < (invForm.packQty * invForm.costPerPack) ? "text-red-400" : "text-yellow-500"}>
+                      P{(invForm.packQty * invForm.costPerPack).toFixed(2)}
+                    </span>
+                  </div>
                 </div>
               )}
-              <button onClick={addInventory} className="w-full bg-accent text-dark font-bold py-3 rounded hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Add to Stock</button>
+              
+              {/* --- UPDATED SUBMIT BUTTON (DISABLED IF INSUFFICIENT FUNDS) --- */}
+              <button 
+                onClick={addInventory} 
+                disabled={cashOnHand < (invForm.packQty * invForm.costPerPack)}
+                className={`w-full font-bold py-3 rounded transition shadow-lg ${cashOnHand < (invForm.packQty * invForm.costPerPack) ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-dark hover:bg-yellow-500 shadow-accent/20'}`}
+              >
+                {cashOnHand < (invForm.packQty * invForm.costPerPack) ? 'Insufficient Funds' : 'Add to Stock'}
+              </button>
             </div>
           </div>
         </div>
@@ -939,45 +1355,58 @@ export default function AdminDashboard() {
       {/* --- ACCOUNTING & LEDGER TAB --- */}
       {activeTab === 'ledger' && (
         <div className="flex flex-col xl:flex-row gap-8">
-          <div className="w-full xl:w-1/3 bg-surface border border-gray-800 rounded-xl p-6 h-fit">
-            <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">New Journal Entry</h3>
-            <div className="space-y-4">
-              <input type="text" placeholder="Description / Memo" value={jeForm.description} onChange={e => setJeForm({...jeForm, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none" />
-              {jeForm.lines.map((line, idx) => (
-                <div key={idx} className="bg-dark p-3 rounded border border-gray-700 space-y-2">
-                  <select value={line.accountCode} onChange={(e) => {
-                    const acc = standardAccounts.find(a => a.accountCode === e.target.value);
-                    const newLines = [...jeForm.lines];
-                    newLines[idx] = { ...line, accountCode: acc.accountCode, accountName: acc.accountName };
-                    setJeForm({...jeForm, lines: newLines});
-                  }} className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-white">
-                    <option value="">Select Account...</option>
-                    {standardAccounts.map(acc => <option key={acc.accountCode} value={acc.accountCode}>{acc.accountCode} - {acc.accountName}</option>)}
-                  </select>
-                  <div className="flex gap-2">
-                    <input type="number" placeholder="Debit" value={line.debit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].debit = e.target.value; nl[idx].credit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white placeholder-gray-500" />
-                    <input type="number" placeholder="Credit" value={line.credit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].credit = e.target.value; nl[idx].debit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white placeholder-gray-500" />
+          
+          {/* LEFT COLUMN: Balances & New Entry Form */}
+          <div className="w-full xl:w-1/3 space-y-6">
+            
+            {/* --- LIVE CASH ON HAND --- */}
+            <div className="bg-gradient-to-br from-surface to-dark border border-accent/30 rounded-xl p-6 shadow-lg shadow-accent/5">
+              <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Live Cash on Hand</p>
+              <p className="text-4xl font-black text-accent">₱{cashOnHand.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            </div>
+
+            <div className="bg-surface border border-gray-800 rounded-xl p-6 h-fit">
+              <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">New Journal Entry</h3>
+              <div className="space-y-4">
+                <input type="text" placeholder="Description / Memo" value={jeForm.description} onChange={e => setJeForm({...jeForm, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none" />
+                {jeForm.lines.map((line, idx) => (
+                  <div key={idx} className="bg-dark p-3 rounded border border-gray-700 space-y-2">
+                    <select value={line.accountCode} onChange={(e) => {
+                      const acc = standardAccounts.find(a => a.accountCode === e.target.value);
+                      const newLines = [...jeForm.lines];
+                      newLines[idx] = { ...line, accountCode: acc.accountCode, accountName: acc.accountName };
+                      setJeForm({...jeForm, lines: newLines});
+                    }} className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-white">
+                      <option value="">Select Account...</option>
+                      {standardAccounts.map(acc => <option key={acc.accountCode} value={acc.accountCode}>{acc.accountCode} - {acc.accountName}</option>)}
+                    </select>
+                    <div className="flex gap-2">
+                      <input type="number" placeholder="Debit" value={line.debit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].debit = e.target.value; nl[idx].credit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white placeholder-gray-500" />
+                      <input type="number" placeholder="Credit" value={line.credit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].credit = e.target.value; nl[idx].debit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white placeholder-gray-500" />
+                    </div>
                   </div>
+                ))}
+                <button onClick={() => setJeForm({...jeForm, lines: [...jeForm.lines, {accountCode:'', accountName:'', debit:'', credit:''}]})} className="text-xs text-accent hover:text-white">+ Add Line</button>
+                <div className="border-t border-gray-800 pt-4 mt-4 flex justify-between items-center">
+                  <div className="text-xs text-gray-400">
+                    Debits: {jeForm.lines.reduce((s, l) => s + Number(l.debit||0), 0)} <br/>
+                    Credits: {jeForm.lines.reduce((s, l) => s + Number(l.credit||0), 0)}
+                  </div>
+                  <button onClick={async () => {
+                    await fetch(`${API_URL}/api/journal`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jeForm) });
+                    setJeForm({ description: '', lines: [{accountCode:'', accountName:'', debit:'', credit:''}, {accountCode:'', accountName:'', debit:'', credit:''}] });
+                    fetchERPData();
+                  }} className="bg-accent text-dark font-bold py-2 px-4 rounded hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Post Entry</button>
                 </div>
-              ))}
-              <button onClick={() => setJeForm({...jeForm, lines: [...jeForm.lines, {accountCode:'', accountName:'', debit:'', credit:''}]})} className="text-xs text-accent hover:text-white">+ Add Line</button>
-              <div className="border-t border-gray-800 pt-4 mt-4 flex justify-between items-center">
-                <div className="text-xs text-gray-400">
-                  Debits: {jeForm.lines.reduce((s, l) => s + Number(l.debit||0), 0)} <br/>
-                  Credits: {jeForm.lines.reduce((s, l) => s + Number(l.credit||0), 0)}
-                </div>
-                <button onClick={async () => {
-                  await fetch(`${API_URL}/api/journal`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jeForm) });
-                  setJeForm({ description: '', lines: [{accountCode:'', accountName:'', debit:'', credit:''}, {accountCode:'', accountName:'', debit:'', credit:''}] });
-                  fetchERPData();
-                }} className="bg-accent text-dark font-bold py-2 px-4 rounded hover:bg-yellow-500">Post Entry</button>
               </div>
             </div>
           </div>
+
+          {/* RIGHT COLUMN: General Ledger */}
           <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6">
             <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
               <h3 className="text-xl font-bold text-white">General Ledger</h3>
-              <button onClick={exportLedgerToCSV} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+              <button onClick={exportLedgerToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
                 Export Ledger
               </button>
             </div>
@@ -1005,6 +1434,7 @@ export default function AdminDashboard() {
               ))}
             </div>
           </div>
+
         </div>
       )}
 
@@ -1220,6 +1650,51 @@ export default function AdminDashboard() {
                 )}
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* --- STOCK MOVEMENT HISTORY MODAL --- */}
+      {historyModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-surface p-6 rounded-xl border border-gray-700 shadow-2xl flex flex-col max-w-2xl w-full max-h-[80vh]">
+            <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+              <h2 className="text-xl font-bold text-white">Stock Card: <span className="text-accent">{historyItemName}</span></h2>
+              <button onClick={() => setHistoryModalOpen(false)} className="text-gray-400 hover:text-white font-bold text-xl">✕</button>
+            </div>
+            
+            <div className="overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="text-gray-500 border-b border-gray-800 text-xs uppercase tracking-wider">
+                    <th className="pb-2">Date</th>
+                    <th className="pb-2">Type</th>
+                    <th className="pb-2 text-right">In/Out</th>
+                    <th className="pb-2 text-right">Unit Cost</th> {/* <-- ADDED */}
+                    <th className="pb-2 text-right">Balance</th>
+                    <th className="pb-2 pl-4">Remarks / Ref</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockHistory.length === 0 ? (
+                    <tr><td colSpan="6" className="py-4 text-center text-gray-500">No movement history recorded yet.</td></tr>
+                  ) : stockHistory.map((log, idx) => (
+                    <tr key={idx} className="border-b border-gray-800/50 hover:bg-dark/30">
+                      <td className="py-2 text-gray-400 text-xs">{new Date(log.date).toLocaleString()}</td>
+                      <td className="py-2 font-bold text-gray-300">{log.type}</td>
+                      <td className={`py-2 text-right font-mono font-bold ${log.qtyChange < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {log.qtyChange > 0 ? `+${log.qtyChange}` : log.qtyChange}
+                      </td>
+                      
+                      {/* --- ADDED COST DATA --- */}
+                      <td className="py-2 text-right text-gray-400 font-mono text-xs">P{(log.unitCost || 0).toFixed(4)}</td>
+                      
+                      <td className="py-2 text-right text-accent font-bold font-mono">{log.balanceAfter}</td>
+                      <td className="py-2 pl-4 text-gray-500 text-xs">{log.remarks || log.reference}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
