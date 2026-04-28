@@ -429,7 +429,7 @@ export default function AdminDashboard() {
           >
             {/* SEMIVRA CAFE is now the BIGGER primary text */}
             <span className="text-3xl font-black text-white transition group-hover:text-gray-300 tracking-tight leading-none mb-1">
-              SEMIVRA CAFE
+              INFU COFFEE
             </span>
             {/* SEMIVRA LIBELLUS is now smaller, uniform, and ALL CAPS */}
             <span className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em] transition group-hover:text-gray-400">
