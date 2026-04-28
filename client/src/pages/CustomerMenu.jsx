@@ -86,32 +86,34 @@ export default function CustomerMenu() {
 
     const checkSavedSession = async () => {
       const savedOrderId = localStorage.getItem('semivra_active_order');
-      const savedOrderTime = localStorage.getItem('semivra_order_time');
+      console.log("1. LocalStorage ID found:", savedOrderId); // Check if memory exists
 
       if (savedOrderId) {
-        const isExpired = savedOrderTime && (Date.now() - parseInt(savedOrderTime) > 600000);
-        
-        if (isExpired) {
-          localStorage.removeItem('semivra_active_order');
-          localStorage.removeItem('semivra_order_time');
-          setIsCheckingSession(false); // Stop loading
-          return;
-        }
-
         try {
+          console.log("2. Fetching order from backend...");
           const res = await fetch(`${API_URL}/api/orders/${savedOrderId}`);
+          
           if (res.ok) {
             const orderData = await res.json();
+            console.log("3. Backend returned order:", orderData.status); // Check status
+            
             if (orderData.status !== 'Cancelled' && !localStorage.getItem(`received_${savedOrderId}`)) {
+              console.log("4. Lock condition met! Locking screen.");
               setLockedOrder(orderData);
+            } else {
+              console.log("4. Order is cancelled or already received.");
             }
+          } else {
+            console.log("3. Backend failed to find order. Status:", res.status);
           }
         } catch (err) {
-          console.error("Failed to restore session");
+          console.error("3. Fetch completely failed:", err);
         }
+      } else {
+        console.log("2. No order ID in memory. Showing menu.");
       }
       
-      setIsCheckingSession(false); // Stop loading after check is done
+      setIsCheckingSession(false);
     };
 
     checkSavedSession();
@@ -310,7 +312,7 @@ export default function CustomerMenu() {
     return false;
   };
 
-const confirmOrder = async () => {
+  const confirmOrder = async () => {
     if (!customerName.trim()) {
       return alert("Please enter an Order Name (Nickname) so we know who to call!");
     }
@@ -320,20 +322,27 @@ const confirmOrder = async () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: cart, discount: 0, isVatExempt: true, table: tableNum, customerName: customerName.trim() })
       });
+      
       const data = await res.json();
+      console.log("--- ORDER SUBMITTED ---", data); // Temporary debug log
       
       if (data.success) {
         setCart([]);
-        
-        // --- NEW: LOCK MENU IMMEDIATELY & SAVE TO DEVICE ---
+        setSuccessMessage(true);
+        setTimeout(() => setSuccessMessage(false), 5000);
+
+        // --- THIS IS THE CRITICAL MISSING PART ---
+        console.log("Saving ID to memory:", data.order._id);
         localStorage.setItem('semivra_active_order', data.order._id);
         localStorage.setItem('semivra_order_time', Date.now().toString());
-        setLockedOrder(data.order); // Lock UI instantly
-        // ---------------------------------------------------
+        setLockedOrder(data.order); 
+        // -----------------------------------------
 
         requestNotificationPermission();
       }
-    } catch (error) { console.error("Order failed", error); }
+    } catch (error) { 
+      console.error("Order failed", error); 
+    }
   };
 
   const allCategories = ['All', ...new Set(products.map(p => p.category))];
@@ -577,7 +586,7 @@ const confirmOrder = async () => {
 
             <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
               <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">P{total.toFixed(2)}</span></div>
-              <button onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
+              <button type="button" onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
             </div>
           </div>
         </div>
