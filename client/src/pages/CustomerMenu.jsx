@@ -135,7 +135,7 @@ export default function CustomerMenu() {
           navigator.serviceWorker.ready.then(function(registration) {
             registration.showNotification('Your Order is Ready! ☕', {
               body: 'Please collect your order at the counter.',
-              icon: '/vite.svg',
+              icon: '/logo.png',
               vibrate: [1000, 500, 1000, 500, 2000], // Strong vibration pattern
               tag: 'order-ready',
               requireInteraction: true // Forces the notification to stay on screen until dismissed
