@@ -629,10 +629,21 @@ export default function AdminDashboard() {
             ) : filteredOrders.map(order => (
               <div key={order._id} className="bg-surface rounded-xl p-5 border border-gray-800 flex flex-col shadow-lg">
                 <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
-                  <h2 className="text-lg font-black">
-                    {order.orderNumber} 
-                    {order.table && <span className="text-sm font-bold text-accent ml-2 uppercase tracking-wider">({order.table})</span>}
+                  
+                  <h2 className="text-lg font-black flex items-center gap-2 flex-wrap">
+                    <span>{order.orderNumber}</span>
+                    
+                    {/* --- ADD THIS NEW BLOCK FOR THE NAME --- */}
+                    {order.customerName && (
+                      <span className="text-sm bg-gray-800 text-gray-200 px-2 py-0.5 rounded border border-gray-700">
+                        {order.customerName}
+                      </span>
+                    )}
+                    {/* --------------------------------------- */}
+
+                    {order.table && <span className="text-sm font-bold text-accent uppercase tracking-wider">({order.table})</span>}
                   </h2>
+
                   <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${order.status === 'Pending' ? 'bg-red-900/50 text-red-400' : order.status === 'Preparing' ? 'bg-yellow-900/50 text-accent' : order.status === 'Completed' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-400'}`}>{order.status}</span>
                 </div>
                 

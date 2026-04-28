@@ -76,7 +76,7 @@ const OrderSchema = new mongoose.Schema({
   orderNumber: String,
   table: String,
   status: { type: String, default: 'Pending' },
-  // 🔴 ADD productId: String RIGHT HERE 🔴
+  customerName: { type: String, default: 'Guest' },
   paymentMethod: { type: String, default: 'Cash' },
   items: [{ productId: String, name: String, price: Number, quantity: Number }],
   subtotal: { type: Number, default: 0 },
@@ -169,9 +169,20 @@ app.get('/api/orders/archives', async (req, res) => {
   res.json({ success: true, archives });
 });
 
+// Fetch a single order by ID (Used for Customer Status Lock)
+app.get('/api/orders/:id', async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    res.json(order); // Note: We send back just the order object so the frontend can read it directly
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 app.post('/api/orders', async (req, res) => {
   try {
-    const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout' } = req.body;
+    const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName } = req.body;
 
     // The subtotal is the sum of menu prices (which are VAT INCLUSIVE)
     const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -190,7 +201,7 @@ app.post('/api/orders', async (req, res) => {
     const orderNumber = `#${(orderCount + 1).toString().padStart(4, '0')}`;
 
     const newOrder = await Order.create({
-      orderNumber, table, items, subtotal, vatRate, vatAmount, discountPercent, discount, total, isVatExempt
+      orderNumber, table, items, subtotal, vatRate, vatAmount, discountPercent, discount, total, isVatExempt, customerName
     });
 
     io.emit('newOrder', newOrder);
@@ -200,7 +211,6 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// 2. AUTO-LEDGER & INVENTORY DEDUCTION ROUTE
 // 2. AUTO-LEDGER & INVENTORY DEDUCTION ROUTE
 app.put('/api/orders/:id', async (req, res) => {
   try {

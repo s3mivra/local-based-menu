@@ -31,6 +31,7 @@ const playCustomerDing = () => {
 export default function CustomerMenu() {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
+  const [customerName, setCustomerName] = useState('');
   
   const [activeCategory, setActiveCategory] = useState('All');
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -46,6 +47,8 @@ export default function CustomerMenu() {
   // --- NEW: VIBRATION CONTROLS ---
   const [isVibrating, setIsVibrating] = useState(false);
   const vibrationInterval = useRef(null);
+  const [isFinished, setIsFinished] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
 
   const wakeLockRef = useRef(null);
 
@@ -79,9 +82,39 @@ export default function CustomerMenu() {
     if (token === SECRET_TOKEN) {
       setIsAuthorized(true);
       setTableNum(finalTable);
-      fetchTableActiveOrder(finalTable);
     }
 
+    const checkSavedSession = async () => {
+      const savedOrderId = localStorage.getItem('semivra_active_order');
+      const savedOrderTime = localStorage.getItem('semivra_order_time');
+
+      if (savedOrderId) {
+        const isExpired = savedOrderTime && (Date.now() - parseInt(savedOrderTime) > 600000);
+        
+        if (isExpired) {
+          localStorage.removeItem('semivra_active_order');
+          localStorage.removeItem('semivra_order_time');
+          setIsCheckingSession(false); // Stop loading
+          return;
+        }
+
+        try {
+          const res = await fetch(`${API_URL}/api/orders/${savedOrderId}`);
+          if (res.ok) {
+            const orderData = await res.json();
+            if (orderData.status !== 'Cancelled' && !localStorage.getItem(`received_${savedOrderId}`)) {
+              setLockedOrder(orderData);
+            }
+          }
+        } catch (err) {
+          console.error("Failed to restore session");
+        }
+      }
+      
+      setIsCheckingSession(false); // Stop loading after check is done
+    };
+
+    checkSavedSession();
     fetchProducts();
   }, []);
 
@@ -169,12 +202,18 @@ export default function CustomerMenu() {
   const handleReceived = () => {
     setIsVibrating(false);
     if (vibrationInterval.current) clearInterval(vibrationInterval.current);
-    releaseWakeLock(); // <-- ADD THIS LINE
+    releaseWakeLock(); 
     
     if (lockedOrder) {
       localStorage.setItem(`received_${lockedOrder._id}`, 'true');
     }
     
+    // Clear device memory
+    localStorage.removeItem('semivra_active_order');
+    localStorage.removeItem('semivra_order_time');
+
+    // --- NEW: Trigger the Thank You screen instead of the menu ---
+    setIsFinished(true); 
     setLockedOrder(null);
     setCart([]);
   };
@@ -271,19 +310,27 @@ export default function CustomerMenu() {
     return false;
   };
 
-  const confirmOrder = async () => {
+const confirmOrder = async () => {
+    if (!customerName.trim()) {
+      return alert("Please enter an Order Name (Nickname) so we know who to call!");
+    }
+    
     try {
       const res = await fetch(`${API_URL}/api/orders`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: cart, discount: 0, isVatExempt: true, table: tableNum })
+        body: JSON.stringify({ items: cart, discount: 0, isVatExempt: true, table: tableNum, customerName: customerName.trim() })
       });
       const data = await res.json();
+      
       if (data.success) {
         setCart([]);
-        setSuccessMessage(true);
-        setTimeout(() => setSuccessMessage(false), 5000);
+        
+        // --- NEW: LOCK MENU IMMEDIATELY & SAVE TO DEVICE ---
+        localStorage.setItem('semivra_active_order', data.order._id);
+        localStorage.setItem('semivra_order_time', Date.now().toString());
+        setLockedOrder(data.order); // Lock UI instantly
+        // ---------------------------------------------------
 
-        // 🔔 NEW: Ask for Notification Permission right after they order!
         requestNotificationPermission();
       }
     } catch (error) { console.error("Order failed", error); }
@@ -304,6 +351,15 @@ export default function CustomerMenu() {
     }
     return acc;
   }, {});
+
+  // --- NEW: WAITING SCREEN WHILE CHECKING LOCALSTORAGE ---
+  if (isCheckingSession) {
+    return (
+      <div className="min-h-screen bg-dark flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   // --- ACCESS DENIED SCREEN ---
   if (!isAuthorized) {
@@ -354,6 +410,21 @@ export default function CustomerMenu() {
             <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">Thank you for dining with us!</p>
           )}
 
+        </div>
+      </div>
+    );
+  }
+  // --- NEW: FINAL THANK YOU SCREEN ---
+  if (isFinished) {
+    return (
+      <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6">
+        <div className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl text-center max-w-sm w-full animate-fade-in">
+          <h2 className="text-3xl font-black text-accent mb-4 uppercase tracking-widest">Thank You!</h2>
+          <p className="text-gray-300 font-medium mb-8">We hope you enjoy your order.</p>
+          
+          <div className="border-t border-gray-800 pt-6 mt-2">
+            <p className="text-gray-500 text-xs uppercase font-bold tracking-widest">You may now close this page.</p>
+          </div>
         </div>
       </div>
     );
@@ -489,6 +560,21 @@ export default function CustomerMenu() {
                 </div>
               ))}
             </div>
+            {/* --- CUSTOMER NAME INPUT --- */}
+            <div className="mb-4">
+              <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">
+                Order Name (Nickname) <span className="text-red-500 text-sm">*</span>
+              </label>
+              <input 
+                type="text" 
+                placeholder="e.g. SB, John" 
+                value={customerName} 
+                onChange={(e) => setCustomerName(e.target.value)} 
+                className="w-full bg-dark border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-accent font-bold"
+                maxLength="15"
+              />
+            </div>
+
             <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
               <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">P{total.toFixed(2)}</span></div>
               <button onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
