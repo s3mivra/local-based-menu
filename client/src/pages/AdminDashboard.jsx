@@ -36,6 +36,7 @@ export default function AdminDashboard() {
   const ADMIN_PIN = '1234'; 
 
   const [activeTab, setActiveTab] = useState('orders');
+  const [navMode, setNavMode] = useState('libellus'); // 'libellus' (Operations) or 'negotium' (Management)
   const [orderFilter, setOrderFilter] = useState('All'); 
   const [expandedDays, setExpandedDays] = useState({}); 
   const [expandedOrderLists, setExpandedOrderLists] = useState({});
@@ -409,42 +410,100 @@ export default function AdminDashboard() {
       
       {/* HEADER & NAV */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 border-b border-gray-800 pb-4 gap-4">
-        <div className="flex gap-6 overflow-x-auto w-full md:w-auto pb-2 md:pb-0">
-          <button onClick={() => setActiveTab('orders')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'orders' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Active Orders</button>
-          <button onClick={() => setActiveTab('history')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'history' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>History</button>
+        
+        {/* BRAND & DYNAMIC TABS */}
+        <div className="flex items-center gap-6 w-full md:w-auto overflow-x-auto pb-2 md:pb-0">
           
-          {/* NEW ANALYTICS TAB */}
-          <button onClick={() => setActiveTab('analytics')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'analytics' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Analytics</button>
-          
-          <button onClick={() => setActiveTab('inventory')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'inventory' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Inventory</button>
-          <button onClick={() => setActiveTab('ledger')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'ledger' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Accounting</button>
-          <button onClick={() => setActiveTab('products')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'products' ? 'text-gray-300' : 'text-gray-600 hover:text-gray-400'}`}>Menu Setup</button>
+          {/* THE BRAND TOGGLE */}
+          <div 
+            onClick={() => {
+              if (navMode === 'libellus') {
+                setNavMode('negotium');
+                setActiveTab('history');
+              } else {
+                setNavMode('libellus');
+                setActiveTab('orders');
+              }
+            }}
+            className="flex flex-col cursor-pointer group pr-6 border-r border-gray-700 select-none"
+          >
+            {/* SEMIVRA CAFE is now the BIGGER primary text */}
+            <span className="text-3xl font-black text-white transition group-hover:text-gray-300 tracking-tight leading-none mb-1">
+              SEMIVRA CAFE
+            </span>
+            {/* SEMIVRA LIBELLUS is now smaller, uniform, and ALL CAPS */}
+            <span className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em] transition group-hover:text-gray-400">
+              SEMIVRA <span className="text-accent">{navMode === 'libellus' ? 'LIBELLUS' : 'NEGOTIUM'}</span>
+            </span>
+          </div>
+
+          {/* THE TABS */}
+          <div className="flex gap-6">
+            {navMode === 'libellus' ? (
+              <>
+                <button onClick={() => setActiveTab('orders')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'orders' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Active Orders</button>
+                <button onClick={() => setActiveTab('inventory')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'inventory' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Inventory</button>
+                <button onClick={() => setActiveTab('products')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'products' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}>Menu Setup</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => setActiveTab('history')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'history' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>History</button>
+                <button onClick={() => setActiveTab('analytics')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'analytics' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Analytics</button>
+                <button onClick={() => setActiveTab('ledger')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'ledger' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Accounting</button>
+              </>
+            )}
+          </div>
         </div>
+
+        {/* RIGHT CONTROLS */}
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           <div className="hidden md:flex flex-col items-end mr-4">
             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Auto-Close In</span>
             <span className="text-accent font-black tracking-wider">{countdown}</span>
           </div>
-          <button onClick={handleShowQR} className="flex-1 md:flex-none bg-dark border border-gray-600 text-white px-4 py-2 rounded-md font-bold hover:bg-gray-800 transition">Show QR</button>
-          <button onClick={() => { setIsAuthenticated(false); setPinInput(''); }} className="flex-1 md:flex-none bg-red-900/50 text-red-500 px-4 py-2 rounded-md font-bold hover:bg-red-900 transition">Lock</button>
+          <button 
+            onClick={(e) => { e.preventDefault(); handleShowQR(); }} 
+            className="flex-1 md:flex-none bg-dark border border-gray-600 text-white px-4 py-2 rounded-md font-bold hover:bg-gray-800 transition"
+          >
+            Show QR
+          </button>
+          <button 
+            onClick={() => { setIsAuthenticated(false); setPinInput(''); }} 
+            className="flex-1 md:flex-none bg-red-900/50 text-red-500 px-4 py-2 rounded-md font-bold hover:bg-red-900 transition"
+          >
+            Lock
+          </button>
         </div>
       </div>
 
-      {/* QR MODAL */}
+      {/* QR MODAL (Fixed z-index and click issues) */}
       {showQR && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-surface p-8 rounded-xl border border-gray-700 shadow-2xl flex flex-col items-center max-w-sm w-full relative">
-            <button onClick={() => setShowQR(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white font-bold text-xl">✕</button>
+            <button onClick={() => setShowQR(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white font-bold text-2xl">✕</button>
             <h2 className="text-2xl font-bold mb-1 text-white">Customer QR</h2>
             <div className="bg-dark px-6 py-2 rounded-full border border-gray-700 mb-6 mt-2 flex items-center gap-2">
               <span className="text-gray-400 text-sm font-bold uppercase tracking-wider">Session ID:</span>
               <span className="text-accent font-black text-lg">{autoTableId}</span>
             </div>
-            <div className="bg-white p-2 rounded-lg shadow-inner">
-              <QRCode url={`${FRONTEND_URL}/?table=${autoTableId}&token=${SECRET_TOKEN}`} size={200} />
+            
+            <div className="bg-white rounded-xl shadow-inner w-full flex justify-center items-center overflow-hidden">
+              {/* Note: The QRCode component handles its own internal padding and styling */}
+              <QRCode url={`${FRONTEND_URL}/?table=${autoTableId}&token=${SECRET_TOKEN}`} size={220} />
             </div>
-            <button onClick={handleShowQR} className="mt-6 w-full bg-surface border border-accent text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition uppercase tracking-widest text-sm">Generate Next QR</button>
-            <button onClick={() => setShowQR(false)} className="mt-3 w-full bg-dark border border-gray-600 text-white font-bold py-3 rounded-md hover:bg-gray-800 transition text-sm">Close</button>
+            
+            <button 
+              onClick={(e) => { e.preventDefault(); handleShowQR(); }} 
+              className="mt-6 w-full bg-surface border border-accent text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition uppercase tracking-widest text-sm"
+            >
+              Generate Next QR
+            </button>
+            <button 
+              onClick={() => setShowQR(false)} 
+              className="mt-3 w-full bg-dark border border-gray-600 text-white font-bold py-3 rounded-md hover:bg-gray-800 transition text-sm"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}
