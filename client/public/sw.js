@@ -1,8 +1,8 @@
 self.addEventListener('push', function(event) {
   const options = {
     body: event.data ? event.data.text() : 'Your order is ready for pickup!',
-    icon: '/vite.svg', // Change this to your cafe's logo later!
-    badge: '/vite.svg',
+    icon: '/logo.png', // Change this to your cafe's logo later!
+    badge: '/logo.png',
     vibrate: [1000, 500, 1000, 500, 2000],
     data: {
       dateOfArrival: Date.now(),

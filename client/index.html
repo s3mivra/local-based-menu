@@ -3,33 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo.png" />
-    <link rel="apple-touch-icon" href="/logo.png" /> ```
-
-    ---
-
-    ### **Step 3: Change the Notification Icon (Background)**
-    Open your **`client/public/sw.js`** file. 
-
-    Find the `icon` and `badge` lines and change `/vite.svg` to `/logo.png`:
-    ```javascript
-    self.addEventListener('push', function(event) {
-      const options = {
-        body: event.data ? event.data.text() : 'Your order is ready for pickup!',
-        icon: '/logo.png',  // <-- Changed here!
-        badge: '/logo.png', // <-- Changed here!
-        vibrate: [1000, 500, 1000, 500, 2000],
-        data: {
-          dateOfArrival: Date.now(),
-          primaryKey: 1
-        }
-      };
-
-      event.waitUntil(
-        self.registration.showNotification('Food is Ready! ☕', options)
-      );
-    });
+    <link rel="apple-touch-icon" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>QR Digital Menu</title>
+    <title>Semivra Digital Menu</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
