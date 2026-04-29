@@ -175,51 +175,98 @@ const UserSchema = new mongoose.Schema({
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
 
+const EODRecordSchema = new mongoose.Schema({
+  dateString: String, // e.g., '2026-04-29'
+  status: { type: String, default: 'OPEN' }, // 'OPEN' or 'LOCKED'
+  lockedAt: Date,
+  lockedBy: String
+});
+const EODRecord = mongoose.model('EODRecord', EODRecordSchema);
+
 // --- API ROUTES ---
 
 // --- INVENTORY PHYSICAL COUNT & DAILY CLOSE ---
 
+// --- 1. FETCH EOD STATUS & REAL MOVEMENTS ---
+app.get('/api/inventory/eod-data', async (req, res) => {
+  try {
+    // Get local date string (e.g., "2026-04-29")
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    
+    let eod = await EODRecord.findOne({ dateString: todayStr });
+    if (!eod) eod = { status: 'OPEN', lockedAt: null };
+
+    // Calculate real movements for today using StockCard
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const movements = await StockCard.aggregate([
+      { $match: { date: { $gte: startOfDay } } },
+      { $group: {
+          _id: "$inventoryId",
+          // 'In' includes Restocks, 'Out' includes Sales (which are negative, so we abs() them later)
+          in: { $sum: { $cond: [{ $gt: ["$qtyChange", 0] }, "$qtyChange", 0] } },
+          out: { $sum: { $cond: [{ $lt: ["$qtyChange", 0] }, "$qtyChange", 0] } }
+      }}
+    ]);
+
+    const movementMap = {};
+    movements.forEach(m => {
+      movementMap[m._id] = { in: m.in, out: Math.abs(m.out) };
+    });
+
+    res.json({ success: true, status: eod.status, lockedAt: eod.lockedAt, movement: movementMap });
+  } catch(err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- 2. SUBMIT & LOCK EOD ---
 app.post('/api/inventory/count', async (req, res) => {
   try {
-    const { counts } = req.body; 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    
+    // STRICT CHECK: Is it already locked?
+    const existingEOD = await EODRecord.findOne({ dateString: todayStr });
+    if (existingEOD && existingEOD.status === 'LOCKED') {
+      return res.status(403).json({ success: false, error: 'ALREADY_CLOSED: You cannot submit another EOD for today.' });
+    }
+
+    const { counts, reasons, adminName } = req.body; 
 
     const items = await Inventory.find();
 
     for (const item of items) {
-      if (counts[item._id] === undefined || counts[item._id] === '') continue; // Skip uncounted
+      if (counts[item._id] === undefined || counts[item._id] === '') continue; 
       
       const actualCount = Number(counts[item._id]);
       const variance = actualCount - item.stockQty;
 
       if (variance !== 0) {
-        // 1. Write to the Audit Log (Stock Card)
+        const specificReason = reasons && reasons[item._id] ? reasons[item._id] : 'Unaccounted Variance';
+
         await StockCard.create({
           inventoryId: item._id, itemName: item.itemName, type: 'Adjustment',
           reference: 'EOD-COUNT', qtyChange: variance, balanceAfter: actualCount,
-          remarks: variance < 0 ? 'Shortage detected' : 'Excess stock found'
+          remarks: `EOD Audit: ${specificReason}`
         });
 
-        // 2. Financial Journaling (The Accounting Link)
         const valueAbs = Math.abs(variance) * item.unitCost;
         if (valueAbs > 0) {
           const entryCount = await JournalEntry.countDocuments();
           const reference = `ADJ-${(entryCount + 1).toString().padStart(4, '0')}`;
           
           if (variance < 0) {
-            // LOSS / SHRINKAGE (Debit Expense, Credit Asset)
             await JournalEntry.create({
-              reference, description: `Inventory Shrinkage: ${item.itemName}`,
+              reference, description: `Shrinkage (${specificReason}): ${item.itemName}`,
               lines: [
                 { accountCode: '5100', accountName: 'Spoilage & Variance Expense', debit: valueAbs, credit: 0 },
                 { accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: valueAbs }
               ], totalDebit: valueAbs, totalCredit: valueAbs
             });
           } else {
-            // GAIN (Debit Asset, Credit Adjustment Gain)
             await JournalEntry.create({
-              reference, description: `Inventory Gain: ${item.itemName}`,
+              reference, description: `Gain (${specificReason}): ${item.itemName}`,
               lines: [
                 { accountCode: '1500', accountName: 'Inventory Asset', debit: valueAbs, credit: 0 },
                 { accountCode: '4200', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueAbs }
@@ -228,14 +275,19 @@ app.post('/api/inventory/count', async (req, res) => {
           }
         }
       }
-
-      // Update Live Database
       item.stockQty = actualCount;
       await item.save();
     }
 
+    // LOCK THE DAY
+    await EODRecord.findOneAndUpdate(
+      { dateString: todayStr },
+      { status: 'LOCKED', lockedAt: new Date(), lockedBy: adminName || 'Admin' },
+      { upsert: true, new: true }
+    );
+
     io.emit('erpUpdated');
-    res.json({ success: true, message: "End of day counts submitted." });
+    res.json({ success: true, message: "End of day locked." });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -396,6 +448,18 @@ app.put('/api/orders/:id', async (req, res) => {
       // 3. Calculate final total
       order.total = discountedSubtotal + order.vatAmount;
     }
+    // --- 🛑 POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
+    if (status === 'Completed' && wasNotCompleted) {
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+      const currentEOD = await EODRecord.findOne({ dateString: todayStr });
+      
+      if (currentEOD && currentEOD.status === 'LOCKED') {
+        return res.status(403).json({ 
+          success: false, 
+          error: 'REGISTER CLOSED: EOD has already been locked for today. An Admin must reopen the day to process this order.' 
+        });
+      }
+    }
 
     // --- 🔥 THE STRICT ERP ENGINE 🔥 ---
     if (status === 'Completed' && wasNotCompleted) {
@@ -427,6 +491,19 @@ app.put('/api/orders/:id', async (req, res) => {
             const deductQty = (ing.qty * item.quantity);
             invItem.stockQty -= deductQty;
             await invItem.save();
+            
+            // --- NEW: WRITE THE SALE TO THE STOCK CARD ---
+            // This is what the EOD Engine reads to calculate the "Out" column!
+            await StockCard.create({
+              inventoryId: invItem._id,
+              itemName: invItem.itemName,
+              type: 'Sale', 
+              reference: order.orderNumber,
+              qtyChange: -deductQty, // Negative because it is leaving inventory
+              balanceAfter: invItem.stockQty,
+              remarks: `Sold via ${item.name}`
+            });
+
             totalCogs += (invItem.unitCost * deductQty); 
           }
         }
@@ -482,6 +559,26 @@ app.put('/api/orders/:id', async (req, res) => {
   } catch (error) {
     console.error("[ERP CRITICAL ERROR] Failed to process order:", error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// --- UNLOCK / REOPEN EOD (ADMIN ONLY) ---
+app.post('/api/inventory/eod/reopen', async (req, res) => {
+  try {
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    
+    // Find today's lock
+    const eod = await EODRecord.findOne({ dateString: todayStr });
+    if (!eod || eod.status === 'OPEN') return res.status(400).json({ success: false, error: 'Day is not locked.' });
+
+    // Reopen it
+    eod.status = 'OPEN';
+    await eod.save();
+
+    io.emit('erpUpdated'); // Tell all iPads the register is open again!
+    res.json({ success: true, message: 'Day reopened successfully.' });
+  } catch(err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

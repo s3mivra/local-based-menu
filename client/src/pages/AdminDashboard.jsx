@@ -80,6 +80,15 @@ export default function AdminDashboard() {
   const [loginForm, setLoginForm] = useState({ name: '', password: '' });
   const [activeAdmin, setActiveAdmin] = useState(null); // Tracks who is currently logged in
 
+  // Add this near your other state variables
+  const [invSubTab, setInvSubTab] = useState('live'); // 'live' or 'eod'
+  const [varianceReasons, setVarianceReasons] = useState({});
+
+  // --- EOD STATES ---
+  const [eodStatus, setEodStatus] = useState('OPEN');
+  const [eodLockedAt, setEodLockedAt] = useState(null);
+  const [dailyMovement, setDailyMovement] = useState({});
+
   const handleSystemLogin = async (e) => {
     e.preventDefault();
     try {
@@ -112,6 +121,18 @@ export default function AdminDashboard() {
       const balRes = await fetch(`${API_URL}/api/finance/balances`);
       if (balRes.ok) setCashOnHand((await balRes.json()).cashOnHand || 0);
     } catch (err) { console.error('Failed to fetch ERP data', err); }
+  };
+
+  const fetchEODData = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/inventory/eod-data`);
+      const data = await res.json();
+      if (data.success) {
+        setEodStatus(data.status);
+        setEodLockedAt(data.lockedAt);
+        setDailyMovement(data.movement);
+      }
+    } catch (err) { console.error("Failed to fetch EOD data"); }
   };
 
   const injectOwnerCapital = async () => {
@@ -304,21 +325,31 @@ export default function AdminDashboard() {
     } catch (err) { console.error("Restock failed", err); }
   };
 
-  const submitPhysicalCounts = async () => {
-    if (!window.confirm("Are you sure? This will lock today's inventory numbers and adjust the live system to your physical count.")) return;
-
+const submitPhysicalCounts = async () => {
     try {
       const res = await fetch(`${API_URL}/api/inventory/count`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ counts: physicalCounts })
+        body: JSON.stringify({ 
+          counts: physicalCounts,
+          reasons: varianceReasons, // <-- NEW: Send the reasons to the backend!
+          adminName: activeAdmin ? activeAdmin.name : 'System Admin'
+        })
       });
-      if (res.ok) {
-        alert("Counts submitted successfully!");
-        setPhysicalCounts({});
-        fetchERPData();
+      const data = await res.json();
+      
+      if (data.success) {
+        alert('End of Day counts successfully locked and recorded.');
+        setPhysicalCounts({}); // Clear the inputs
+        setVarianceReasons({}); // Clear the reasons
+        fetchERPData(); // Refresh the live data
+        setInvSubTab('live'); // Kick them back to the live tab so they see the updated numbers!
+      } else {
+        alert('Failed to submit counts: ' + data.error);
       }
-    } catch (err) { console.error("Counting failed", err); }
+    } catch (err) {
+      console.error('Failed to submit counts', err);
+    }
   };
 
   const addInventory = async () => {
@@ -1166,79 +1197,242 @@ export default function AdminDashboard() {
       {activeTab === 'inventory' && (
         <div className="flex flex-col xl:flex-row gap-8">
           
-          <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6">
-            <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
-              <h3 className="text-xl font-bold text-accent">Inventory Management</h3>
+          {/* LEFT COLUMN: Main Tables */}
+          <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6 flex flex-col h-fit">
+            
+            {/* Header & Sub-Tabs */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 border-b border-gray-800 pb-4">
+              <h3 className="text-xl font-bold text-accent">Inventory Hub</h3>
               
-              {/* --- ADDED SUBMIT BUTTON HERE --- */}
-              <div className="flex gap-2">
-                <button onClick={submitPhysicalCounts} className="bg-accent text-dark px-4 py-1.5 rounded hover:bg-yellow-500 transition font-bold uppercase tracking-wider text-[10px] shadow-lg">
-                  Submit EOD Counts
+              {/* --- NEW: THE SUB-TAB TOGGLE --- */}
+              <div className="flex bg-dark p-1 rounded-lg border border-gray-700 shadow-inner">
+                <button 
+                  onClick={() => setInvSubTab('live')}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded transition ${invSubTab === 'live' ? 'bg-accent text-dark shadow-md' : 'text-gray-400 hover:text-white'}`}
+                >
+                  Live Stock
                 </button>
-                <button onClick={exportInventoryToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
-                  Export Inventory
+                <button 
+                  onClick={() => { setInvSubTab('eod'); fetchEODData(); }}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded transition flex items-center gap-2 ${invSubTab === 'eod' ? 'bg-red-600 text-white shadow-md shadow-red-500/20' : 'text-gray-400 hover:text-red-400'}`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${invSubTab === 'eod' ? 'bg-white animate-pulse' : 'bg-red-500'}`}></span>
+                  EOD Audit
                 </button>
               </div>
+              
+              <button onClick={exportInventoryToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+                Export PDF
+              </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="text-gray-500 border-b border-gray-800">
-                    <th className="pb-3">Item Name</th>
-                    <th className="pb-3 text-right">System Qty</th>
-                    <th className="pb-3">Unit</th>
-                    
-                    {/* --- ADDED COST & VALUE HEADERS --- */}
-                    <th className="pb-3 text-right">Unit Cost</th>
-                    <th className="pb-3 text-right">Total Value</th>
-                    
-                    <th className="pb-3 text-right">Actual Count</th>
-                    <th className="pb-3 text-right">Variance</th>
-                    <th className="pb-3 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inventory.map(item => {
-                    const actualInput = physicalCounts[item._id];
-                    const hasInput = actualInput !== undefined && actualInput !== '';
-                    const variance = hasInput ? Number(actualInput) - item.stockQty : 0;
 
-                    return (
-                      <tr key={item._id} className="border-b border-gray-800/50 hover:bg-dark/30">
+            {/* --- TAB 1: LIVE STOCK (Clean & Read-Only) --- */}
+            {invSubTab === 'live' && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="text-gray-500 border-b border-gray-800">
+                      <th className="pb-3">Item Name</th>
+                      <th className="pb-3 text-right">Live System Qty</th>
+                      <th className="pb-3">Unit</th>
+                      <th className="pb-3 text-right">Unit Cost</th>
+                      <th className="pb-3 text-right">Total Value</th>
+                      <th className="pb-3 text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inventory.map(item => (
+                      <tr key={item._id} className="border-b border-gray-800/50 hover:bg-dark/30 transition">
                         <td className="py-3 font-bold text-gray-200">{item.itemName}</td>
                         <td className={`py-3 text-right font-bold ${item.stockQty < 10 ? 'text-red-400' : 'text-gray-300'}`}>{item.stockQty.toLocaleString()}</td>
                         <td className="py-3 text-gray-500 pl-2">{item.unit}</td>
-                        
-                        {/* --- ADDED COST & VALUE DATA --- */}
                         <td className="py-3 text-right text-gray-400 font-mono text-xs">P{(item.unitCost || 0).toFixed(4)}</td>
                         <td className="py-3 text-right text-accent font-bold font-mono text-xs">P{(item.stockQty * (item.unitCost || 0)).toFixed(2)}</td>
-
-                        <td className="py-3 text-right">
-                          <input 
-                            type="number" 
-                            placeholder="Count..." 
-                            className="w-20 bg-dark border border-gray-700 rounded p-1.5 text-white outline-none focus:border-accent text-right text-xs font-mono"
-                            value={hasInput ? actualInput : ''}
-                            onChange={(e) => setPhysicalCounts({...physicalCounts, [item._id]: e.target.value})}
-                          />
-                        </td>
-
-                        <td className={`py-3 text-right font-black font-mono ${variance < 0 ? 'text-red-500' : variance > 0 ? 'text-green-500' : 'text-gray-600'}`}>
-                          {hasInput ? (variance > 0 ? `+${variance}` : variance) : '-'}
-                        </td>
-                        
                         <td className="py-3 text-center space-x-2">
-                           <button onClick={() => fetchStockHistory(item)} className="text-accent hover:text-white text-xs font-bold px-2 py-1 bg-accent/10 rounded transition">History</button>
-                           <button onClick={() => deleteInventory(item._id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-2 py-1 bg-red-900/20 rounded transition">Del</button>
+                          <button onClick={() => fetchStockHistory(item)} className="text-accent hover:text-white text-xs font-bold px-2 py-1 bg-accent/10 rounded transition">History</button>
+                          <button onClick={() => deleteInventory(item._id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-2 py-1 bg-red-900/20 rounded transition">Del</button>
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
+            {/* --- TAB 2: EOD AUDIT (Enterprise Financial Control) --- */}
+            {/* --- TAB 2: EOD AUDIT (Enterprise Financial Control) --- */}
+            {invSubTab === 'eod' && (() => {
+              const itemsCounted = inventory.filter(i => physicalCounts[i._id] !== undefined && physicalCounts[i._id] !== '').length;
+              const isComplete = itemsCounted === inventory.length;
+              const itemsWithVariance = inventory.filter(i => physicalCounts[i._id] !== undefined && physicalCounts[i._id] !== '' && Number(physicalCounts[i._id]) !== i.stockQty);
+              const netVarianceQty = itemsWithVariance.reduce((sum, i) => sum + (Number(physicalCounts[i._id]) - i.stockQty), 0);
+              const netImpact = itemsWithVariance.reduce((sum, i) => sum + ((Number(physicalCounts[i._id]) - i.stockQty) * (i.unitCost || 0)), 0);
+
+              const isLocked = eodStatus === 'LOCKED';
+
+              return (
+                <div className="overflow-x-auto flex flex-col h-full animate-in fade-in duration-300 relative pb-24">
+                  
+                  {/* --- INTELLIGENT EOD HEADER --- */}
+                  <div className={`flex justify-between items-center p-4 rounded-lg border mb-4 shadow-inner ${isLocked ? 'bg-green-900/10 border-green-900/30' : 'bg-dark/50 border-red-900/30'}`}>
+                    <div>
+                      <h4 className="text-white font-black uppercase tracking-wider text-sm flex items-center gap-2">
+                        {isLocked ? (
+                          <>EOD Locked</>
+                        ) : (
+                          <><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> EOD Audit (Open)</>
+                        )}
+                      </h4>
+                      <p className={`text-xs mt-1 ${isLocked ? 'text-green-400 font-bold' : 'text-gray-400'}`}>
+                        {isLocked 
+                          ? `Daily inventory was securely locked on ${new Date(eodLockedAt).toLocaleTimeString()}`
+                          : `Audit physical stock, assign variance reasons, and lock daily financial impact.`}
+                      </p>
+                    </div>
+
+                    {/* NEW REOPEN BUTTON */}
+                    {isLocked && (
+                      <button 
+                        onClick={async () => {
+                          if(window.confirm("WARNING: Reopening the day allows new sales, which will alter your ending inventory. Are you sure?")) {
+                            await fetch(`${API_URL}/api/inventory/eod/reopen`, { method: 'POST' });
+                            fetchEODData(); // Refresh the tab
+                          }
+                        }}
+                        className="bg-dark border border-gray-600 text-gray-300 hover:text-white hover:border-red-500 px-4 py-2 rounded text-xs font-bold uppercase transition"
+                      >
+                        Reopen Register
+                      </button>
+                    )}
+                  </div>
+
+                  <table className="w-full text-left text-sm mb-4">
+                    <thead>
+                      <tr className="text-gray-500 border-b border-gray-800 text-xs uppercase tracking-wider">
+                        <th className="pb-3 w-1/4">Item & Context</th>
+                        <th className="pb-3 text-right">System End</th>
+                        <th className="pb-3 text-center">Physical Count</th>
+                        <th className="pb-3 text-right">Variance</th>
+                        <th className="pb-3 text-right pr-2">Impact (₱)</th>
+                      </tr>
+                    </thead>
+                    <tbody className={isLocked ? 'opacity-50 pointer-events-none' : ''}>
+                      {inventory.map(item => {
+                        const actualInput = physicalCounts[item._id];
+                        const hasInput = actualInput !== undefined && actualInput !== '';
+                        const variance = hasInput ? Number(actualInput) - item.stockQty : 0;
+                        const financialImpact = variance * (item.unitCost || 0);
+
+                        const formattedImpact = financialImpact < 0 ? `-₱${Math.abs(financialImpact).toFixed(2)}` : `₱${financialImpact.toFixed(2)}`;
+
+                        // --- REAL MOVEMENT MATH ---
+                        const realIn = dailyMovement[item._id]?.in || 0;
+                        const realOut = dailyMovement[item._id]?.out || 0;
+                        // Since System End = Start + In - Out, then Start = System End - In + Out
+                        const calculatedStart = item.stockQty - realIn + realOut;
+
+                        return (
+                          <tr key={item._id} className={`border-b border-gray-800/50 hover:bg-dark/30 transition ${hasInput && variance !== 0 ? 'bg-red-900/5' : ''}`}>
+                            
+                            <td className="py-4">
+                              <p className="font-bold text-gray-200">{item.itemName}</p>
+                              <p className="text-[10px] text-gray-500 font-mono mt-1">
+                                Start: {calculatedStart.toLocaleString()} | <span className="text-green-500/70">In: {realIn.toLocaleString()}</span> | <span className="text-red-500/70">Out: {realOut.toLocaleString()}</span>
+                              </p>
+                              
+                              {hasInput && variance !== 0 && !isLocked && (
+                                <select 
+                                  value={varianceReasons[item._id] || ''} 
+                                  onChange={(e) => setVarianceReasons({...varianceReasons, [item._id]: e.target.value})}
+                                  className="mt-2 w-full max-w-[200px] bg-dark border border-red-900/50 text-red-300 text-[10px] rounded p-1 outline-none focus:border-red-500"
+                                >
+                                  <option value="" disabled>Select Reason...</option>
+                                  <option value="Damaged/Spoiled">Damaged / Spoiled</option>
+                                  <option value="Prep Waste">Preparation Waste</option>
+                                  <option value="Previous Miscount">Previous Miscount</option>
+                                  <option value="Unaccounted Loss">Unaccounted / Suspected Theft</option>
+                                </select>
+                              )}
+                            </td>
+
+                            <td className="py-4 text-right text-gray-400 font-mono text-sm">
+                              {item.stockQty.toLocaleString()} <span className="text-[10px] text-gray-600">{item.unit}</span>
+                            </td>
+
+                            <td className="py-4 text-center align-top pt-5">
+                              <input 
+                                type="number" 
+                                placeholder={isLocked ? "LOCKED" : "Count..."} 
+                                disabled={isLocked}
+                                className={`w-24 bg-dark border rounded p-1.5 outline-none text-center text-sm font-mono transition mx-auto
+                                  ${isLocked ? 'border-gray-800 text-gray-600 bg-gray-900/20' :
+                                    hasInput && variance < 0 ? 'border-red-500 text-red-400 shadow-[0_0_10px_rgba(239,68,68,0.1)]' : 
+                                    hasInput && variance > 0 ? 'border-green-500 text-green-400' : 
+                                    hasInput && variance === 0 ? 'border-gray-600 text-gray-300' : 
+                                    'border-gray-700 text-white focus:border-accent'}`
+                                }
+                                value={hasInput ? actualInput : ''}
+                                onChange={(e) => setPhysicalCounts({...physicalCounts, [item._id]: e.target.value})}
+                              />
+                            </td>
+
+                            <td className={`py-4 text-right font-black font-mono text-sm align-top pt-6 ${variance < 0 ? 'text-red-500' : variance > 0 ? 'text-green-500' : 'text-gray-600'}`}>
+                              {hasInput ? (variance > 0 ? `+${variance}` : variance) : '-'}
+                            </td>
+
+                            <td className={`py-4 text-right font-mono text-xs pr-2 font-bold align-top pt-6 ${financialImpact < 0 ? 'text-red-400' : financialImpact > 0 ? 'text-green-400' : 'text-gray-600'}`}>
+                              {hasInput ? formattedImpact : '-'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* SUMMARY FOOTER */}
+                  {!isLocked && (
+                    <div className="absolute bottom-0 left-0 right-0 bg-surface border-t border-gray-800 p-4 flex justify-between items-center rounded-b-xl">
+                      <div className="flex gap-6">
+                        <div>
+                          <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">Audit Status</p>
+                          <p className={`text-sm font-black ${isComplete ? 'text-green-400' : 'text-yellow-500'}`}>
+                            {isComplete ? 'All Items Counted ✓' : `${itemsCounted} / ${inventory.length} Counted ⚠`}
+                          </p>
+                        </div>
+                        <div className="border-l border-gray-800 pl-6">
+                          <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">Net Variance</p>
+                          <p className="text-sm font-black text-gray-300">
+                            {netVarianceQty > 0 ? '+' : ''}{netVarianceQty} Items
+                          </p>
+                        </div>
+                        <div className="border-l border-gray-800 pl-6">
+                          <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">Total Financial Impact</p>
+                          <p className={`text-sm font-black ${netImpact < 0 ? 'text-red-500' : netImpact > 0 ? 'text-green-500' : 'text-gray-300'}`}>
+                            {netImpact < 0 ? `-₱${Math.abs(netImpact).toFixed(2)}` : `₱${netImpact.toFixed(2)}`}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <button 
+                        disabled={!isComplete}
+                        onClick={() => {
+                          const missingReasons = itemsWithVariance.filter(i => !varianceReasons[i._id]);
+                          if (missingReasons.length > 0) return alert("Please assign a reason for all items with variances before submitting.");
+                          if(window.confirm(`LOCK END OF DAY?\n\nItems with variance: ${itemsWithVariance.length}\nTotal Financial Impact: ${netImpact < 0 ? '-' : ''}₱${Math.abs(netImpact).toFixed(2)}\n\nThis will update your permanent system stock to match your physical counts. Proceed?`)) {
+                            submitPhysicalCounts();
+                          }
+                        }} 
+                        className={`px-8 py-3 rounded font-black uppercase tracking-wider text-xs shadow-lg transition
+                          ${!isComplete ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-500 shadow-red-500/20'}`}
+                      >
+                        {isComplete ? 'Submit & Lock EOD' : 'Incomplete Audit'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
           {/* RIGHT COLUMN: Procurement Panel */}
           <div className="w-full xl:w-96 bg-surface border border-gray-800 rounded-xl p-6 h-fit">
             <h3 className="text-lg font-bold text-white mb-4 border-b border-gray-800 pb-2">Procurement (Receive Inventory)</h3>
