@@ -657,6 +657,18 @@ app.post('/api/inventory/restock/:id', async (req, res) => {
     item.unitCost = newUnitCost;
     await item.save();
 
+    // --- NEW: WRITE THE RESTOCK TO THE STOCK CARD ---
+    // This is what the EOD Engine reads to calculate the "In" column!
+    await StockCard.create({
+      inventoryId: item._id,
+      itemName: item.itemName,
+      type: 'Restock',
+      reference: 'MANUAL-RESTOCK',
+      qtyChange: addedStock, // Positive because it is entering inventory
+      balanceAfter: item.stockQty,
+      remarks: 'Restocked inventory'
+    });
+
     // AUTO-JOURNAL FOR RESTOCKING
     if (totalCost > 0) {
       const entryCount = await JournalEntry.countDocuments();
