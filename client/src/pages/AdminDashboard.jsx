@@ -225,6 +225,31 @@ export default function AdminDashboard() {
     } catch (err) { console.error('Failed to fetch orders', err); }
   };
 
+  // --- REAL-TIME AUTO REFRESH ---
+  useEffect(() => {
+    // Listen for inventory/restock/EOD updates
+    socket.on('erpUpdated', () => {
+      fetchERPData(); // Refresh your live inventory
+      if (invSubTab === 'eod') {
+        fetchEODData(); // Refresh the EOD math instantly
+      }
+    });
+
+    // Listen for sales happening on the POS
+    socket.on('orderUpdated', () => {
+      fetchERPData(); 
+      if (invSubTab === 'eod') {
+        fetchEODData(); 
+      }
+    });
+
+    // Cleanup listeners when component unmounts
+    return () => {
+      socket.off('erpUpdated');
+      socket.off('orderUpdated');
+    };
+  }, [invSubTab]); // Re-run if they change sub-tabs
+
   useEffect(() => {
     if (!isAuthenticated) return;
     fetchOrders();
