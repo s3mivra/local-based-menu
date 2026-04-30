@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from '../components/QRCode.jsx';
-import jsPDF from 'jspdf';               // <-- ADD THIS
-import 'jspdf-autotable';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
-const API_URL = 'https://local-based-menu.onrender.com';
-//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+//const API_URL = 'https://local-based-menu.onrender.com';
+const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
 const socket = io(API_URL, {
@@ -320,10 +320,22 @@ export default function AdminDashboard() {
   };
   const archiveDay = async () => {
     if (!window.confirm("Are you sure you want to close the day? This will archive everything.")) return;
-    setOrders([]); 
-    try { await fetch(`${API_URL}/api/orders/archive`, { method: 'POST' }); await fetchOrders(); } catch (err) { console.error("Failed to archive:", err); }
+    
+    try { 
+      const res = await fetch(`${API_URL}/api/orders/archive`, { method: 'POST' }); 
+      const data = await res.json();
+      
+      if (data.success) {
+        alert("Register closed and day archived successfully!");
+        setOrders([]); // Instantly clears active orders from the screen
+        await fetchOrders(); // Refreshes to pull the new archive list
+      } else {
+        alert("Failed to archive day.");
+      }
+    } catch (err) { 
+      console.error("Failed to archive:", err); 
+    }
   };
-
   const handleShowQR = () => {
     const uniqueId = Math.floor(1000 + Math.random() * 9000);
     setAutoTableId(`T-${uniqueId}`);
@@ -417,148 +429,221 @@ const submitPhysicalCounts = async () => {
   // 1. Inventory & Movement History PDF
   const exportInventoryToPDF = async () => {
     if (inventory.length === 0) return alert("No inventory to export.");
-
     try {
-      // Fetch all movement history from the backend
       const res = await fetch(`${API_URL}/api/inventory/history`);
       const data = await res.json();
       const allHistory = data.success ? data.history : [];
 
-      const doc = new jsPDF();
-      doc.setFontSize(18);
-      doc.text("Master Inventory & Movement Report", 14, 15);
-      doc.setFontSize(10);
-      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
-
-      // Table A: Current Stock Levels
-      doc.setFontSize(12);
-      doc.text("Current Stock Levels", 14, 32);
-      const stockBody = inventory.map(i => [
-        i.itemName,
-        `${i.stockQty} ${i.unit}`,
-        `P${(i.unitCost || 0).toFixed(4)}`,
-        `P${(i.stockQty * (i.unitCost || 0)).toFixed(2)}`
-      ]);
+      const doc = new jsPDF('landscape');
+      doc.setFontSize(18); 
+      doc.text("Daily Inventory & Movement Report", 14, 15);
       
-      doc.autoTable({
-        startY: 36,
-        head: [['Item Name', 'System Qty', 'Unit Cost', 'Total Value']],
+      const todayStr = new Date().toLocaleDateString();
+      doc.setFontSize(10); 
+      doc.text(`Date: ${todayStr} | Generated: ${new Date().toLocaleString()}`, 14, 22);
+
+      // Filter history for TODAY to calculate daily movement
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const todayHistory = allHistory.filter(h => new Date(h.date) >= startOfDay);
+
+      const stockBody = inventory.map(item => {
+        const itemHistory = todayHistory.filter(h => h.inventoryId === item._id);
+        
+        let purchases = 0, sales = 0, adjustments = 0;
+        
+        itemHistory.forEach(h => {
+          if (h.type === 'Restock' || h.type === 'Initial') purchases += h.qtyChange;
+          else if (h.type === 'Sale') sales += Math.abs(h.qtyChange);
+          else if (h.type === 'Adjustment') adjustments += h.qtyChange; 
+        });
+        
+        // Math: Ending = Beginning + Purchases - Sales + Adjustments
+        // Therefore: Beginning = Ending - Purchases + Sales - Adjustments
+        const ending = item.stockQty;
+        const beginning = ending - purchases + sales - adjustments;
+
+        return [
+          item.itemName,
+          item.unit,
+          beginning.toString(), // Beginning Balance
+          purchases.toString(), // Purchases (In)
+          sales.toString(),     // Sales (Out)
+          adjustments > 0 ? `+${adjustments}` : adjustments.toString(), // Adjustments
+          ending.toString()     // Ending Balance
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 30,
+        head: [['Item Name', 'Unit', 'Beginning Bal.', 'Purchases (In)', 'Sales (Out)', 'Adjustments', 'Ending Bal.']],
         body: stockBody,
         theme: 'grid',
-        headStyles: { fillColor: [204, 163, 0], textColor: [0,0,0] } // Accent Color
+        headStyles: { fillColor: [204, 163, 0], textColor: [0,0,0] }
       });
 
-      // Table B: Movement History
-      const finalY = doc.lastAutoTable.finalY || 40;
-      doc.text("Recent Movement & Adjustments (Stock Card)", 14, finalY + 10);
-      
-      const historyBody = allHistory.slice(0, 100).map(h => [ // Limit to last 100 for PDF
-        new Date(h.date).toLocaleDateString(),
-        h.itemName,
-        h.type,
-        h.qtyChange > 0 ? `+${h.qtyChange}` : h.qtyChange,
-        h.balanceAfter,
-        h.remarks || h.reference
-      ]);
-
-      doc.autoTable({
-        startY: finalY + 14,
-        head: [['Date', 'Item', 'Type', 'In/Out', 'Balance', 'Remarks/Ref']],
-        body: historyBody,
-        theme: 'striped',
-        styles: { fontSize: 8 }
-      });
-
-      doc.save(`Inventory_Movement_Report_${new Date().toISOString().split('T')[0]}.pdf`);
-    } catch (err) {
-      console.error("PDF Export Failed", err);
-      alert("Failed to generate PDF.");
+      doc.save(`Inventory_Movement_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) { 
+      alert("Failed to generate PDF: " + err.message); 
     }
   };
 
-  // 2. Accounting Ledger PDF
   const exportLedgerToPDF = () => {
     if (journalEntries.length === 0) return alert("No entries to export.");
+    
     const doc = new jsPDF();
+    doc.setFontSize(18);
     doc.text("General Ledger Report", 14, 15);
-    doc.setFontSize(10);
+    doc.setFontSize(10); 
     doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
+    
+    let currentY = 30;
 
-    const rows = [];
     journalEntries.forEach(entry => {
-      const date = new Date(entry.date).toLocaleDateString();
-      entry.lines.forEach(line => {
-        rows.push([date, entry.reference, entry.description, `${line.accountCode} - ${line.accountName}`, line.debit || '', line.credit || '']);
+      // Add a new page if the entry won't fit
+      if (currentY > doc.internal.pageSize.getHeight() - 40) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      // Print Entry Headers above the table
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.text(`Ref: ${entry.reference}  |  Date: ${new Date(entry.date).toLocaleDateString()}`, 14, currentY);
+      
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Memo: ${entry.description}`, 14, currentY + 6);
+
+      const rows = entry.lines.map(line => [
+        `${line.accountCode} - ${line.accountName}`,
+        line.debit ? line.debit.toFixed(2) : '',
+        line.credit ? line.credit.toFixed(2) : ''
+      ]);
+
+      // Add the balancing Totals row at the bottom
+      rows.push([
+        'TOTAL',
+        entry.totalDebit ? entry.totalDebit.toFixed(2) : '0.00',
+        entry.totalCredit ? entry.totalCredit.toFixed(2) : '0.00'
+      ]);
+
+      autoTable(doc, {
+        startY: currentY + 10,
+        head: [['Account', 'Debit (P)', 'Credit (P)']],
+        body: rows,
+        theme: 'grid',
+        headStyles: { fillColor: [40, 40, 40] },
+        styles: { fontSize: 9 }
       });
+
+      // Move down for the next Journal Entry
+      currentY = doc.lastAutoTable.finalY + 15;
     });
 
-    doc.autoTable({
-      startY: 28,
-      head: [['Date', 'Ref', 'Description', 'Account', 'Debit (P)', 'Credit (P)']],
-      body: rows,
-      theme: 'grid',
-      headStyles: { fillColor: [30, 41, 59] },
-      styles: { fontSize: 8 }
-    });
     doc.save(`General_Ledger_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  // 3. Analytics & Forecasting PDF
   const exportAnalyticsToPDF = () => {
     if (dailyRevenueList.length === 0) return alert("No analytics data to export.");
-    const doc = new jsPDF();
-    doc.text("Daily Sales Trend & Forecasting", 14, 15);
-    
+    const doc = new jsPDF(); doc.text("Daily Sales Trend & Forecasting", 14, 15);
     const rows = dailyRevenueList.map(d => [d.date, `P${d.revenue.toFixed(2)}`]);
-    doc.autoTable({
-      startY: 25,
-      head: [['Date', 'Revenue']],
-      body: rows,
-      theme: 'striped'
-    });
+    autoTable(doc, { startY: 25, head: [['Date', 'Revenue']], body: rows, theme: 'striped' });
     doc.save(`Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  // 4. Sales History PDF Helper
   const generateSalesPDF = (ordersList, filename, title) => {
     if (ordersList.length === 0) return alert("No orders to export.");
-    const doc = new jsPDF('landscape');
-    doc.text(title, 14, 15);
-    
-    const rows = ordersList.map(order => {
-      const itemsStr = order.items.map(i => `${i.quantity}x ${i.name}`).join(', ');
-      return [
-        new Date(order.createdAt).toLocaleString(),
-        order.orderNumber,
-        order.status,
-        itemsStr,
-        `P${order.subtotal.toFixed(2)}`,
-        `P${order.vatAmount.toFixed(2)}`,
-        `P${order.discount.toFixed(2)}`,
-        `P${order.total.toFixed(2)}`
-      ];
-    });
-
-    doc.autoTable({
-      startY: 25,
-      head: [['Date', 'Order #', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total']],
-      body: rows,
-      theme: 'grid',
-      styles: { fontSize: 8 },
-      columnStyles: { 3: { cellWidth: 80 } } // Make items column wider
-    });
+    const doc = new jsPDF('landscape'); doc.text(title, 14, 15);
+    const rows = ordersList.map(order => [
+      new Date(order.createdAt).toLocaleString(), order.orderNumber, order.status,
+      order.items.map(i => `${i.quantity}x ${i.name}`).join(', '),
+      `P${order.subtotal.toFixed(2)}`, `P${order.vatAmount.toFixed(2)}`, `P${order.discount.toFixed(2)}`, `P${order.total.toFixed(2)}`
+    ]);
+    autoTable(doc, { startY: 25, head: [['Date', 'Order #', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total']], body: rows, theme: 'grid', styles: { fontSize: 8 }, columnStyles: { 3: { cellWidth: 80 } } });
     doc.save(filename);
   };
 
   const exportAllToPDF = () => {
-    const allOrdersToExport = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    generateSalesPDF(allOrdersToExport, `All_Sales_${new Date().toISOString().split('T')[0]}.pdf`, "Complete Sales History");
+    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    if (allOrders.length === 0) return alert("No orders to export.");
+
+    const doc = new jsPDF('landscape');
+    doc.setFontSize(18); doc.text("Complete Sales History", 14, 15);
+    doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
+
+    // Group orders by Date
+    const grouped = {};
+    allOrders.forEach(o => {
+      const date = new Date(o.createdAt).toLocaleDateString();
+      if (!grouped[date]) grouped[date] = { orders: [], revenue: 0, vat: 0, discount: 0 };
+      grouped[date].orders.push(o);
+      grouped[date].revenue += o.total;
+      grouped[date].vat += o.vatAmount;
+      grouped[date].discount += o.discount;
+    });
+
+    // 1. GENERATE THE MASTER SUMMARY TABLE
+    const summaryBody = Object.keys(grouped).map(date => [
+      date,
+      grouped[date].orders.length.toString(),
+      `P${grouped[date].vat.toFixed(2)}`,
+      `P${grouped[date].discount.toFixed(2)}`,
+      `P${grouped[date].revenue.toFixed(2)}`
+    ]);
+
+    autoTable(doc, {
+      startY: 28,
+      head: [['Date', 'Total Orders', 'Total VAT', 'Total Discount', 'Total Revenue']],
+      body: summaryBody,
+      theme: 'grid',
+      headStyles: { fillColor: [40, 40, 40] }
+    });
+
+    let currentY = doc.lastAutoTable.finalY + 15;
+
+    // 2. GENERATE INDIVIDUAL TABLES PER DAY
+    Object.keys(grouped).forEach(date => {
+      // Add a new page if we are too close to the bottom
+      if (currentY > doc.internal.pageSize.getHeight() - 40) {
+        doc.addPage();
+        currentY = 20;
+      }
+      
+      doc.setFontSize(14);
+      doc.setTextColor(204, 163, 0); // Accent color for Date Header
+      doc.text(`Sales for ${date}`, 14, currentY);
+      doc.setTextColor(0, 0, 0);
+
+      const dayRows = grouped[date].orders.map(order => [
+        new Date(order.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+        order.orderNumber,
+        order.items.map(i => `${i.quantity}x ${i.name}`).join(', '),
+        `P${order.subtotal.toFixed(2)}`,
+        `P${order.vatAmount.toFixed(2)}`,
+        `P${order.discount.toFixed(2)}`,
+        `P${order.total.toFixed(2)}`
+      ]);
+
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Time', 'Order #', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total']],
+        body: dayRows,
+        theme: 'striped',
+        styles: { fontSize: 8 },
+        columnStyles: { 2: { cellWidth: 90 } } // Give the items column more space
+      });
+
+      currentY = doc.lastAutoTable.finalY + 15; // Push the next table down
+    });
+
+    doc.save(`All_Sales_History_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const exportDayToPDF = (dateString, dayOrders) => { 
     generateSalesPDF(dayOrders, `Sales_${dateString.replace(/,/g, '').replace(/ /g, '_')}.pdf`, `Sales Report: ${dateString}`); 
   };
-
+  // 4. Sales History PDF Helper
   const handleAddCategory = async (e) => { e.preventDefault(); if(!newCatName.trim()) return; await fetch(`${API_URL}/api/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCatName }) }); setNewCatName(''); };
   const deleteCategory = async (id) => { if(window.confirm('Delete category?')) await fetch(`${API_URL}/api/categories/${id}`, { method: 'DELETE' }); };
 
@@ -1659,8 +1744,10 @@ const submitPhysicalCounts = async () => {
 
       {/* --- MENU SETUP (PRODUCTS/CATEGORIES) --- */}
       {activeTab === 'products' && (
-        <div className="flex flex-col lg:flex-row gap-8">
-          <div className="flex-1 bg-surface border border-gray-800 rounded-lg p-6">
+        <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-180px)]">
+          
+          {/* LEFT COLUMN: Add 'overflow-y-auto custom-scrollbar' */}
+          <div className="flex-1 bg-surface border border-gray-800 rounded-lg p-6 overflow-y-auto custom-scrollbar">
             <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Menu Items</h3>
             <div className="space-y-3">
               {products.map(p => (
@@ -1726,7 +1813,7 @@ const submitPhysicalCounts = async () => {
             </div>
           </div>
 
-          <div className="w-full lg:w-96 bg-surface border border-gray-800 rounded-lg p-6 h-fit sticky top-8">
+          <div className="w-full lg:w-96 bg-surface border border-gray-800 rounded-lg p-6 h-fit overflow-y-auto custom-scrollbar">
             <h3 className="text-xl font-bold text-accent mb-4 border-b border-gray-800 pb-2">{editingProduct ? 'Edit Product' : 'Add Product'}</h3>
             <form onSubmit={handleSaveProduct} className="space-y-4">
               <div>
