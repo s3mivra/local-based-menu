@@ -4,8 +4,8 @@ import QRCode from '../components/QRCode.jsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const API_URL = 'https://local-based-menu.onrender.com';
-//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+//const API_URL = 'https://local-based-menu.onrender.com';
+const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
 const socket = io(API_URL, {
@@ -89,6 +89,41 @@ export default function AdminDashboard() {
   const [eodLockedAt, setEodLockedAt] = useState(null);
   const [dailyMovement, setDailyMovement] = useState({});
 
+  const [discountList, setDiscountList] = useState([]);
+  const [newDiscount, setNewDiscount] = useState({ name: '', percentage: '' });
+
+  const [discounts, setDiscounts] = useState([]);
+  const [discountForm, setDiscountForm] = useState({ name: '', percentage: '' });
+
+  // --- INLINE PRICING STATES ---
+  const [editPriceId, setEditPriceId] = useState(null);
+  const [editPriceVal, setEditPriceVal] = useState('');
+
+  const handleInlinePriceUpdate = async (productId, sizeIndex) => {
+    const product = products.find(p => p._id === productId);
+    if (!product) return;
+
+    // Create a copy of the product and update the specific price
+    const updatedProduct = { ...product };
+    if (sizeIndex === null) {
+      updatedProduct.basePrice = parseFloat(editPriceVal) || 0;
+    } else {
+      updatedProduct.sizes[sizeIndex].price = parseFloat(editPriceVal) || 0;
+    }
+
+    try {
+      await fetch(`${API_URL}/api/products/${productId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedProduct)
+      });
+      setEditPriceId(null); // Close the input field
+      fetchData(); // Refresh the table instantly
+    } catch (err) {
+      console.error("Failed to update price", err);
+    }
+  };
+  
   const handleSystemLogin = async (e) => {
     e.preventDefault();
     try {
@@ -206,12 +241,21 @@ export default function AdminDashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  const fetchDiscounts = async () => {
+    const res = await fetch(`${API_URL}/api/discounts`);
+    if (res.ok) setDiscountList((await res.json()).discounts);
+  };
+  useEffect(() => { if (isAuthenticated) fetchDiscounts(); }, [isAuthenticated]);
+
   const fetchData = async () => {
     try {
       const pRes = await fetch(`${API_URL}/api/products`);
       if (pRes.ok) setProducts((await pRes.json()).products || []);
       const cRes = await fetch(`${API_URL}/api/categories`);
       if (cRes.ok) setCategories((await cRes.json()).categories || []);
+      // --- Fetch Discounts ---
+      const dRes = await fetch(`${API_URL}/api/discounts`);
+      if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
     } catch (err) { console.error('Failed to fetch menu data', err); }
   };
 
@@ -427,6 +471,8 @@ const submitPhysicalCounts = async () => {
   // ==========================================
 
   // 1. Inventory & Movement History PDF
+  const formatMoney = (val) => `P${(val || 0).toFixed(2)}`;
+
   const exportInventoryToPDF = async () => {
     if (inventory.length === 0) return alert("No inventory to export.");
     try {
@@ -544,14 +590,6 @@ const submitPhysicalCounts = async () => {
     doc.save(`General_Ledger_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  const exportAnalyticsToPDF = () => {
-    if (dailyRevenueList.length === 0) return alert("No analytics data to export.");
-    const doc = new jsPDF(); doc.text("Daily Sales Trend & Forecasting", 14, 15);
-    const rows = dailyRevenueList.map(d => [d.date, `P${d.revenue.toFixed(2)}`]);
-    autoTable(doc, { startY: 25, head: [['Date', 'Revenue']], body: rows, theme: 'striped' });
-    doc.save(`Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
-  };
-
   const generateSalesPDF = (ordersList, filename, title) => {
     if (ordersList.length === 0) return alert("No orders to export.");
     const doc = new jsPDF('landscape'); doc.text(title, 14, 15);
@@ -564,37 +602,54 @@ const submitPhysicalCounts = async () => {
     doc.save(filename);
   };
 
+
+  // 1. COMPLETE SALES HISTORY (Master Summary + Daily Breakdown)
   const exportAllToPDF = () => {
-    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     if (allOrders.length === 0) return alert("No orders to export.");
 
     const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text("Complete Sales History", 14, 15);
-    doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
+    
+    const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
 
-    // Group orders by Date
+    // --- GROUP DATA FOR MASTER SUMMARY ---
     const grouped = {};
     allOrders.forEach(o => {
       const date = new Date(o.createdAt).toLocaleDateString();
-      if (!grouped[date]) grouped[date] = { orders: [], revenue: 0, vat: 0, discount: 0 };
+      if (!grouped[date]) grouped[date] = { orders: [], ordersCount: 0, gross: 0, vatable: 0, vatExempt: 0, vat: 0, discount: 0, netSales: 0 };
+      
       grouped[date].orders.push(o);
-      grouped[date].revenue += o.total;
-      grouped[date].vat += o.vatAmount;
-      grouped[date].discount += o.discount;
+      grouped[date].ordersCount++;
+      grouped[date].gross += o.subtotal;
+      
+      if (o.isVatExempt) {
+        grouped[date].vatExempt += (o.subtotal / 1.12);
+      } else {
+        grouped[date].vatable += (o.total / 1.12);
+      }
+      
+      grouped[date].vat += o.vatAmount || 0;
+      grouped[date].discount += o.discount || 0;
+      grouped[date].netSales += o.total;
     });
 
-    // 1. GENERATE THE MASTER SUMMARY TABLE
+    // --- A. MASTER SUMMARY TABLE ---
     const summaryBody = Object.keys(grouped).map(date => [
       date,
-      grouped[date].orders.length.toString(),
-      `P${grouped[date].vat.toFixed(2)}`,
-      `P${grouped[date].discount.toFixed(2)}`,
-      `P${grouped[date].revenue.toFixed(2)}`
+      grouped[date].ordersCount.toString(),
+      formatMoney(grouped[date].gross),
+      formatMoney(grouped[date].vatable),
+      formatMoney(grouped[date].vatExempt),
+      formatMoney(grouped[date].vat),
+      formatMoney(grouped[date].discount),
+      formatMoney(grouped[date].netSales)
     ]);
 
     autoTable(doc, {
       startY: 28,
-      head: [['Date', 'Total Orders', 'Total VAT', 'Total Discount', 'Total Revenue']],
+      head: [['Date', 'Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD/SC)', 'VAT (12%)', 'Discounts', 'Net Sales']],
       body: summaryBody,
       theme: 'grid',
       headStyles: { fillColor: [40, 40, 40] }
@@ -602,47 +657,237 @@ const submitPhysicalCounts = async () => {
 
     let currentY = doc.lastAutoTable.finalY + 15;
 
-    // 2. GENERATE INDIVIDUAL TABLES PER DAY
+    // --- B. INDIVIDUAL DAILY BREAKDOWN TABLES ---
     Object.keys(grouped).forEach(date => {
-      // Add a new page if we are too close to the bottom
       if (currentY > doc.internal.pageSize.getHeight() - 40) {
         doc.addPage();
         currentY = 20;
       }
       
       doc.setFontSize(14);
-      doc.setTextColor(204, 163, 0); // Accent color for Date Header
-      doc.text(`Sales for ${date}`, 14, currentY);
+      doc.setTextColor(204, 163, 0); 
+      doc.text(`Sales Breakdown: ${date}`, 14, currentY);
       doc.setTextColor(0, 0, 0);
 
-      const dayRows = grouped[date].orders.map(order => [
-        new Date(order.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        order.orderNumber,
-        order.items.map(i => `${i.quantity}x ${i.name}`).join(', '),
-        `P${order.subtotal.toFixed(2)}`,
-        `P${order.vatAmount.toFixed(2)}`,
-        `P${order.discount.toFixed(2)}`,
-        `P${order.total.toFixed(2)}`
-      ]);
+      const dayRows = [];
+      let dayTotals = { cash: 0, bank: 0, ewallet: 0, grand: 0 };
+
+      grouped[date].orders.forEach(order => {
+        const time = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        const isCash = order.paymentMethod === 'Cash' || !order.paymentMethod;
+        const isBank = order.paymentMethod === 'Bank Transfer';
+        const isEwallet = order.paymentMethod === 'E-Wallet';
+
+        dayTotals.cash += isCash ? order.total : 0;
+        dayTotals.bank += isBank ? order.total : 0;
+        dayTotals.ewallet += isEwallet ? order.total : 0;
+        dayTotals.grand += order.total;
+
+        // Determine Discount Type
+        let discType = '-';
+        if (order.discountPercent > 0) {
+          discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
+        }
+
+        // Spread out the Line Items
+        order.items.forEach((item, index) => {
+          const isLastItem = index === order.items.length - 1;
+          dayRows.push([
+            time,
+            order.orderNumber,
+            `${item.quantity}x ${item.name}`,
+            formatMoney(item.price * item.quantity),
+            isLastItem ? formatMoney(order.vatAmount) : '-',
+            isLastItem ? formatMoney(order.discount) : '-', 
+            isLastItem ? discType : '-',
+            isLastItem && isCash ? formatMoney(order.total) : '-',
+            isLastItem && isBank ? formatMoney(order.total) : '-',
+            isLastItem && isEwallet ? formatMoney(order.total) : '-',
+            isLastItem ? formatMoney(order.total) : '-'
+          ]);
+        });
+      });
+
+      // Daily Footer (Padded with empty strings to align with payment columns)
+      dayRows.push(['', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
 
       autoTable(doc, {
         startY: currentY + 5,
-        head: [['Time', 'Order #', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total']],
+        head: [['Time', 'Order #', 'Item', 'Gross (VAT Inc)', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
         body: dayRows,
         theme: 'striped',
-        styles: { fontSize: 8 },
-        columnStyles: { 2: { cellWidth: 90 } } // Give the items column more space
+        styles: { fontSize: 7.5 }, // Slightly smaller font to fit all 11 columns comfortably
+        columnStyles: { 2: { cellWidth: 55 } }, // Control the item name width
+        willDrawCell: function(data) {
+          if (data.row.index === dayRows.length - 1) {
+            doc.setFont(undefined, 'bold');
+            doc.setTextColor(204, 163, 0); 
+          }
+        }
       });
 
-      currentY = doc.lastAutoTable.finalY + 15; // Push the next table down
+      currentY = doc.lastAutoTable.finalY + 15; 
     });
 
-    doc.save(`All_Sales_History_${new Date().toISOString().split('T')[0]}.pdf`);
+    doc.save(`Complete_Sales_History_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
+  // 2. EXPORT SPECIFIC DAY (Uses the exact same Line-Item format)
   const exportDayToPDF = (dateString, dayOrders) => { 
-    generateSalesPDF(dayOrders, `Sales_${dateString.replace(/,/g, '').replace(/ /g, '_')}.pdf`, `Sales Report: ${dateString}`); 
+    if (dayOrders.length === 0) return alert("No orders to export.");
+    const doc = new jsPDF('landscape'); 
+    doc.setFontSize(18); doc.text(`Sales Report: ${dateString}`, 14, 15);
+    
+    const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
+
+    const dayRows = [];
+    let dayTotals = { cash: 0, bank: 0, ewallet: 0, grand: 0 };
+
+    dayOrders.forEach(order => {
+      const time = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const isCash = order.paymentMethod === 'Cash' || !order.paymentMethod;
+      const isBank = order.paymentMethod === 'Bank Transfer';
+      const isEwallet = order.paymentMethod === 'E-Wallet';
+
+      dayTotals.cash += isCash ? order.total : 0;
+      dayTotals.bank += isBank ? order.total : 0;
+      dayTotals.ewallet += isEwallet ? order.total : 0;
+      dayTotals.grand += order.total;
+
+      // Determine Discount Type
+      let discType = '-';
+      if (order.discountPercent > 0) {
+        discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
+      }
+
+      order.items.forEach((item, index) => {
+        const isLastItem = index === order.items.length - 1;
+        dayRows.push([
+          time,
+          order.orderNumber,
+          `${item.quantity}x ${item.name}`,
+          formatMoney(item.price * item.quantity),
+          isLastItem ? formatMoney(order.vatAmount) : '-',
+          isLastItem ? formatMoney(order.discount) : '-', 
+          isLastItem ? discType : '-',
+          isLastItem && isCash ? formatMoney(order.total) : '-',
+          isLastItem && isBank ? formatMoney(order.total) : '-',
+          isLastItem && isEwallet ? formatMoney(order.total) : '-',
+          isLastItem ? formatMoney(order.total) : '-'
+        ]);
+      });
+    });
+
+    dayRows.push(['', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
+
+    autoTable(doc, {
+      startY: 28,
+      head: [['Time', 'Order #', 'Item', 'Gross (VAT Inc)', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
+      body: dayRows,
+      theme: 'striped',
+      styles: { fontSize: 7.5 },
+      columnStyles: { 2: { cellWidth: 55 } },
+      willDrawCell: function(data) {
+        if (data.row.index === dayRows.length - 1) {
+          doc.setFont(undefined, 'bold');
+          doc.setTextColor(204, 163, 0); 
+        }
+      }
+    });
+
+    doc.save(`Sales_${dateString.replace(/,/g, '').replace(/ /g, '_')}.pdf`);
   };
+
+  // 3. DAILY SALES SUMMARY (Analytics Trend Export)
+  const exportAnalyticsToPDF = () => {
+    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (allOrders.length === 0) return alert("No analytics data to export.");
+    
+    const doc = new jsPDF('landscape'); 
+    doc.setFontSize(18); doc.text("Daily Sales Trend & Summary", 14, 15);
+    
+    const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
+
+    const grouped = {};
+    allOrders.forEach(o => {
+      const date = new Date(o.createdAt).toLocaleDateString();
+      if (!grouped[date]) grouped[date] = { ordersCount: 0, gross: 0, vatable: 0, vatExempt: 0, vat: 0, discount: 0, netSales: 0 };
+      
+      grouped[date].ordersCount++;
+      grouped[date].gross += o.subtotal;
+      
+      if (o.isVatExempt) {
+        grouped[date].vatExempt += (o.subtotal / 1.12);
+      } else {
+        grouped[date].vatable += (o.total / 1.12);
+      }
+      
+      grouped[date].vat += o.vatAmount || 0;
+      grouped[date].discount += o.discount || 0;
+      grouped[date].netSales += o.total;
+    });
+
+    const summaryBody = Object.keys(grouped).map(date => [
+      date,
+      grouped[date].ordersCount.toString(),
+      formatMoney(grouped[date].gross),
+      formatMoney(grouped[date].vatable),
+      formatMoney(grouped[date].vatExempt),
+      formatMoney(grouped[date].vat),
+      formatMoney(grouped[date].discount),
+      formatMoney(grouped[date].netSales)
+    ]);
+
+    autoTable(doc, {
+      startY: 28,
+      head: [['Date', 'Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD/SC)', 'VAT (12%)', 'Discounts', 'Net Sales']],
+      body: summaryBody,
+      theme: 'grid',
+      headStyles: { fillColor: [40, 40, 40] }
+    });
+
+    doc.save(`Daily_Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+  const exportMonthlyToPDF = () => {
+    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (allOrders.length === 0) return alert("No orders to export.");
+
+    const doc = new jsPDF();
+    doc.setFontSize(18); doc.text("Monthly Sales Summary", 14, 15);
+
+    const groupedByMonth = {};
+    allOrders.forEach(o => {
+      const month = new Date(o.createdAt).toLocaleString('default', { month: 'long', year: 'numeric' });
+      if (!groupedByMonth[month]) groupedByMonth[month] = { cash: 0, bank: 0, ewallet: 0, total: 0 };
+      
+      groupedByMonth[month].cash += (o.paymentMethod === 'Cash' || !o.paymentMethod) ? o.total : 0;
+      groupedByMonth[month].bank += (o.paymentMethod === 'Bank Transfer') ? o.total : 0;
+      groupedByMonth[month].ewallet += (o.paymentMethod === 'E-Wallet') ? o.total : 0;
+      groupedByMonth[month].total += o.total;
+    });
+
+    const rows = Object.keys(groupedByMonth).map(month => [
+      month,
+      `P${groupedByMonth[month].cash.toFixed(2)}`,
+      `P${groupedByMonth[month].bank.toFixed(2)}`,
+      `P${groupedByMonth[month].ewallet.toFixed(2)}`,
+      `P${groupedByMonth[month].total.toFixed(2)}`
+    ]);
+
+    autoTable(doc, {
+      startY: 25,
+      head: [['Month', 'Cash', 'Bank', 'E-Wallet', 'Total Revenue']],
+      body: rows,
+      theme: 'grid',
+      headStyles: { fillColor: [40, 40, 40] }
+    });
+
+    doc.save(`Monthly_Summary_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
   // 4. Sales History PDF Helper
   const handleAddCategory = async (e) => { e.preventDefault(); if(!newCatName.trim()) return; await fetch(`${API_URL}/api/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCatName }) }); setNewCatName(''); };
   const deleteCategory = async (id) => { if(window.confirm('Delete category?')) await fetch(`${API_URL}/api/categories/${id}`, { method: 'DELETE' }); };
@@ -873,13 +1118,14 @@ const submitPhysicalCounts = async () => {
               <>
                 <button onClick={() => setActiveTab('orders')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'orders' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Active Orders</button>
                 <button onClick={() => setActiveTab('inventory')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'inventory' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Inventory</button>
-                <button onClick={() => setActiveTab('products')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'products' ? 'text-white' : 'text-gray-600 hover:text-gray-400'}`}>Menu Setup</button>
+                <button onClick={() => setActiveTab('products')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'products' ? 'text-white' : 'text-gray-600 hover:text-gray-300'}`}>Menu Setup</button>
               </>
             ) : (
               <>
                 <button onClick={() => setActiveTab('history')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'history' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>History</button>
                 <button onClick={() => setActiveTab('analytics')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'analytics' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Analytics</button>
                 <button onClick={() => setActiveTab('ledger')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'ledger' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Accounting</button>
+                <button onClick={() => setActiveTab('pricing')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'pricing' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Pricing & Discounts</button>
               </>
             )}
           </div>
@@ -1151,10 +1397,28 @@ const submitPhysicalCounts = async () => {
                     <div className="flex items-center gap-2">
                       <span>Discount ({order.discountPercent || 0}%):</span>
                       {(order.status === 'Pending' || order.status === 'Preparing') && (
-                        <div className="flex gap-1">
-                          <input type="number" placeholder="%" className="w-10 bg-dark border border-gray-600 rounded px-1 text-center text-white outline-none" value={discountInputs[order._id] !== undefined ? discountInputs[order._id] : (order.discountPercent || '')} onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} />
-                          <button onClick={() => applyDiscount(order._id)} className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-1.5 rounded font-bold transition">✓</button>
-                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-900/50 text-red-400 px-1.5 rounded font-bold">✕</button>}
+                        <div className="flex gap-1 items-center">
+                          <select 
+                            className="w-32 bg-dark border border-gray-600 rounded px-1 text-[10px] text-white outline-none h-6"
+                            value={discountInputs[order._id] || ''}
+                            onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
+                          >
+                            <option value="">Select...</option>
+                            <option value="custom">Manual %</option>
+                            {discounts.map(d => <option key={d._id} value={d.percentage}>{d.name} ({d.percentage}%)</option>)}
+                          </select>
+                          
+                          {discountInputs[order._id] === 'custom' && (
+                            <input 
+                              type="number" 
+                              placeholder="%" 
+                              className="w-12 bg-dark border border-gray-600 rounded px-1 text-center text-white outline-none h-6" 
+                              onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} 
+                            />
+                          )}
+                          
+                          <button onClick={() => applyDiscount(order._id)} className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-1.5 rounded font-bold transition h-6">✓</button>
+                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-900/50 text-red-400 px-1.5 rounded font-bold h-6">✕</button>}
                         </div>
                       )}
                     </div>
@@ -1742,6 +2006,133 @@ const submitPhysicalCounts = async () => {
         </div>
       )}
 
+      {/* --- PRICING & DISCOUNTS TAB --- */}
+      {activeTab === 'pricing' && (
+        <div className="flex flex-col xl:flex-row gap-8 h-[calc(100vh-180px)]">
+          
+          {/* LEFT COLUMN: Read-Only Pricing Table */}
+          <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6 overflow-y-auto custom-scrollbar h-full">
+            <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Product Pricing Masterlist</h3>
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-500 border-b border-gray-800">
+                  <th className="pb-3">Product Name</th>
+                  <th className="pb-3">Category</th>
+                  <th className="pb-3 text-right">Size / Option</th>
+                  <th className="pb-3 text-right">Selling Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.length === 0 ? (
+                  <tr><td colSpan="4" className="py-4 text-center text-gray-500">No products found.</td></tr>
+                ) : products.flatMap(p => {
+                  // We now track the exact productId and sizeIndex so the backend knows what to update
+                  const rows = [{ id: `${p._id}-base`, productId: p._id, sizeIndex: null, name: p.name, cat: p.category, size: p.baseSize || 'Regular', price: p.basePrice || p.price || 0 }];
+                  if (p.sizes) {
+                    p.sizes.forEach((s, idx) => {
+                      rows.push({ id: `${p._id}-size-${idx}`, productId: p._id, sizeIndex: idx, name: '', cat: '', size: s.name, price: s.price });
+                    });
+                  }
+                  return rows;
+                }).map((row) => (
+                  <tr key={row.id} className={`border-gray-800/50 hover:bg-dark/30 transition ${row.name !== '' ? 'border-t' : ''}`}>
+                    <td className={`py-2 font-bold ${row.name !== '' ? 'text-gray-200 pt-4' : ''}`}>{row.name}</td>
+                    <td className={`py-2 text-xs text-gray-500 ${row.name !== '' ? 'pt-4' : ''}`}>{row.cat}</td>
+                    <td className={`py-2 text-right text-gray-400 ${row.name !== '' ? 'pt-4' : ''}`}>{row.size}</td>
+                    
+                    {/* --- INLINE EDITING UI --- */}
+                    <td className={`py-2 text-right font-mono font-bold text-accent ${row.name !== '' ? 'pt-4' : ''}`}>
+                      {editPriceId === row.id ? (
+                        <div className="flex justify-end items-center gap-2">
+                          <input 
+                            type="number" 
+                            step="0.01" 
+                            className="w-20 bg-dark border border-accent rounded px-2 py-1 text-white outline-none text-right"
+                            value={editPriceVal}
+                            onChange={(e) => setEditPriceVal(e.target.value)}
+                            autoFocus
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleInlinePriceUpdate(row.productId, row.sizeIndex); }}
+                          />
+                          <button onClick={() => handleInlinePriceUpdate(row.productId, row.sizeIndex)} className="text-green-400 hover:text-green-300">✓</button>
+                          <button onClick={() => setEditPriceId(null)} className="text-red-400 hover:text-red-300">✕</button>
+                        </div>
+                      ) : (
+                        <div 
+                          className="cursor-pointer hover:bg-white/10 px-2 py-1 rounded inline-flex items-center gap-2 transition group"
+                          onClick={() => { setEditPriceId(row.id); setEditPriceVal(row.price); }}
+                        >
+                          P{Number(row.price).toFixed(2)}
+                          <span className="text-[10px] text-gray-500 group-hover:text-accent">✎</span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* RIGHT COLUMN: Discount CRUD */}
+          <div className="w-full xl:w-96 bg-surface border border-gray-800 rounded-xl p-6 h-full overflow-y-auto custom-scrollbar flex flex-col">
+            <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Discount Rules</h3>
+            
+            <div className="flex-1 overflow-y-auto mb-6 pr-2 scrollbar-thin scrollbar-thumb-gray-700">
+              <div className="space-y-3">
+                {discounts.length === 0 ? (
+                  <p className="text-sm text-gray-500 italic text-center py-4">No custom discounts set.</p>
+                ) : discounts.map(d => (
+                  <div key={d._id} className="bg-dark p-3 rounded-lg border border-gray-700 flex justify-between items-center">
+                    <div>
+                      <p className="font-bold text-gray-200 text-sm">{d.name}</p>
+                      <p className="text-xs text-accent font-mono">{d.percentage}% OFF</p>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        if (window.confirm(`Delete ${d.name} discount?`)) {
+                          await fetch(`${API_URL}/api/discounts/${d._id}`, { method: 'DELETE' });
+                          fetchData(); // Refresh the list
+                        }
+                      }} 
+                      className="text-red-500 hover:text-red-400 font-bold px-2 py-1 bg-red-900/20 rounded"
+                    >
+                      Del
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="border-t border-gray-800 pt-4 mt-auto">
+              <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Add New Discount</h4>
+              <form 
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!discountForm.name || !discountForm.percentage) return;
+                  await fetch(`${API_URL}/api/discounts`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: discountForm.name, percentage: Number(discountForm.percentage) })
+                  });
+                  setDiscountForm({ name: '', percentage: '' });
+                  fetchData(); // Refresh the list
+                }} 
+                className="space-y-3"
+              >
+                <div>
+                  <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Discount Name</label>
+                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Percentage (%)</label>
+                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+                </div>
+                <button type="submit" className="w-full bg-accent text-dark font-black py-3 rounded hover:bg-yellow-500 shadow-lg shadow-accent/20 transition uppercase tracking-wider text-xs">
+                  Save Rule
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
       {/* --- MENU SETUP (PRODUCTS/CATEGORIES) --- */}
       {activeTab === 'products' && (
         <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-180px)]">
@@ -1813,149 +2204,154 @@ const submitPhysicalCounts = async () => {
             </div>
           </div>
 
-          <div className="w-full lg:w-96 bg-surface border border-gray-800 rounded-lg p-6 h-fit overflow-y-auto custom-scrollbar">
-            <h3 className="text-xl font-bold text-accent mb-4 border-b border-gray-800 pb-2">{editingProduct ? 'Edit Product' : 'Add Product'}</h3>
-            <form onSubmit={handleSaveProduct} className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Product Image (WebP Auto-Convert)</label>
-                <div className="flex items-center gap-4">
-                  {formData.image ? (
-                    <img src={formData.image} alt="Preview" className="w-16 h-16 object-cover rounded border border-accent" />
-                  ) : (
-                    <div className="w-16 h-16 bg-dark border border-gray-700 rounded flex items-center justify-center text-xs text-gray-500">None</div>
-                  )}
-                  <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-white hover:file:bg-gray-700 cursor-pointer" />
-                </div>
-              </div>
-              <div><label className="block text-sm text-gray-400 mb-1">Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" /></div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Category</label>
-                <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent">
-                  <option value="" disabled>Select Category...</option>
-                  {categories.map(c => <option key={c._id} value={c.name}>{c.name}</option>)}
-                </select>
-              </div>
-              <div><label className="block text-sm text-gray-400 mb-1">Description</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent h-20 placeholder-gray-600" /></div>
-              
-              <div className="bg-dark p-4 rounded border border-gray-700 mt-6">
-                <label className="block text-sm font-bold text-white mb-2 uppercase tracking-wider">Base Size / Standard Recipe</label>
-                <div className="flex gap-2 mb-1">
-                  <input type="text" placeholder="Size Name (e.g. Regular)" value={formData.baseSize || ''} onChange={e => setFormData({...formData, baseSize: e.target.value})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-white outline-none focus:border-accent" />
-                  <input type="number" step="0.01" placeholder="Selling Price" value={formData.basePrice} onChange={e => setFormData({...formData, basePrice: parseFloat(e.target.value) || 0})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-white outline-none focus:border-accent" />
-                </div>
-                {(() => {
-                  const baseCost = calcRecipeCost(formData.baseRecipe);
-                  const basePriceVal = parseFloat(formData.basePrice) || 0;
-                  const suggestedBasePrice = baseCost > 0 ? (baseCost / 0.7).toFixed(2) : '0.00';
-                  const baseMargin = basePriceVal > 0 ? (((basePriceVal - baseCost) / basePriceVal) * 100).toFixed(1) : '0.0';
-                  return baseCost > 0 ? (
-                    <div className="flex justify-between text-[10px] px-1 mb-3">
-                      <span className={parseFloat(baseMargin) >= 30 ? "text-green-400 font-bold" : "text-yellow-500 font-bold"}>Margin: {baseMargin}%</span>
-                      <button type="button" onClick={() => setFormData({...formData, basePrice: parseFloat(suggestedBasePrice)})} className="text-gray-400 hover:text-accent transition">Set 30% Margin (P{suggestedBasePrice})</button>
-                    </div>
-                  ) : <div className="mb-3"></div>;
-                })()}
-                
-                <div className="bg-black/30 p-3 rounded mb-2">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs text-gray-400 font-bold">Base Materials (BOM)</span>
-                    <span className="text-xs text-accent font-bold">Cost: P{calcRecipeCost(formData.baseRecipe).toFixed(2)}</span>
+          {/* RIGHT COLUMN: Add Product Form (Scroll Fix Applied) */}
+          <div className="w-full lg:w-96 bg-surface border border-gray-800 rounded-lg p-6 flex flex-col h-full overflow-hidden">
+            <h3 className="text-xl font-bold text-accent mb-4 border-b border-gray-800 pb-2 shrink-0">
+              {editingProduct ? 'Edit Product' : 'Add Product'}
+            </h3>
+            
+            {/* The scrollable area is now restricted to this inner div */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
+              <form onSubmit={handleSaveProduct} className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">Product Image (WebP Auto-Convert)</label>
+                  <div className="flex items-center gap-4">
+                    {formData.image ? (
+                      <img src={formData.image} alt="Preview" className="w-16 h-16 object-cover rounded border border-accent" />
+                    ) : (
+                      <div className="w-16 h-16 bg-dark border border-gray-700 rounded flex items-center justify-center text-xs text-gray-500">None</div>
+                    )}
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-white hover:file:bg-gray-700 cursor-pointer" />
                   </div>
-                  {(formData.baseRecipe || []).map((mat, i) => (
-                    <div key={i} className="flex items-center gap-2 mb-2 text-sm">
-                      <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
-                      <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, null)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-white" />
-                      <span className="text-gray-500 w-8">{mat.unit}</span>
-                      <button type="button" onClick={() => removeMaterial(i, null)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
+                </div>
+                <div><label className="block text-sm text-gray-400 mb-1">Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" /></div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Category</label>
+                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent">
+                    <option value="" disabled>Select Category...</option>
+                    {categories.map(c => <option key={c._id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div><label className="block text-sm text-gray-400 mb-1">Description</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent h-20 placeholder-gray-600" /></div>
+                
+                <div className="bg-dark p-4 rounded border border-gray-700 mt-6">
+                  <label className="block text-sm font-bold text-white mb-2 uppercase tracking-wider">Base Size / Standard Recipe</label>
+                  <div className="flex gap-2 mb-1">
+                    <input type="text" placeholder="Size Name (e.g. Regular)" value={formData.baseSize || ''} onChange={e => setFormData({...formData, baseSize: e.target.value})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-white outline-none focus:border-accent" />
+                    <input type="number" step="0.01" placeholder="Selling Price" value={formData.basePrice} onChange={e => setFormData({...formData, basePrice: parseFloat(e.target.value) || 0})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-white outline-none focus:border-accent" />
+                  </div>
+                  {(() => {
+                    const baseCost = calcRecipeCost(formData.baseRecipe);
+                    const basePriceVal = parseFloat(formData.basePrice) || 0;
+                    const suggestedBasePrice = baseCost > 0 ? (baseCost / 0.7).toFixed(2) : '0.00';
+                    const baseMargin = basePriceVal > 0 ? (((basePriceVal - baseCost) / basePriceVal) * 100).toFixed(1) : '0.0';
+                    return baseCost > 0 ? (
+                      <div className="flex justify-between text-[10px] px-1 mb-3">
+                        <span className={parseFloat(baseMargin) >= 30 ? "text-green-400 font-bold" : "text-yellow-500 font-bold"}>Margin: {baseMargin}%</span>
+                        <button type="button" onClick={() => setFormData({...formData, basePrice: parseFloat(suggestedBasePrice)})} className="text-gray-400 hover:text-accent transition">Set 30% Margin (P{suggestedBasePrice})</button>
+                      </div>
+                    ) : <div className="mb-3"></div>;
+                  })()}
+                  
+                  <div className="bg-black/30 p-3 rounded mb-2">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-xs text-gray-400 font-bold">Base Materials (BOM)</span>
+                      <span className="text-xs text-accent font-bold">Cost: P{calcRecipeCost(formData.baseRecipe).toFixed(2)}</span>
+                    </div>
+                    {(formData.baseRecipe || []).map((mat, i) => (
+                      <div key={i} className="flex items-center gap-2 mb-2 text-sm">
+                        <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
+                        <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, null)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-white" />
+                        <span className="text-gray-500 w-8">{mat.unit}</span>
+                        <button type="button" onClick={() => removeMaterial(i, null)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
+                      </div>
+                    ))}
+                    <div className="mt-3">
+                      <div className="text-[10px] text-gray-500 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
+                      <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                        {inventory.length === 0 ? (
+                          <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
+                        ) : (
+                          inventory.map(inv => (
+                            <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, null)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
+                              <span className="truncate pr-2">+ {inv.itemName}</span>
+                              <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-800 pt-4 mt-2">
+                  <div className="flex justify-between items-center mb-4">
+                    <label className="text-sm font-bold text-white uppercase tracking-wider">Extra Sizes (Small, Large)</label>
+                    <button type="button" onClick={addSize} className="text-xs bg-dark px-3 py-1.5 rounded font-bold text-accent border border-accent hover:bg-accent hover:text-dark transition">+ Add Size</button>
+                  </div>
+                  {(formData.sizes || []).map((size, idx) => (
+                    <div key={idx} className="bg-dark p-4 rounded border border-gray-700 mb-4">
+                      <div className="flex gap-2 mb-1">
+                        <input type="text" placeholder="Size Name" value={size.name} onChange={e => updateSize(idx, 'name', e.target.value)} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white" required />
+                        <input type="number" step="0.01" placeholder="Selling Price" value={size.price} onChange={e => updateSize(idx, 'price', e.target.value)} className="w-1/3 bg-dark border border-gray-600 rounded p-2 text-sm text-white" required />
+                        <button type="button" onClick={() => removeSize(idx)} className="text-red-500 hover:text-red-400 font-bold ml-auto px-2">✕</button>
+                      </div>
+                      {(() => {
+                        const sizeCost = calcRecipeCost(size.recipe);
+                        const sizePriceVal = parseFloat(size.price) || 0;
+                        const suggestedSizePrice = sizeCost > 0 ? (sizeCost / 0.7).toFixed(2) : '0.00';
+                        const sizeMargin = sizePriceVal > 0 ? (((sizePriceVal - sizeCost) / sizePriceVal) * 100).toFixed(1) : '0.0';
+                        return sizeCost > 0 ? (
+                          <div className="flex justify-between text-[10px] px-1 mb-3">
+                            <span className={parseFloat(sizeMargin) >= 30 ? "text-green-400 font-bold" : "text-yellow-500 font-bold"}>Margin: {sizeMargin}%</span>
+                            <button type="button" onClick={() => updateSize(idx, 'price', parseFloat(suggestedSizePrice))} className="text-gray-400 hover:text-accent transition">Set 30% Margin (P{suggestedSizePrice})</button>
+                          </div>
+                        ) : <div className="mb-3"></div>;
+                      })()}
+                      <div className="bg-black/30 p-3 rounded">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs text-gray-400 font-bold">{size.name || 'New Size'} Materials</span>
+                          <span className="text-xs text-accent font-bold">Cost: P{calcRecipeCost(size.recipe).toFixed(2)}</span>
+                        </div>
+                        {(size.recipe || []).map((mat, i) => (
+                          <div key={i} className="flex items-center gap-2 mb-2 text-sm">
+                            <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
+                            <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, idx)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-white" />
+                            <span className="text-gray-500 w-8">{mat.unit}</span>
+                            <button type="button" onClick={() => removeMaterial(i, idx)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
+                          </div>
+                        ))}
+                        <div className="mt-3">
+                          <div className="text-[10px] text-gray-500 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
+                          <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                            {inventory.length === 0 ? (
+                              <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
+                            ) : (
+                              inventory.map(inv => (
+                                <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, idx)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
+                                  <span className="truncate pr-2">+ {inv.itemName}</span>
+                                  <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   ))}
-                  {/* --- NEW SCROLLABLE MATERIAL PICKER --- */}
-                  <div className="mt-3">
-                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
-                    <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-                      {inventory.length === 0 ? (
-                        <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
-                      ) : (
-                        inventory.map(inv => (
-                          <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, null)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
-                            <span className="truncate pr-2">+ {inv.itemName}</span>
-                            <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  </div>
                 </div>
-              </div>
-
-              <div className="border-t border-gray-800 pt-4 mt-2">
-                <div className="flex justify-between items-center mb-4">
-                  <label className="text-sm font-bold text-white uppercase tracking-wider">Extra Sizes (Small, Large)</label>
-                  <button type="button" onClick={addSize} className="text-xs bg-dark px-3 py-1.5 rounded font-bold text-accent border border-accent hover:bg-accent hover:text-dark transition">+ Add Size</button>
-                </div>
-                {(formData.sizes || []).map((size, idx) => (
-                  <div key={idx} className="bg-dark p-4 rounded border border-gray-700 mb-4">
-                    <div className="flex gap-2 mb-1">
-                      <input type="text" placeholder="Size Name" value={size.name} onChange={e => updateSize(idx, 'name', e.target.value)} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white" required />
-                      <input type="number" step="0.01" placeholder="Selling Price" value={size.price} onChange={e => updateSize(idx, 'price', e.target.value)} className="w-1/3 bg-dark border border-gray-600 rounded p-2 text-sm text-white" required />
-                      <button type="button" onClick={() => removeSize(idx)} className="text-red-500 hover:text-red-400 font-bold ml-auto px-2">✕</button>
-                    </div>
-                    {(() => {
-                      const sizeCost = calcRecipeCost(size.recipe);
-                      const sizePriceVal = parseFloat(size.price) || 0;
-                      const suggestedSizePrice = sizeCost > 0 ? (sizeCost / 0.7).toFixed(2) : '0.00';
-                      const sizeMargin = sizePriceVal > 0 ? (((sizePriceVal - sizeCost) / sizePriceVal) * 100).toFixed(1) : '0.0';
-                      return sizeCost > 0 ? (
-                        <div className="flex justify-between text-[10px] px-1 mb-3">
-                          <span className={parseFloat(sizeMargin) >= 30 ? "text-green-400 font-bold" : "text-yellow-500 font-bold"}>Margin: {sizeMargin}%</span>
-                          <button type="button" onClick={() => updateSize(idx, 'price', parseFloat(suggestedSizePrice))} className="text-gray-400 hover:text-accent transition">Set 30% Margin (P{suggestedSizePrice})</button>
-                        </div>
-                      ) : <div className="mb-3"></div>;
-                    })()}
-                    <div className="bg-black/30 p-3 rounded">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs text-gray-400 font-bold">{size.name || 'New Size'} Materials</span>
-                        <span className="text-xs text-accent font-bold">Cost: P{calcRecipeCost(size.recipe).toFixed(2)}</span>
-                      </div>
-                      {(size.recipe || []).map((mat, i) => (
-                        <div key={i} className="flex items-center gap-2 mb-2 text-sm">
-                          <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
-                          <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, idx)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-white" />
-                          <span className="text-gray-500 w-8">{mat.unit}</span>
-                          <button type="button" onClick={() => removeMaterial(i, idx)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
-                        </div>
-                      ))}
-                      {/* --- NEW SCROLLABLE MATERIAL PICKER --- */}
-                      <div className="mt-3">
-                        <div className="text-[10px] text-gray-500 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
-                        <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-                          {inventory.length === 0 ? (
-                            <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
-                          ) : (
-                            inventory.map(inv => (
-                              <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, idx)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
-                                <span className="truncate pr-2">+ {inv.itemName}</span>
-                                <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2 mt-6">
-                <button type="submit" className="flex-1 bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 shadow-lg shadow-accent/20 transition uppercase tracking-wider">
-                  {editingProduct ? 'Update Product' : 'Save Product'}
-                </button>
-                {editingProduct && (
-                  <button type="button" onClick={() => deleteProduct(editingProduct._id)} className="bg-red-900/20 border border-red-900 text-red-500 font-black py-4 px-6 rounded-lg hover:bg-red-900 hover:text-white transition uppercase tracking-wider">
-                    Delete
+                <div className="flex gap-2 mt-6">
+                  <button type="submit" className="flex-1 bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 shadow-lg shadow-accent/20 transition uppercase tracking-wider">
+                    {editingProduct ? 'Update Product' : 'Save Product'}
                   </button>
-                )}
-              </div>
-            </form>
+                  {editingProduct && (
+                    <button type="button" onClick={() => deleteProduct(editingProduct._id)} className="bg-red-900/20 border border-red-900 text-red-500 font-black py-4 px-6 rounded-lg hover:bg-red-900 hover:text-white transition uppercase tracking-wider">
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}
