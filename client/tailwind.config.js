@@ -4,8 +4,9 @@ export default {
   theme: {
     extend: {
       colors: {
-        dark: "#111111",
-        accent: "#FFC107",
+        dark: "#fff",
+        accent: "#6f874d",
+        accentShadow: "#6f875b",
         surface: "#1A1A1A"
       },
       fontFamily: {
@@ -15,3 +16,4 @@ export default {
   },
   plugins: [],
 }
+
