@@ -4,8 +4,11 @@ import QRCode from '../components/QRCode.jsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-//const API_URL = 'https://local-based-menu.onrender.com';
-const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+const API_URL = 'https://local-based-menu.onrender.com';
+//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+//const API_URL = 'http://10.201.1.204:5002';
+//const API_URL='http://172.20.10.6:5002';
+//const API_URL='http://192.168.30.131:5002';
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
 const socket = io(API_URL, {
@@ -74,7 +77,7 @@ export default function AdminDashboard() {
 
   const [cashOnHand, setCashOnHand] = useState(0);
 
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false); //This is false, true for low wifi
   
   // --- NEW LOGIN STATES ---
   const [loginForm, setLoginForm] = useState({ name: '', password: '' });
@@ -338,16 +341,16 @@ export default function AdminDashboard() {
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-4">
-        <form onSubmit={handleSystemLogin} className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl max-w-sm w-full text-center">
+        <form onSubmit={handleSystemLogin} className="bg-accent p-8 rounded-xl border border-accentShadow shadow-2xl max-w-sm w-full text-center">
           <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Locked</h2>
-          <p className="text-gray-400 text-sm mb-6">Enter credentials to access the dashboard.</p>
+          <p className="text-white text-sm mb-6">Enter credentials to access the dashboard.</p>
           
           <input 
             type="text" 
             placeholder="Admin Name"
             value={loginForm.name} 
             onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} 
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" 
+            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-black py-3 rounded-lg outline-none mb-3 font-bold" 
             required 
             autoFocus 
           />
@@ -357,11 +360,11 @@ export default function AdminDashboard() {
             placeholder="Password"
             value={loginForm.password} 
             onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} 
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" 
+            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-black py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" 
             required 
           />
           
-          <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest">
+          <button type="submit" className="w-full bg-white border text-accent font-black py-4 rounded-lg hover:bg-accent hover:text-dark transition shadow-lg shadow-accent/20 uppercase tracking-widest">
             AUTHENTICATE
           </button>
         </form>
@@ -1154,11 +1157,11 @@ const submitPhysicalCounts = async () => {
             className="flex flex-col cursor-pointer group pr-6 border-r border-gray-700 select-none"
           >
             {/* SEMIVRA CAFE is now the BIGGER primary text */}
-            <span className="text-3xl font-black text-white transition group-hover:text-gray-300 tracking-tight leading-none mb-1">
-              INFU COFFEE
+            <span className="text-3xl font-black text-accent transition group-hover:text-black tracking-tight leading-none mb-1">
+              KASA LOKAL
             </span>
             {/* SEMIVRA LIBELLUS is now smaller, uniform, and ALL CAPS */}
-            <span className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em] transition group-hover:text-gray-400">
+            <span className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em] transition group-hover:text-black">
               SEMIVRA <span className="text-accent">{navMode === 'libellus' ? 'LIBELLUS' : 'NEGOTIUM'}</span>
             </span>
           </div>
@@ -1169,7 +1172,7 @@ const submitPhysicalCounts = async () => {
               <>
                 <button onClick={() => setActiveTab('orders')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'orders' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Active Orders</button>
                 <button onClick={() => setActiveTab('inventory')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'inventory' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Inventory</button>
-                <button onClick={() => setActiveTab('products')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'products' ? 'text-white' : 'text-gray-600 hover:text-gray-300'}`}>Menu Setup</button>
+                <button onClick={() => setActiveTab('products')} className={`text-xl font-bold transition whitespace-nowrap ${activeTab === 'products' ? 'text-accent' : 'text-gray-500 hover:text-gray-300'}`}>Menu Setup</button>
               </>
             ) : (
               <>
@@ -1190,13 +1193,13 @@ const submitPhysicalCounts = async () => {
           </div>
           <button 
             onClick={(e) => { e.preventDefault(); handleShowQR(); }} 
-            className="flex-1 md:flex-none bg-dark border border-gray-600 text-white px-4 py-2 rounded-md font-bold hover:bg-gray-800 transition"
+            className="flex-1 md:flex-none bg-accent border border-shadowAccent text-white px-4 py-2 rounded-md font-bold hover:border-accent hover:bg-white hover:text-accent transition"
           >
             Show QR
           </button>
           <button 
             onClick={() => { setIsAuthenticated(false); setPinInput(''); }} 
-            className="flex-1 md:flex-none bg-red-900/50 text-red-500 px-4 py-2 rounded-md font-bold hover:bg-red-900 transition"
+            className="flex-1 md:flex-none border  bg-red-500 text-white px-4 py-2 rounded-md font-bold hover:bg-white hover:text-red-500 hover:border-red-500 transition"
           >
             Lock
           </button>
@@ -1227,7 +1230,7 @@ const submitPhysicalCounts = async () => {
             </button>
             <button 
               onClick={() => setShowQR(false)} 
-              className="mt-3 w-full bg-dark border border-gray-600 text-white font-bold py-3 rounded-md hover:bg-gray-800 transition text-sm"
+              className="mt-3 w-full bg-dark border border-gray-600 text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition text-sm"
             >
               Close
             </button>
@@ -1241,10 +1244,10 @@ const submitPhysicalCounts = async () => {
           
           {/* TOP ROW: High-Level Metrics */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-gradient-to-br from-surface to-dark border border-accent/20 rounded-xl p-6 shadow-lg shadow-accent/5 flex flex-col justify-center">
-              <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Total All-Time Revenue</p>
-              <p className="text-4xl font-black text-accent mb-2">P{totalAllTimeRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="text-sm text-gray-500 font-medium">From {allCompletedOrders.length} total completed orders.</p>
+            <div className="bg-accent border border-accent/20 rounded-xl p-6 shadow-lg shadow-accent/5 flex flex-col justify-center">
+              <p className="text-black text-xs font-bold uppercase tracking-wider mb-1">Total All-Time Revenue</p>
+              <p className="text-4xl font-black text-dark mb-2">P{totalAllTimeRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-sm text-black font-medium">From {allCompletedOrders.length} total completed orders.</p>
             </div>
             
             <div className="bg-surface border border-gray-800 rounded-xl p-6 flex flex-col justify-center">
@@ -1275,7 +1278,7 @@ const submitPhysicalCounts = async () => {
             <div className="bg-surface border border-gray-800 rounded-xl p-6 flex flex-col max-h-96">
               <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
                 <h3 className="text-white font-bold">Daily Revenue Trend</h3>
-                <button onClick={exportAnalyticsToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+                <button onClick={exportAnalyticsToPDF} className="text-[10px] bg-accent border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-dark hover:text-accent transition font-bold uppercase tracking-wider">
                   Export Trend
                 </button>
               </div>
@@ -1322,23 +1325,23 @@ const submitPhysicalCounts = async () => {
 
                       {/* Bottom Row: Predictive Metrics Grid */}
                       <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-dark/50 p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
+                        <div className="bg-dark p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
                           <p className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">Stock Lasts</p>
                           <p className={`text-sm font-black ${item.daysLeft <= 3 ? 'text-red-400 animate-pulse' : item.daysLeft <= 7 ? 'text-yellow-500' : 'text-green-400'}`}>
                             {item.daysLeft === Infinity || isNaN(item.daysLeft) ? '∞' : `${item.daysLeft} Days`}
                           </p>
                         </div>
                         
-                        <div className="bg-dark/50 p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
+                        <div className="bg-dark p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
                           <p className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">Buy (1 Wk)</p>
-                          <p className="text-sm font-bold text-gray-300">
+                          <p className="text-sm font-bold text-black">
                             {item.weeklyNeed.toLocaleString()} <span className="text-[10px] font-normal text-gray-500">{item.unit}</span>
                           </p>
                         </div>
                         
-                        <div className="bg-dark/50 p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
+                        <div className="bg-dark p-2 rounded flex flex-col items-center justify-center border border-gray-800/50">
                           <p className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">Buy (1 Mo)</p>
-                          <p className="text-sm font-bold text-gray-300">
+                          <p className="text-sm font-bold text-black">
                             {item.monthlyNeed.toLocaleString()} <span className="text-[10px] font-normal text-gray-500">{item.unit}</span>
                           </p>
                         </div>
@@ -1393,7 +1396,7 @@ const submitPhysicalCounts = async () => {
         <div className="w-full">
           <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
             {['All', 'Pending', 'Preparing', 'Completed', 'Cancelled'].map(filter => (
-              <button key={filter} onClick={() => setOrderFilter(filter)} className={`px-4 py-2 rounded-full text-sm font-bold transition whitespace-nowrap ${orderFilter === filter ? 'bg-accent text-dark' : 'bg-surface border border-gray-700 text-gray-400 hover:text-white'}`}>
+              <button key={filter} onClick={() => setOrderFilter(filter)} className={`px-4 py-2 rounded-full text-sm font-bold transition whitespace-nowrap ${orderFilter === filter ? 'bg-accent text-dark' : 'bg-transparent border border-gray-700 text-gray-400 hover:text-accent'}`}>
                 {filter}
               </button>
             ))}
@@ -1401,18 +1404,18 @@ const submitPhysicalCounts = async () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filteredOrders.length === 0 ? (
-              <div className="col-span-full text-center py-12 text-gray-500">No {orderFilter.toLowerCase()} orders found.</div>
+              <div className="col-span-full text-center py-12 text-dark">No {orderFilter.toLowerCase()} orders found.</div>
             ) : filteredOrders.map(order => (
-              <div key={order._id} className="bg-surface rounded-xl p-5 border border-gray-800 flex flex-col shadow-lg">
-                <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+              <div key={order._id} className="bg-accent rounded-xl p-5 border border-accentShadow flex flex-col shadow-lg">
+                <div className="flex justify-between items-center mb-4 border-b border-dark pb-3">
                   <h2 className="text-lg font-black flex items-center gap-2 flex-wrap">
                     <span>{order.orderNumber}</span>
                     {order.customerName && (
-                      <span className="text-sm bg-gray-800 text-gray-200 px-2 py-0.5 rounded border border-gray-700">
+                      <span className="text-sm bg-black text-dark px-2 py-0.5 rounded border border-gray-700">
                         {order.customerName}
                       </span>
                     )}
-                    {order.table && <span className="text-sm font-bold text-accent uppercase tracking-wider">({order.table})</span>}
+                    {order.table && <span className="text-sm font-bold text-dark uppercase tracking-wider">({order.table})</span>}
                   </h2>
                   <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${order.status === 'Pending' ? 'bg-red-900/50 text-red-400' : order.status === 'Preparing' ? 'bg-yellow-900/50 text-accent' : order.status === 'Completed' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-400'}`}>{order.status}</span>
                 </div>
@@ -1435,21 +1438,21 @@ const submitPhysicalCounts = async () => {
                               className="w-3 h-3 accent-accent cursor-pointer rounded border-gray-600 focus:ring-accent"
                             />
                           )}
-                          <span className={`font-semibold ${isSelected ? 'text-gray-200' : 'text-gray-500'}`}>
+                          <span className={`font-semibold ${isSelected ? 'text-gray-200' : 'text-dark'}`}>
                             {item.quantity}x {item.name}
                           </span>
                         </div>
-                        <span className="text-gray-400">P{(item.price * item.quantity).toFixed(2)}</span>
+                        <span className="text-dark">P{(item.price * item.quantity).toFixed(2)}</span>
                       </div>
                     );
                   })}
                   
                   {/* Select All / Deselect All Button */}
                   {(order.status === 'Pending' || order.status === 'Preparing') && order.items.length > 1 && (
-                    <div className="pt-2 border-t border-gray-800/50 flex justify-start">
+                    <div className="pt-2 border-t border-dark flex justify-start">
                       <button 
                         onClick={() => toggleAllItems(order._id, order.items.length)}
-                        className="text-[10px] text-gray-400 hover:text-accent font-bold uppercase tracking-wider transition bg-dark px-2 py-1 rounded border border-gray-700 hover:border-accent"
+                        className="text-[10px] text-accent hover:text-dark hover:bg-accent font-bold uppercase tracking-wider transition bg-dark px-2 py-1 rounded border border-gray-700 hover:border-accent"
                       >
                         {(discountedItems[order._id] === undefined || discountedItems[order._id].length === order.items.length) ? 'Deselect All' : 'Select All'}
                       </button>
@@ -1458,18 +1461,18 @@ const submitPhysicalCounts = async () => {
                 </div>
                 {/* --------------------------------------- */}
 
-                <div className="bg-dark/50 p-3 rounded-lg border border-gray-800/50 space-y-2 mb-4">
-                  <div className="flex justify-between text-xs text-gray-400">
+                <div className="bg-dark p-3 rounded-lg border border-gray-800/50 space-y-2 mb-4">
+                  <div className="flex justify-between text-xs text-black">
                     <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
                   </div>
                   
-                 <div className="flex justify-between items-center text-xs text-gray-400">
+                 <div className="flex justify-between items-center text-xs text-black">
                     <div className="flex items-center gap-2">
                       <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
                       {(order.status === 'Pending' || order.status === 'Preparing') && (
                         <button 
                           onClick={() => toggleVat(order._id, order.vatRate)} 
-                          className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-2 py-0.5 rounded text-[9px] uppercase font-bold transition"
+                          className="bg-accent hover:bg-dark hover:text-accent text-white px-2 py-0.5 rounded text-[9px] uppercase font-bold transition"
                         >
                           {order.vatRate > 0 ? 'Off' : 'On'}
                         </button>
@@ -1477,13 +1480,13 @@ const submitPhysicalCounts = async () => {
                     </div>
                     <span>P{order.vatAmount.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between items-center text-xs text-gray-400 border-b border-gray-800/50 pb-2">
+                  <div className="flex justify-between items-center text-xs text-black border-b border-gray-800/50 pb-2">
                     <div className="flex items-center gap-2 w-full pr-2">
                       <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
                       {(order.status === 'Pending' || order.status === 'Preparing') && (
                         <div className="flex gap-1 items-center flex-1 justify-end">
                           <select 
-                            className="w-full max-w-[120px] bg-dark border border-gray-600 rounded px-1 text-[10px] text-white outline-none h-6"
+                            className="w-full max-w-[120px] bg-dark border border-gray-600 rounded px-1 text-[10px] text-black outline-none h-6"
                             value={discountInputs[order._id] || ''}
                             onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
                           >
@@ -1501,22 +1504,22 @@ const submitPhysicalCounts = async () => {
                             />
                           )}
                           
-                          <button onClick={() => applyDiscount(order._id)} className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-2 rounded font-bold transition h-6">✓</button>
-                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-900/50 text-red-400 px-2 rounded font-bold h-6">✕</button>}
+                          <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accent hover:text-dark text-white px-2 rounded font-bold transition h-6">✓</button>
+                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-500 text-white px-2 rounded font-bold h-6">✕</button>}
                         </div>
                       )}
                     </div>
-                    <span className="text-red-400 whitespace-nowrap">-P{(order.discount || 0).toFixed(2)}</span>
+                    <span className="text-red-500 whitespace-nowrap">-P{(order.discount || 0).toFixed(2)}</span>
                   </div>
                   
                   {order.discountType && order.discountType !== 'None' && (
-                     <div className="flex justify-between text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                     <div className="flex justify-between text-[10px] text-black font-bold uppercase tracking-wider">
                        <span>Type:</span>
                        <span className={order.discountType === 'SC/PWD' ? 'text-accent' : 'text-gray-400'}>{order.discountType}</span>
                      </div>
                   )}
 
-                  <div className="flex justify-between font-black text-lg pt-1">
+                  <div className="flex justify-between font-black text-black pt-1">
                     <span>Total:</span><span className="text-accent">P{order.total.toFixed(2)}</span>
                   </div>
                 </div>
@@ -1524,8 +1527,8 @@ const submitPhysicalCounts = async () => {
                 <div className="flex gap-2 mt-auto">
                   {order.status === 'Pending' && (
                     <>
-                      <button onClick={() => updateStatus(order._id, 'Preparing')} className="flex-1 bg-surface border border-accent text-accent py-2.5 rounded-lg hover:bg-accent hover:text-dark font-bold text-sm transition">Start Prep</button>
-                      <button onClick={() => updateStatus(order._id, 'Cancelled')} className="flex-1 bg-surface border border-red-500/50 text-red-400 py-2.5 rounded-lg hover:bg-red-900/50 font-bold text-sm transition">Cancel</button>
+                      <button onClick={() => updateStatus(order._id, 'Preparing')} className="flex-1 bg-dark border border-accent text-accent py-2.5 rounded-lg hover:bg-accent hover:text-dark font-bold text-sm transition">Start Prep</button>
+                      <button onClick={() => updateStatus(order._id, 'Cancelled')} className="flex-1 bg-dark border border-red-500/50 text-red-400 py-2.5 rounded-lg hover:bg-red-700 font-bold text-sm transition">Cancel</button>
                     </>
                   )}
                   {order.status === 'Preparing' && (
@@ -1533,13 +1536,13 @@ const submitPhysicalCounts = async () => {
                       <select 
                         value={paymentSelections[order._id] || 'Cash'} 
                         onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
-                        className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-white outline-none focus:border-accent"
+                        className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-black outline-none focus:border-accent"
                       >
                         <option value="Cash">Cash</option>
                         <option value="E-Wallet">E-Wallet</option>
                         <option value="Bank Transfer">Bank Transfer</option>
                       </select>
-                      <button onClick={() => updateStatus(order._id, 'Completed')} className="w-full bg-accent text-dark py-2.5 rounded-lg hover:bg-yellow-500 font-bold text-sm shadow-lg shadow-accent/10 transition">
+                      <button onClick={() => updateStatus(order._id, 'Completed')} className="w-full bg-dark text-accent py-2.5 rounded-lg hover:bg-accent hover:text-dark backdrop:font-bold text-sm shadow-lg shadow-accent/10 transition">
                         Mark Completed
                       </button>
                     </div>
@@ -1554,27 +1557,27 @@ const submitPhysicalCounts = async () => {
       {/* --- SALES HISTORY & REGISTER TAB --- */}
       {activeTab === 'history' && (
         <div className="w-full max-w-4xl mx-auto flex flex-col gap-6">
-          <div className="bg-surface border border-accent/20 rounded-xl p-6 shadow-xl shadow-accent/5">
-            <h3 className="text-accent font-black tracking-widest uppercase text-sm mb-4 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span> Active Register
+          <div className="bg-accent border border-accentShadow rounded-xl p-6 shadow-xl shadow-accent/5">
+            <h3 className="text-dark font-black tracking-widest uppercase text-sm mb-4 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-dark animate-pulse"></span> Active Register
             </h3>
             <div className="space-y-4 mb-6">
               <div>
-                <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Today's Revenue</p>
+                <p className="text-dark text-xs font-bold uppercase tracking-wider mb-1">Today's Revenue</p>
                 <p className="text-4xl font-black text-white">P{todayRevenue.toFixed(2)}</p>
               </div>
-              <div className="flex justify-between border-t border-gray-800 pt-4">
+              <div className="flex justify-between border-t border-dark pt-4">
                 <div>
-                  <p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">Completed Orders</p>
-                  <p className="text-lg font-bold text-gray-300">{todayCompleted.length}</p>
+                  <p className="text-dark text-[10px] font-bold uppercase tracking-wider">Completed Orders</p>
+                  <p className="text-lg font-bold text-dark">{todayCompleted.length}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">VAT Collected</p>
+                  <p className="text-dark text-[10px] font-bold uppercase tracking-wider">VAT Collected</p>
                   <p className="text-lg font-bold text-gray-300">P{todayVat.toFixed(2)}</p>
                 </div>
               </div>
             </div>
-            <button onClick={archiveDay} className="w-full bg-red-900/20 border border-red-900 text-red-400 hover:bg-red-600 hover:text-white font-bold py-3 rounded-lg transition text-sm">
+            <button onClick={archiveDay} className="w-full bg-red-600 border border-red-600 text-dark hover:bg-dark hover:text-red-600 font-bold py-3 rounded-lg transition text-sm">
               Close Register & Archive Day
             </button>
           </div>
@@ -1582,7 +1585,7 @@ const submitPhysicalCounts = async () => {
           <div className="bg-surface border border-gray-800 rounded-xl p-1 overflow-hidden flex flex-col">
             <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-dark/20 rounded-t-xl">
               <h3 className="text-gray-300 font-bold text-sm tracking-wider uppercase">Sales History</h3>
-              <button onClick={exportAllToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+              <button onClick={exportAllToPDF} className="text-[10px] bg-accent border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-dark hover:text-accent transition font-bold uppercase tracking-wider">
                 Export All
               </button>
             </div>
@@ -1664,17 +1667,17 @@ const submitPhysicalCounts = async () => {
         <div className="flex flex-col xl:flex-row gap-8">
           
           {/* LEFT COLUMN: Main Tables */}
-          <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6 flex flex-col h-fit">
+          <div className="flex-1 bg-accent border border-accentShadow rounded-xl p-6 flex flex-col h-fit">
             
             {/* Header & Sub-Tabs */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 border-b border-gray-800 pb-4">
-              <h3 className="text-xl font-bold text-accent">Inventory Hub</h3>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 border-b border-dark pb-4">
+              <h3 className="text-xl font-bold text-white">Inventory Hub</h3>
               
               {/* --- NEW: THE SUB-TAB TOGGLE --- */}
-              <div className="flex bg-dark p-1 rounded-lg border border-gray-700 shadow-inner">
+              <div className="flex bg-dark p-1 rounded-lg shadow-inner">
                 <button 
                   onClick={() => setInvSubTab('live')}
-                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded transition ${invSubTab === 'live' ? 'bg-accent text-dark shadow-md' : 'text-gray-400 hover:text-white'}`}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded transition ${invSubTab === 'live' ? 'bg-accent text-dark shadow-md' : 'text-gray-400 hover:text-accent'}`}
                 >
                   Live Stock
                 </button>
@@ -1687,7 +1690,7 @@ const submitPhysicalCounts = async () => {
                 </button>
               </div>
               
-              <button onClick={exportInventoryToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+              <button onClick={exportInventoryToPDF} className="text-[10px] bg-accent border border-dark text-white px-3 py-1.5 rounded hover:bg-dark hover:text-accent transition font-bold uppercase tracking-wider">
                 Export PDF
               </button>
             </div>
@@ -1697,7 +1700,7 @@ const submitPhysicalCounts = async () => {
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
-                    <tr className="text-gray-500 border-b border-gray-800">
+                    <tr className="text-dark border-b border-dark">
                       <th className="pb-3">Item Name</th>
                       <th className="pb-3 text-right">Live System Qty</th>
                       <th className="pb-3">Unit</th>
@@ -1709,14 +1712,14 @@ const submitPhysicalCounts = async () => {
                   <tbody>
                     {inventory.map(item => (
                       <tr key={item._id} className="border-b border-gray-800/50 hover:bg-dark/30 transition">
-                        <td className="py-3 font-bold text-gray-200">{item.itemName}</td>
-                        <td className={`py-3 text-right font-bold ${item.stockQty < 10 ? 'text-red-400' : 'text-gray-300'}`}>{item.stockQty.toLocaleString()}</td>
-                        <td className="py-3 text-gray-500 pl-2">{item.unit}</td>
-                        <td className="py-3 text-right text-gray-400 font-mono text-xs">P{(item.unitCost || 0).toFixed(4)}</td>
-                        <td className="py-3 text-right text-accent font-bold font-mono text-xs">P{(item.stockQty * (item.unitCost || 0)).toFixed(2)}</td>
+                        <td className="py-3 font-bold text-dark">{item.itemName}</td>
+                        <td className={`py-3 text-right font-bold ${item.stockQty < 10 ? 'text-red-400' : 'text-dark'}`}>{item.stockQty.toLocaleString()}</td>
+                        <td className="py-3 text-dark pl-2">{item.unit}</td>
+                        <td className="py-3 text-right text-dark font-mono text-xs">P{(item.unitCost || 0).toFixed(4)}</td>
+                        <td className="py-3 text-right text-dark font-bold font-mono text-xs">P{(item.stockQty * (item.unitCost || 0)).toFixed(2)}</td>
                         <td className="py-3 text-center space-x-2">
-                          <button onClick={() => fetchStockHistory(item)} className="text-accent hover:text-white text-xs font-bold px-2 py-1 bg-accent/10 rounded transition">History</button>
-                          <button onClick={() => deleteInventory(item._id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-2 py-1 bg-red-900/20 rounded transition">Del</button>
+                          <button onClick={() => fetchStockHistory(item)} className="text-accent bg-dark hover:bg-accent hover:text-white text-xs font-bold px-2 py-1 bg-accent/10 rounded transition">History</button>
+                          <button onClick={() => deleteInventory(item._id)} className="text-red-500 hover:text-red-400 text-xs font-bold px-2 py-1 bg-red-900 rounded transition">Del</button>
                         </td>
                       </tr>
                     ))}
@@ -1725,7 +1728,6 @@ const submitPhysicalCounts = async () => {
               </div>
             )}
 
-            {/* --- TAB 2: EOD AUDIT (Enterprise Financial Control) --- */}
             {/* --- TAB 2: EOD AUDIT (Enterprise Financial Control) --- */}
             {invSubTab === 'eod' && (() => {
               const itemsCounted = inventory.filter(i => physicalCounts[i._id] !== undefined && physicalCounts[i._id] !== '').length;
@@ -1740,16 +1742,16 @@ const submitPhysicalCounts = async () => {
                 <div className="overflow-x-auto flex flex-col h-full animate-in fade-in duration-300 relative pb-24">
                   
                   {/* --- INTELLIGENT EOD HEADER --- */}
-                  <div className={`flex justify-between items-center p-4 rounded-lg border mb-4 shadow-inner ${isLocked ? 'bg-green-900/10 border-green-900/30' : 'bg-dark/50 border-red-900/30'}`}>
+                  <div className={`flex justify-between items-center p-4 rounded-lg border mb-4 shadow-inner ${isLocked ? 'bg-green-900/10 border-green-900/30' : 'bg-dark border-accent'}`}>
                     <div>
-                      <h4 className="text-white font-black uppercase tracking-wider text-sm flex items-center gap-2">
+                      <h4 className="text-accent font-black uppercase tracking-wider text-sm flex items-center gap-2">
                         {isLocked ? (
                           <>EOD Locked</>
                         ) : (
                           <><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> EOD Audit (Open)</>
                         )}
                       </h4>
-                      <p className={`text-xs mt-1 ${isLocked ? 'text-green-400 font-bold' : 'text-gray-400'}`}>
+                      <p className={`text-xs mt-1 ${isLocked ? 'text-dark font-bold' : 'text-black'}`}>
                         {isLocked 
                           ? `Daily inventory was securely locked on ${new Date(eodLockedAt).toLocaleTimeString()}`
                           : `Audit physical stock, assign variance reasons, and lock daily financial impact.`}
@@ -1758,7 +1760,7 @@ const submitPhysicalCounts = async () => {
 
                     {/* NEW REOPEN BUTTON */}
                     {isLocked && (
-                      <button 
+                      <button
                         onClick={async () => {
                           if(window.confirm("WARNING: Reopening the day allows new sales, which will alter your ending inventory. Are you sure?")) {
                             await fetch(`${API_URL}/api/inventory/eod/reopen`, { method: 'POST' });
@@ -1774,7 +1776,7 @@ const submitPhysicalCounts = async () => {
 
                   <table className="w-full text-left text-sm mb-4">
                     <thead>
-                      <tr className="text-gray-500 border-b border-gray-800 text-xs uppercase tracking-wider">
+                      <tr className="text-dark border-b border-dark text-xs uppercase tracking-wider">
                         <th className="pb-3 w-1/4">Item & Context</th>
                         <th className="pb-3 text-right">System End</th>
                         <th className="pb-3 text-center">Physical Count</th>
@@ -1801,16 +1803,16 @@ const submitPhysicalCounts = async () => {
                           <tr key={item._id} className={`border-b border-gray-800/50 hover:bg-dark/30 transition ${hasInput && variance !== 0 ? 'bg-red-900/5' : ''}`}>
                             
                             <td className="py-4">
-                              <p className="font-bold text-gray-200">{item.itemName}</p>
-                              <p className="text-[10px] text-gray-500 font-mono mt-1">
-                                Start: {calculatedStart.toLocaleString()} | <span className="text-green-500/70">In: {realIn.toLocaleString()}</span> | <span className="text-red-500/70">Out: {realOut.toLocaleString()}</span>
+                              <p className="font-bold text-dark">{item.itemName}</p>
+                              <p className="text-[10px] text-dark font-mono mt-1">
+                                Start: {calculatedStart.toLocaleString()} | <span className="text-black">In: {realIn.toLocaleString()}</span> | <span className="text-black">Out: {realOut.toLocaleString()}</span>
                               </p>
                               
                               {hasInput && variance !== 0 && !isLocked && (
                                 <select 
                                   value={varianceReasons[item._id] || ''} 
                                   onChange={(e) => setVarianceReasons({...varianceReasons, [item._id]: e.target.value})}
-                                  className="mt-2 w-full max-w-[200px] bg-dark border border-red-900/50 text-red-300 text-[10px] rounded p-1 outline-none focus:border-red-500"
+                                  className="mt-2 w-full max-w-[200px] bg-dark border border-red-900/60 text-red-500 text-[10px] rounded p-1 outline-none focus:border-red-500"
                                 >
                                   <option value="" disabled>Select Reason...</option>
                                   <option value="Damaged/Spoiled">Damaged / Spoiled</option>
@@ -1821,8 +1823,8 @@ const submitPhysicalCounts = async () => {
                               )}
                             </td>
 
-                            <td className="py-4 text-right text-gray-400 font-mono text-sm">
-                              {item.stockQty.toLocaleString()} <span className="text-[10px] text-gray-600">{item.unit}</span>
+                            <td className="py-4 text-right text-dark font-mono text-sm">
+                              {item.stockQty.toLocaleString()} <span className="text-[10px] text-dark">{item.unit}</span>
                             </td>
 
                             <td className="py-4 text-center align-top pt-5">
@@ -1842,11 +1844,11 @@ const submitPhysicalCounts = async () => {
                               />
                             </td>
 
-                            <td className={`py-4 text-right font-black font-mono text-sm align-top pt-6 ${variance < 0 ? 'text-red-500' : variance > 0 ? 'text-green-500' : 'text-gray-600'}`}>
+                            <td className={`py-4 text-right font-black font-mono text-sm align-top pt-6 ${variance < 0 ? 'text-red-300' : variance > 0 ? 'text-green-500' : 'text-dark'}`}>
                               {hasInput ? (variance > 0 ? `+${variance}` : variance) : '-'}
                             </td>
 
-                            <td className={`py-4 text-right font-mono text-xs pr-2 font-bold align-top pt-6 ${financialImpact < 0 ? 'text-red-400' : financialImpact > 0 ? 'text-green-400' : 'text-gray-600'}`}>
+                            <td className={`py-4 text-right font-mono text-xs pr-2 font-bold align-top pt-6 ${financialImpact < 0 ? 'text-red-300' : financialImpact > 0 ? 'text-green-400' : 'text-dark'}`}>
                               {hasInput ? formattedImpact : '-'}
                             </td>
                           </tr>
@@ -1915,7 +1917,7 @@ const submitPhysicalCounts = async () => {
                     const match = inventory.find(i => i.itemName.toLowerCase() === typed.toLowerCase());
                     setInvForm({...invForm, itemName: typed, unit: match ? match.unit : invForm.unit});
                   }} 
-                  className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" 
+                  className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" 
                 />
                 <datalist id="inventory-names">
                   {inventory.map(inv => <option key={inv._id} value={inv.itemName} />)}
@@ -1928,15 +1930,15 @@ const submitPhysicalCounts = async () => {
               <div className="flex gap-2">
                  <div className="w-1/3">
                    <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Qty Bought</label>
-                   <input type="number" placeholder="Cans/Packs" value={invForm.packQty} onChange={e => setInvForm({...invForm, packQty: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" />
+                   <input type="number" placeholder="Cans/Packs" value={invForm.packQty} onChange={e => setInvForm({...invForm, packQty: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" />
                  </div>
                  <div className="w-1/3">
                    <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Weight/Vol</label>
-                   <input type="number" placeholder="Per Pack" value={invForm.unitPerPack} onChange={e => setInvForm({...invForm, unitPerPack: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" />
+                   <input type="number" placeholder="Per Pack" value={invForm.unitPerPack} onChange={e => setInvForm({...invForm, unitPerPack: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" />
                  </div>
                  <div className="w-1/3">
                    <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Unit</label>
-                   <select value={invForm.unit} onChange={e => setInvForm({...invForm, unit: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent">
+                   <select value={invForm.unit} onChange={e => setInvForm({...invForm, unit: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent">
                      <option value="" disabled>Select...</option>
                      <option value="g">Grams (g)</option>
                      <option value="ml">mL (ml)</option>
@@ -1969,8 +1971,8 @@ const submitPhysicalCounts = async () => {
                       onChange={e => setInvForm({...invForm, costPerPack: e.target.value})} 
                       className={`w-full bg-dark border rounded p-2 outline-none transition-all ${
                         isOverBudget 
-                        ? 'border-red-500 text-red-400 focus:border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
-                        : 'border-gray-700 text-white focus:border-accent'
+                        ? 'border-red-500  text-red-400 focus:border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
+                        : 'border-gray-700 text-black focus:border-accent'
                       }`} 
                     />
                   </div>
@@ -1979,20 +1981,20 @@ const submitPhysicalCounts = async () => {
               
               {(invForm.packQty && invForm.unitPerPack && invForm.costPerPack && invForm.unit) && (
                 <div className="bg-dark/50 p-3 rounded border border-gray-700 text-sm">
-                  <p className="text-gray-400 mb-1">System will save to inventory:</p>
+                  <p className="text-black font-bold mb-1">System will save to inventory:</p>
                   <div className="flex justify-between font-bold text-white mb-1">
                     <span>Total Stock Added:</span>
-                    <span className="text-accent">{(invForm.packQty * invForm.unitPerPack).toLocaleString()} {invForm.unit}</span>
+                    <span className="text-dark">{(invForm.packQty * invForm.unitPerPack).toLocaleString()} {invForm.unit}</span>
                   </div>
-                  <div className="flex justify-between font-bold text-white mb-1">
+                  <div className="flex justify-between font-bold text-dark mb-1">
                     <span>Cost per {invForm.unit}:</span>
-                    <span className="text-accent">P{(invForm.costPerPack / invForm.unitPerPack).toFixed(4)}</span>
+                    <span className="text-dark">P{(invForm.costPerPack / invForm.unitPerPack).toFixed(4)}</span>
                   </div>
                   
                   {/* --- NEW: TOTAL COST ROW --- */}
                   <div className="flex justify-between font-bold text-white border-t border-gray-700 pt-2 mt-2">
                     <span>Total Purchase Cost:</span>
-                    <span className={cashOnHand < (invForm.packQty * invForm.costPerPack) ? "text-red-400" : "text-yellow-500"}>
+                    <span className={cashOnHand < (invForm.packQty * invForm.costPerPack) ? "text-red-400" : "text-black"}>
                       P{(invForm.packQty * invForm.costPerPack).toFixed(2)}
                     </span>
                   </div>
@@ -2003,7 +2005,7 @@ const submitPhysicalCounts = async () => {
               <button 
                 onClick={addInventory} 
                 disabled={cashOnHand < (invForm.packQty * invForm.costPerPack)}
-                className={`w-full font-bold py-3 rounded transition shadow-lg ${cashOnHand < (invForm.packQty * invForm.costPerPack) ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-dark hover:bg-yellow-500 shadow-accent/20'}`}
+                className={`w-full font-bold py-3 rounded transition shadow-lg ${cashOnHand < (invForm.packQty * invForm.costPerPack) ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-dark hover:bg-dark hover:text-accent shadow-accent/20'}`}
               >
                 {cashOnHand < (invForm.packQty * invForm.costPerPack) ? 'Insufficient Funds' : 'Add to Stock'}
               </button>
@@ -2020,29 +2022,29 @@ const submitPhysicalCounts = async () => {
           <div className="w-full xl:w-1/3 space-y-6">
             
             {/* --- LIVE CASH ON HAND --- */}
-            <div className="bg-gradient-to-br from-surface to-dark border border-accent/30 rounded-xl p-6 shadow-lg shadow-accent/5">
-              <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Live Cash on Hand</p>
-              <p className="text-4xl font-black text-accent">₱{cashOnHand.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <div className="bg-accent border border-accent/30 rounded-xl p-6 shadow-lg shadow-accent/5">
+              <p className="text-black text-xs font-bold uppercase tracking-wider mb-1">Live Cash on Hand</p>
+              <p className="text-4xl font-black text-dark">P{cashOnHand.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
 
             <div className="bg-surface border border-gray-800 rounded-xl p-6 h-fit">
               <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">New Journal Entry</h3>
               <div className="space-y-4">
-                <input type="text" placeholder="Description / Memo" value={jeForm.description} onChange={e => setJeForm({...jeForm, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none" />
+                <input type="text" placeholder="Description / Memo" value={jeForm.description} onChange={e => setJeForm({...jeForm, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none" />
                 {jeForm.lines.map((line, idx) => (
-                  <div key={idx} className="bg-dark p-3 rounded border border-gray-700 space-y-2">
+                  <div key={idx} className="bg-accent p-3 rounded border border-gray-700 space-y-2">
                     <select value={line.accountCode} onChange={(e) => {
                       const acc = standardAccounts.find(a => a.accountCode === e.target.value);
                       const newLines = [...jeForm.lines];
                       newLines[idx] = { ...line, accountCode: acc.accountCode, accountName: acc.accountName };
                       setJeForm({...jeForm, lines: newLines});
-                    }} className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-white">
+                    }} className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-black">
                       <option value="">Select Account...</option>
                       {standardAccounts.map(acc => <option key={acc.accountCode} value={acc.accountCode}>{acc.accountCode} - {acc.accountName}</option>)}
                     </select>
                     <div className="flex gap-2">
-                      <input type="number" placeholder="Debit" value={line.debit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].debit = e.target.value; nl[idx].credit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white placeholder-gray-500" />
-                      <input type="number" placeholder="Credit" value={line.credit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].credit = e.target.value; nl[idx].debit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white placeholder-gray-500" />
+                      <input type="number" placeholder="Debit" value={line.debit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].debit = e.target.value; nl[idx].credit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-black placeholder-gray-500" />
+                      <input type="number" placeholder="Credit" value={line.credit} onChange={e => { const nl = [...jeForm.lines]; nl[idx].credit = e.target.value; nl[idx].debit = ''; setJeForm({...jeForm, lines: nl}); }} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-black placeholder-gray-500" />
                     </div>
                   </div>
                 ))}
@@ -2056,7 +2058,7 @@ const submitPhysicalCounts = async () => {
                     await fetch(`${API_URL}/api/journal`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jeForm) });
                     setJeForm({ description: '', lines: [{accountCode:'', accountName:'', debit:'', credit:''}, {accountCode:'', accountName:'', debit:'', credit:''}] });
                     fetchERPData();
-                  }} className="bg-accent text-dark font-bold py-2 px-4 rounded hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Post Entry</button>
+                  }} className="bg-accent text-dark font-bold py-2 px-4 rounded hover:bg-dark hover:text-accent transition shadow-lg shadow-accent/20">Post Entry</button>
                 </div>
               </div>
             </div>
@@ -2066,7 +2068,7 @@ const submitPhysicalCounts = async () => {
           <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6">
             <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
               <h3 className="text-xl font-bold text-white">General Ledger</h3>
-              <button onClick={exportLedgerToPDF} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+              <button onClick={exportLedgerToPDF} className="text-[10px] bg-accent border border-gray-600 text-gray-300 px-3 py-1.5 rounded hover:bg-dark hover:text-accent transition font-bold uppercase tracking-wider">
                 Export Ledger
               </button>
             </div>
@@ -2075,17 +2077,17 @@ const submitPhysicalCounts = async () => {
                 <div key={entry._id} className="bg-dark border border-gray-700 rounded-lg p-4">
                   <div className="flex justify-between items-center mb-3 border-b border-gray-800 pb-2">
                     <span className="text-accent font-bold">{entry.reference}</span>
-                    <span className="text-gray-400 text-sm">{new Date(entry.date).toLocaleDateString()}</span>
+                    <span className="text-black text-sm">{new Date(entry.date).toLocaleDateString()}</span>
                   </div>
-                  <p className="text-sm text-white mb-3 font-semibold">{entry.description}</p>
+                  <p className="text-sm text-black mb-3 font-semibold">{entry.description}</p>
                   <table className="w-full text-sm">
-                    <thead><tr className="text-gray-500 text-left"><th className="pb-2">Account</th><th className="pb-2 text-right">Debit</th><th className="pb-2 text-right">Credit</th></tr></thead>
+                    <thead><tr className="text-black text-left"><th className="pb-2">Account</th><th className="pb-2 text-right">Debit</th><th className="pb-2 text-right">Credit</th></tr></thead>
                     <tbody>
                       {entry.lines.map((line, idx) => (
                         <tr key={idx} className="border-t border-gray-800/50">
-                          <td className={`py-1 ${line.credit > 0 ? 'pl-6 text-gray-400' : 'text-gray-200'}`}>{line.accountCode} - {line.accountName}</td>
-                          <td className="py-1 text-right text-gray-300">{line.debit > 0 ? line.debit.toFixed(2) : ''}</td>
-                          <td className="py-1 text-right text-gray-300">{line.credit > 0 ? line.credit.toFixed(2) : ''}</td>
+                          <td className={`py-1 ${line.credit > 0 ? 'pl-6 text-black' : 'text-gray-600'}`}>{line.accountCode} - {line.accountName}</td>
+                          <td className="py-1 text-right text-gray-600">{line.debit > 0 ? line.debit.toFixed(2) : ''}</td>
+                          <td className="py-1 text-right text-gray-600">{line.credit > 0 ? line.credit.toFixed(2) : ''}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -2107,7 +2109,7 @@ const submitPhysicalCounts = async () => {
             <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Product Pricing Masterlist</h3>
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="text-gray-500 border-b border-gray-800">
+                <tr className="text-dark border-b border-gray-800">
                   <th className="pb-3">Product Name</th>
                   <th className="pb-3">Category</th>
                   <th className="pb-3 text-right">Size / Option</th>
@@ -2175,8 +2177,8 @@ const submitPhysicalCounts = async () => {
                 ) : discounts.map(d => (
                   <div key={d._id} className="bg-dark p-3 rounded-lg border border-gray-700 flex justify-between items-center">
                     <div>
-                      <p className="font-bold text-gray-200 text-sm">{d.name}</p>
-                      <p className="text-xs text-accent font-mono">{d.percentage}% OFF</p>
+                      <p className="font-bold text-black text-sm">{d.name}</p>
+                      <p className="text-xs text-black font-mono">{d.percentage}% OFF</p>
                     </div>
                     <button 
                       onClick={async () => {
@@ -2211,13 +2213,13 @@ const submitPhysicalCounts = async () => {
               >
                 <div>
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Discount Name</label>
-                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Percentage (%)</label>
-                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
                 </div>
-                <button type="submit" className="w-full bg-accent text-dark font-black py-3 rounded hover:bg-yellow-500 shadow-lg shadow-accent/20 transition uppercase tracking-wider text-xs">
+                <button type="submit" className="w-full bg-accent text-dark font-black py-3 rounded hover:bg-dark shadow-lg hover:text-accent shadow-accent/20 transition uppercase tracking-wider text-xs">
                   Save Rule
                 </button>
               </form>
@@ -2230,8 +2232,8 @@ const submitPhysicalCounts = async () => {
         <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-180px)]">
           
           {/* LEFT COLUMN: Add 'overflow-y-auto custom-scrollbar' */}
-          <div className="flex-1 bg-surface border border-gray-800 rounded-lg p-6 overflow-y-auto custom-scrollbar">
-            <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Menu Items</h3>
+          <div className="flex-1 bg-accent border border-accentShadow rounded-lg p-6 overflow-y-auto custom-scrollbar">
+            <h3 className="text-xl font-bold mb-4 text-dark border-b border-dark pb-2">Menu Items</h3>
             <div className="space-y-3">
               {products.map(p => (
                 <div key={p._id} className="flex gap-4 p-4 border border-gray-800 rounded bg-dark items-center">
@@ -2242,14 +2244,14 @@ const submitPhysicalCounts = async () => {
                   )}
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-bold">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
+                      <h4 className="font-bold text-black">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
                       
                       {/* --- ESTIMATED STOCK BADGE --- */}
                       {(() => {
                         const est = getEstimatedStock(p.baseRecipe);
                         if (est === null) return null;
                         return (
-                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-red-900/50 text-red-400' : est <= 5 ? 'bg-yellow-900/50 text-yellow-500' : 'bg-green-900/50 text-green-400'}`}>
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-black text-red-400' : est <= 5 ? 'bg-black text-yellow-500' : 'bg-black text-green-400'}`}>
                             {est <= 0 ? 'Out of Stock' : `Est: ${est} left`}
                           </span>
                         );
@@ -2279,16 +2281,16 @@ const submitPhysicalCounts = async () => {
               ))}
             </div>
             
-            <div className="mt-8 border-t border-gray-800 pt-6">
-              <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Manage Categories</h3>
+            <div className="mt-8 border-t border-dark pt-6">
+              <h3 className="text-xl font-bold mb-4 text-dark border-b border-dark pb-2">Manage Categories</h3>
               <form onSubmit={handleAddCategory} className="flex gap-3 mb-6">
-                <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder="New category name..." className="flex-1 bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" required />
-                <button type="submit" className="bg-accent text-dark font-bold px-6 py-2 rounded hover:bg-yellow-500">Add</button>
+                <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder="New category name..." className="flex-1 bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" required />
+                <button type="submit" className="bg-accent text-dark font-bold px-6 py-2 rounded border hover:text-accent hover:bg-dark">Add</button>
               </form>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {categories.map(c => (
                   <div key={c._id} className="flex justify-between items-center p-3 border border-gray-800 rounded bg-dark">
-                    <span className="font-bold text-sm">{c.name}</span>
+                    <span className="font-bold text-sm text-black">{c.name}</span>
                     <button onClick={() => deleteCategory(c._id)} className="text-red-500 hover:text-red-400 text-xs font-semibold">✕</button>
                   </div>
                 ))}
@@ -2316,21 +2318,21 @@ const submitPhysicalCounts = async () => {
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-white hover:file:bg-gray-700 cursor-pointer" />
                   </div>
                 </div>
-                <div><label className="block text-sm text-gray-400 mb-1">Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" /></div>
+                <div><label className="block text-sm text-gray-400 mb-1">Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" /></div>
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Category</label>
-                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent">
+                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent">
                     <option value="" disabled>Select Category...</option>
                     {categories.map(c => <option key={c._id} value={c.name}>{c.name}</option>)}
                   </select>
                 </div>
-                <div><label className="block text-sm text-gray-400 mb-1">Description</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent h-20 placeholder-gray-600" /></div>
+                <div><label className="block text-sm text-gray-400 mb-1">Description</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent h-20 placeholder-gray-600" /></div>
                 
-                <div className="bg-dark p-4 rounded border border-gray-700 mt-6">
-                  <label className="block text-sm font-bold text-white mb-2 uppercase tracking-wider">Base Size / Standard Recipe</label>
+                <div className="bg-accent p-4 rounded border border-gray-700 mt-6">
+                  <label className="block text-sm font-bold text-dark mb-2 uppercase tracking-wider">Base Size / Standard Recipe</label>
                   <div className="flex gap-2 mb-1">
-                    <input type="text" placeholder="Size Name (e.g. Regular)" value={formData.baseSize || ''} onChange={e => setFormData({...formData, baseSize: e.target.value})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-white outline-none focus:border-accent" />
-                    <input type="number" step="0.01" placeholder="Selling Price" value={formData.basePrice} onChange={e => setFormData({...formData, basePrice: parseFloat(e.target.value) || 0})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-white outline-none focus:border-accent" />
+                    <input type="text" placeholder="Size Name (e.g. Regular)" value={formData.baseSize || ''} onChange={e => setFormData({...formData, baseSize: e.target.value})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-black outline-none focus:border-accent" />
+                    <input type="number" step="0.01" placeholder="Selling Price" value={formData.basePrice} onChange={e => setFormData({...formData, basePrice: parseFloat(e.target.value) || 0})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-black outline-none focus:border-accent" />
                   </div>
                   {(() => {
                     const baseCost = calcRecipeCost(formData.baseRecipe);
@@ -2347,25 +2349,25 @@ const submitPhysicalCounts = async () => {
                   
                   <div className="bg-black/30 p-3 rounded mb-2">
                     <div className="flex justify-between items-center mb-2">
-                      <span className="text-xs text-gray-400 font-bold">Base Materials (BOM)</span>
-                      <span className="text-xs text-accent font-bold">Cost: P{calcRecipeCost(formData.baseRecipe).toFixed(2)}</span>
+                      <span className="text-xs text-gray-300 font-bold">Base Materials (BOM)</span>
+                      <span className="text-xs text-black font-bold">Cost: P{calcRecipeCost(formData.baseRecipe).toFixed(2)}</span>
                     </div>
                     {(formData.baseRecipe || []).map((mat, i) => (
                       <div key={i} className="flex items-center gap-2 mb-2 text-sm">
                         <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
-                        <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, null)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-white" />
-                        <span className="text-gray-500 w-8">{mat.unit}</span>
+                        <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, null)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-black" />
+                        <span className="text-dark w-8">{mat.unit}</span>
                         <button type="button" onClick={() => removeMaterial(i, null)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
                       </div>
                     ))}
                     <div className="mt-3">
-                      <div className="text-[10px] text-gray-500 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
+                      <div className="text-[10px] text-gray-400 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
                       <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
                         {inventory.length === 0 ? (
                           <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
                         ) : (
                           inventory.map(inv => (
-                            <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, null)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
+                            <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, null)} className="w-full text-left px-2 py-1.5 text-xs text-black hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
                               <span className="truncate pr-2">+ {inv.itemName}</span>
                               <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
                             </button>
@@ -2382,11 +2384,11 @@ const submitPhysicalCounts = async () => {
                     <button type="button" onClick={addSize} className="text-xs bg-dark px-3 py-1.5 rounded font-bold text-accent border border-accent hover:bg-accent hover:text-dark transition">+ Add Size</button>
                   </div>
                   {(formData.sizes || []).map((size, idx) => (
-                    <div key={idx} className="bg-dark p-4 rounded border border-gray-700 mb-4">
+                    <div key={idx} className="bg-accent p-4 rounded border border-gray-700 mb-4">
                       <div className="flex gap-2 mb-1">
-                        <input type="text" placeholder="Size Name" value={size.name} onChange={e => updateSize(idx, 'name', e.target.value)} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-white" required />
-                        <input type="number" step="0.01" placeholder="Selling Price" value={size.price} onChange={e => updateSize(idx, 'price', e.target.value)} className="w-1/3 bg-dark border border-gray-600 rounded p-2 text-sm text-white" required />
-                        <button type="button" onClick={() => removeSize(idx)} className="text-red-500 hover:text-red-400 font-bold ml-auto px-2">✕</button>
+                        <input type="text" placeholder="Size Name" value={size.name} onChange={e => updateSize(idx, 'name', e.target.value)} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-black" required />
+                        <input type="number" step="0.01" placeholder="Selling Price" value={size.price} onChange={e => updateSize(idx, 'price', e.target.value)} className="w-1/3 bg-dark border border-gray-600 rounded p-2 text-sm text-black" required />
+                        <button type="button" onClick={() => removeSize(idx)} className="text-white hover:text-red-400 font-bold ml-auto px-2">✕</button>
                       </div>
                       {(() => {
                         const sizeCost = calcRecipeCost(size.recipe);
@@ -2402,26 +2404,26 @@ const submitPhysicalCounts = async () => {
                       })()}
                       <div className="bg-black/30 p-3 rounded">
                         <div className="flex justify-between items-center mb-2">
-                          <span className="text-xs text-gray-400 font-bold">{size.name || 'New Size'} Materials</span>
-                          <span className="text-xs text-accent font-bold">Cost: P{calcRecipeCost(size.recipe).toFixed(2)}</span>
+                          <span className="text-xs text-gray-300 font-bold">{size.name || 'New Size'} Materials</span>
+                          <span className="text-xs text-black font-bold">Cost: P{calcRecipeCost(size.recipe).toFixed(2)}</span>
                         </div>
                         {(size.recipe || []).map((mat, i) => (
                           <div key={i} className="flex items-center gap-2 mb-2 text-sm">
                             <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
-                            <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, idx)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-white" />
-                            <span className="text-gray-500 w-8">{mat.unit}</span>
+                            <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, idx)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-black" />
+                            <span className="text-dark w-8">{mat.unit}</span>
                             <button type="button" onClick={() => removeMaterial(i, idx)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
                           </div>
                         ))}
                         <div className="mt-3">
-                          <div className="text-[10px] text-gray-500 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
+                          <div className="text-[10px] text-gray-400 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
                           <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
                             {inventory.length === 0 ? (
                               <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
                             ) : (
                               inventory.map(inv => (
                                 <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, idx)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
-                                  <span className="truncate pr-2">+ {inv.itemName}</span>
+                                  <span className="truncate pr-2 text-black">+ {inv.itemName}</span>
                                   <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
                                 </button>
                               ))
@@ -2433,7 +2435,7 @@ const submitPhysicalCounts = async () => {
                   ))}
                 </div>
                 <div className="flex gap-2 mt-6">
-                  <button type="submit" className="flex-1 bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 shadow-lg shadow-accent/20 transition uppercase tracking-wider">
+                  <button type="submit" className="flex-1 bg-accent text-dark font-black py-4 rounded-lg hover:bg-dark hover:text-accent shadow-lg shadow-accent/20 transition uppercase tracking-wider">
                     {editingProduct ? 'Update Product' : 'Save Product'}
                   </button>
                   {editingProduct && (

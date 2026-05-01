@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 
 //const API_URL = 'http://192.168.100.2:5002'; // Use your local or render URL
 const API_URL = 'https://local-based-menu.onrender.com';
+//const API_URL = 'http://localhost:3000';
+//const API_URL='http://192.168.30.131:3000';
 export default function SuperAdminPanel() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginForm, setLoginForm] = useState({ name: '', password: '' });
