@@ -15,7 +15,10 @@ const server = http.createServer(app);
 const allowedOrigins = [
   "http://localhost:3000",
   "http://192.168.100.2:3000",
-  "http://172.19.32.1:3000",       // <-- Add your new local IP here!
+  "http://172.19.32.1:3000",      
+  "http://172.20.10.6:3000",
+  "http://10.201.1.204:3000", // <-- Add your new local IP here!
+  "http://192.168.30.131:3000",
   process.env.FRONTEND_URL
 ];
 
