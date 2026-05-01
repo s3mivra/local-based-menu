@@ -99,6 +99,30 @@ export default function AdminDashboard() {
   const [editPriceId, setEditPriceId] = useState(null);
   const [editPriceVal, setEditPriceVal] = useState('');
 
+  // --- ITEM-LEVEL DISCOUNT TRACKING ---
+  const [discountedItems, setDiscountedItems] = useState({}); // Tracks selected items per order
+
+  const getSelectedItems = (order) => {
+    if (discountedItems[order._id] !== undefined) return discountedItems[order._id];
+    return order.items.map((_, i) => i); // Default: All items selected
+  };
+
+  const toggleItemDiscount = (orderId, idx) => {
+    setDiscountedItems(prev => {
+      const current = prev[orderId] || [];
+      if (current.includes(idx)) return { ...prev, [orderId]: current.filter(i => i !== idx) };
+      return { ...prev, [orderId]: [...current, idx] };
+    });
+  };
+
+  const toggleAllItems = (orderId, itemCount) => {
+    setDiscountedItems(prev => {
+      const current = prev[orderId] || [];
+      if (current.length === itemCount) return { ...prev, [orderId]: [] }; // Deselect all
+      return { ...prev, [orderId]: Array.from({length: itemCount}, (_, i) => i) }; // Select all
+    });
+  };
+
   const handleInlinePriceUpdate = async (productId, sizeIndex) => {
     const product = products.find(p => p._id === productId);
     if (!product) return;
@@ -357,9 +381,36 @@ export default function AdminDashboard() {
   };
   const toggleVat = async (orderId, currentVatRate) => { await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isVatExempt: currentVatRate > 0 }) }); };
   const applyDiscount = async (orderId, isRemoving = false) => {
+    const order = orders.find(o => o._id === orderId);
     const percent = isRemoving ? 0 : parseFloat(discountInputs[orderId] || 0);
     if (percent < 0 || percent > 100) return alert('Discount must be between 0% and 100%');
-    await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ discountPercent: percent }) });
+    
+    // Grab the ticked checkboxes
+    const selectedIndices = isRemoving ? [] : getSelectedItems(order);
+
+    // Auto-detect SC/PWD to trigger isolated VAT Exemption
+    let isVatExempt = false;
+    let discountType = 'None';
+    const selectedVal = discountInputs[orderId];
+    const selectedObj = discounts.find(d => d.percentage.toString() === selectedVal);
+    
+    if (selectedObj && (selectedObj.name.toLowerCase().includes('pwd') || selectedObj.name.toLowerCase().includes('senior'))) {
+      isVatExempt = true;
+      discountType = 'SC/PWD';
+    } else if (percent > 0) {
+      discountType = 'Promo';
+    }
+
+    await fetch(`${API_URL}/api/orders/${orderId}`, { 
+      method: 'PUT', 
+      headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify({ 
+        discountPercent: percent,
+        isVatExempt,
+        discountType,
+        discountedIndices: selectedIndices 
+      }) 
+    });
     if (isRemoving) setDiscountInputs(prev => ({ ...prev, [orderId]: '' }));
   };
   const archiveDay = async () => {
@@ -1337,6 +1388,7 @@ const submitPhysicalCounts = async () => {
       )}
 
       {/* --- ACTIVE ORDERS TAB (Kitchen View) --- */}
+      {/* --- ACTIVE ORDERS TAB (Kitchen View) --- */}
       {activeTab === 'orders' && (
         <div className="w-full">
           <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
@@ -1353,53 +1405,85 @@ const submitPhysicalCounts = async () => {
             ) : filteredOrders.map(order => (
               <div key={order._id} className="bg-surface rounded-xl p-5 border border-gray-800 flex flex-col shadow-lg">
                 <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
-                  
                   <h2 className="text-lg font-black flex items-center gap-2 flex-wrap">
                     <span>{order.orderNumber}</span>
-                    
-                    {/* --- ADD THIS NEW BLOCK FOR THE NAME --- */}
                     {order.customerName && (
                       <span className="text-sm bg-gray-800 text-gray-200 px-2 py-0.5 rounded border border-gray-700">
                         {order.customerName}
                       </span>
                     )}
-                    {/* --------------------------------------- */}
-
                     {order.table && <span className="text-sm font-bold text-accent uppercase tracking-wider">({order.table})</span>}
                   </h2>
-
                   <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${order.status === 'Pending' ? 'bg-red-900/50 text-red-400' : order.status === 'Preparing' ? 'bg-yellow-900/50 text-accent' : order.status === 'Completed' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-400'}`}>{order.status}</span>
                 </div>
-                
+
+                {/* --- UPDATED: ITEMIZED SELECTION UI --- */}
                 <div className="space-y-2 mb-4 flex-1">
-                  {order.items.map((item, idx) => (
-                    <div key={idx} className="flex justify-between text-sm">
-                      <span className="font-semibold text-gray-200">{item.quantity}x {item.name}</span>
-                      <span className="text-gray-500">P{(item.price * item.quantity).toFixed(2)}</span>
+                  {order.items.map((item, idx) => {
+                    // Default to selected if no specific selection has been made yet
+                    const currentSelection = discountedItems[order._id];
+                    const isSelected = currentSelection ? currentSelection.includes(idx) : true;
+                    
+                    return (
+                      <div key={idx} className="flex justify-between items-center text-sm mb-1">
+                        <div className="flex items-center gap-2">
+                          {(order.status === 'Pending' || order.status === 'Preparing') && (
+                            <input 
+                              type="checkbox" 
+                              checked={isSelected} 
+                              onChange={() => toggleItemDiscount(order._id, idx)} 
+                              className="w-3 h-3 accent-accent cursor-pointer rounded border-gray-600 focus:ring-accent"
+                            />
+                          )}
+                          <span className={`font-semibold ${isSelected ? 'text-gray-200' : 'text-gray-500'}`}>
+                            {item.quantity}x {item.name}
+                          </span>
+                        </div>
+                        <span className="text-gray-400">P{(item.price * item.quantity).toFixed(2)}</span>
+                      </div>
+                    );
+                  })}
+                  
+                  {/* Select All / Deselect All Button */}
+                  {(order.status === 'Pending' || order.status === 'Preparing') && order.items.length > 1 && (
+                    <div className="pt-2 border-t border-gray-800/50 flex justify-start">
+                      <button 
+                        onClick={() => toggleAllItems(order._id, order.items.length)}
+                        className="text-[10px] text-gray-400 hover:text-accent font-bold uppercase tracking-wider transition bg-dark px-2 py-1 rounded border border-gray-700 hover:border-accent"
+                      >
+                        {(discountedItems[order._id] === undefined || discountedItems[order._id].length === order.items.length) ? 'Deselect All' : 'Select All'}
+                      </button>
                     </div>
-                  ))}
+                  )}
                 </div>
+                {/* --------------------------------------- */}
 
                 <div className="bg-dark/50 p-3 rounded-lg border border-gray-800/50 space-y-2 mb-4">
                   <div className="flex justify-between text-xs text-gray-400">
-                    <span>Subtotal:</span><span>P{order.subtotal.toFixed(2)}</span>
+                    <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between items-center text-xs text-gray-400">
+                  
+                 <div className="flex justify-between items-center text-xs text-gray-400">
                     <div className="flex items-center gap-2">
-                      <span>VAT ({(order.vatRate * 100).toFixed(0)}%):</span>
+                      <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
                       {(order.status === 'Pending' || order.status === 'Preparing') && (
-                        <button onClick={() => toggleVat(order._id, order.vatRate)} className="bg-gray-700 hover:bg-gray-600 text-white px-1.5 py-0.5 rounded text-[9px] uppercase font-bold">{order.vatRate > 0 ? 'Off' : 'On'}</button>
+                        <button 
+                          onClick={() => toggleVat(order._id, order.vatRate)} 
+                          className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-2 py-0.5 rounded text-[9px] uppercase font-bold transition"
+                        >
+                          {order.vatRate > 0 ? 'Off' : 'On'}
+                        </button>
                       )}
                     </div>
                     <span>P{order.vatAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center text-xs text-gray-400 border-b border-gray-800/50 pb-2">
-                    <div className="flex items-center gap-2">
-                      <span>Discount ({order.discountPercent || 0}%):</span>
+                    <div className="flex items-center gap-2 w-full pr-2">
+                      <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
                       {(order.status === 'Pending' || order.status === 'Preparing') && (
-                        <div className="flex gap-1 items-center">
+                        <div className="flex gap-1 items-center flex-1 justify-end">
                           <select 
-                            className="w-32 bg-dark border border-gray-600 rounded px-1 text-[10px] text-white outline-none h-6"
+                            className="w-full max-w-[120px] bg-dark border border-gray-600 rounded px-1 text-[10px] text-white outline-none h-6"
                             value={discountInputs[order._id] || ''}
                             onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
                           >
@@ -1417,13 +1501,21 @@ const submitPhysicalCounts = async () => {
                             />
                           )}
                           
-                          <button onClick={() => applyDiscount(order._id)} className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-1.5 rounded font-bold transition h-6">✓</button>
-                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-900/50 text-red-400 px-1.5 rounded font-bold h-6">✕</button>}
+                          <button onClick={() => applyDiscount(order._id)} className="bg-gray-700 hover:bg-accent hover:text-dark text-white px-2 rounded font-bold transition h-6">✓</button>
+                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-900/50 text-red-400 px-2 rounded font-bold h-6">✕</button>}
                         </div>
                       )}
                     </div>
-                    <span className="text-green-400">-P{(order.discount || 0).toFixed(2)}</span>
+                    <span className="text-red-400 whitespace-nowrap">-P{(order.discount || 0).toFixed(2)}</span>
                   </div>
+                  
+                  {order.discountType && order.discountType !== 'None' && (
+                     <div className="flex justify-between text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                       <span>Type:</span>
+                       <span className={order.discountType === 'SC/PWD' ? 'text-accent' : 'text-gray-400'}>{order.discountType}</span>
+                     </div>
+                  )}
+
                   <div className="flex justify-between font-black text-lg pt-1">
                     <span>Total:</span><span className="text-accent">P{order.total.toFixed(2)}</span>
                   </div>

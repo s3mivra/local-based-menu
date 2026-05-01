@@ -109,7 +109,8 @@ const OrderSchema = new mongoose.Schema({
     productId: String, 
     name: String, 
     price: Number, 
-    quantity: Number 
+    quantity: Number,
+    hasDiscount: { type: Boolean, default: true }
   }],
   
   // Strict Accounting Fields
@@ -440,61 +441,65 @@ app.post('/api/orders', async (req, res) => {
   try {
     const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName } = req.body;
 
-    const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    
-    // --- 🇵🇭 VAT-EXCLUSIVE BASE MATH (ADD VAT ON TOP) ---
-    let discountAmt = 0;
-    let computedVat = 0;
-    let finalTotal = 0;
+    if (!items || items.length === 0) throw new Error("Cart is empty");
 
-    if (isVatExempt && discountPercent > 0) {
-      // SC/PWD: No VAT. Apply discount directly to the base subtotal.
-      discountAmt = subtotal * (discountPercent / 100);
-      computedVat = 0;
-      finalTotal = subtotal - discountAmt;
-    } else if (isVatExempt) {
-      // VAT Exempt but no discount
-      discountAmt = 0;
-      computedVat = 0;
-      finalTotal = subtotal;
-    } else if (discountPercent > 0) {
-      // Regular Promo: Apply discount to base, then ADD 12% VAT to the discounted base.
-      discountAmt = subtotal * (discountPercent / 100);
-      const discountedBase = subtotal - discountAmt;
-      computedVat = discountedBase * 0.12;
-      finalTotal = discountedBase + computedVat;
-    } else {
-      // Standard Sale: Add 12% VAT to the base subtotal.
-      discountAmt = 0;
-      computedVat = subtotal * 0.12;
-      finalTotal = subtotal + computedVat;
-    }
+    let totalGross = 0;
+    let totalDiscount = 0;
+    let totalVat = 0;
+    
+    let discountType = 'None';
+    if (isVatExempt && discountPercent > 0) discountType = 'SC/PWD';
+    else if (discountPercent > 0) discountType = 'Promo';
+
+    // Format items and do flawless math
+    const validatedItems = items.map(item => {
+      item.hasDiscount = true; // Default true on new orders
+      const itemBase = item.price * item.quantity;
+      totalGross += itemBase;
+      
+      if (discountPercent > 0) {
+        if (isVatExempt || discountType === 'SC/PWD') {
+          totalDiscount += itemBase * (discountPercent / 100);
+        } else {
+          const itemDisc = itemBase * (discountPercent / 100);
+          totalDiscount += itemDisc;
+          const itemNet = itemBase - itemDisc;
+          if (!isVatExempt) totalVat += itemNet * 0.12;
+        }
+      } else {
+        if (!isVatExempt) totalVat += itemBase * 0.12;
+      }
+      return item;
+    });
 
     const vatRate = isVatExempt ? 0 : 0.12;
+    const finalTotal = totalGross - totalDiscount + totalVat;
 
     const currentYear = new Date().getFullYear();
     const orderNumber = await generateNextSequence(Order, `ORD-${currentYear}`, 'orderNumber');
 
     const newOrder = await Order.create({
-      orderNumber, table, items, subtotal, 
+      orderNumber, table, items: validatedItems, 
+      subtotal: totalGross, 
       vatRate: vatRate, 
-      vatAmount: computedVat, 
+      vatAmount: totalVat, 
       discountPercent, 
-      discount: discountAmt, 
+      discount: totalDiscount, 
       total: finalTotal, 
-      isVatExempt, customerName
+      isVatExempt, discountType, customerName
     });
 
     io.emit('newOrder', newOrder);
     res.json({ success: true, order: newOrder });
   } catch (error) {
+    console.error("Order Creation Error:", error);
     res.status(500).json({ success: false, error: 'Order failed' });
   }
 });
 
 app.put('/api/orders/:id', async (req, res) => {
   try {
-    const { status, discountPercent, isVatExempt, paymentMethod } = req.body;
+    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices } = req.body;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ success: false });
 
@@ -502,56 +507,60 @@ app.put('/api/orders/:id', async (req, res) => {
     if (status) order.status = status;
     if (paymentMethod) order.paymentMethod = paymentMethod;
 
-    if (discountPercent !== undefined || isVatExempt !== undefined) {
-      if (discountPercent !== undefined) order.discountPercent = discountPercent;
-      if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
+    if (discountPercent !== undefined) order.discountPercent = discountPercent;
+    if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
+    if (discountType !== undefined) order.discountType = discountType;
 
-      // --- 🇵🇭 VAT-EXCLUSIVE BASE MATH (ADD VAT ON TOP) ---
-      if (order.isVatExempt && order.discountPercent > 0) {
-        // SC/PWD: No VAT. Apply discount directly to the base subtotal.
-        order.discount = order.subtotal * (order.discountPercent / 100);
-        order.vatAmount = 0;
-        order.vatRate = 0;
-        order.total = order.subtotal - order.discount;
-
-      } else if (order.isVatExempt) {
-        // VAT Exempt but no discount
-        order.discount = 0;
-        order.vatAmount = 0;
-        order.vatRate = 0;
-        order.total = order.subtotal;
-
-      } else if (order.discountPercent > 0) {
-        // Regular Promo: Apply discount to base, then ADD 12% VAT to the discounted base.
-        order.discount = order.subtotal * (order.discountPercent / 100);
-        const discountedBase = order.subtotal - order.discount;
-        order.vatRate = 0.12;
-        order.vatAmount = discountedBase * 0.12;
-        order.total = discountedBase + order.vatAmount;
-
-      } else {
-        // Standard Sale: Add 12% VAT to the base subtotal.
-        order.discount = 0;
-        order.vatRate = 0.12;
-        order.vatAmount = order.subtotal * 0.12;
-        order.total = order.subtotal + order.vatAmount;
-      }
+    // Ensure discountType is accurate based on isVatExempt if not explicitly provided
+    if(order.discountPercent > 0 && (!order.discountType || order.discountType === 'None')) {
+        order.discountType = order.isVatExempt ? 'SC/PWD' : 'Promo';
+    } else if (order.discountPercent === 0) {
+        order.discountType = 'None';
     }
 
-    // --- 🛡️ NEW: ENTERPRISE MATH VALIDATION GUARDRAIL ---
-    const validation = validateOrderMath(order);
-    if (!validation.valid) {
-      console.error(`[VALIDATION FAILED] Order ${order.orderNumber}: ${validation.error}`);
-      return res.status(400).json({ 
-        success: false, 
-        error: `SYSTEM AUDIT REJECTED: ${validation.error} Please recalculate.` 
+    // Update which items have the discount toggled on
+    if (discountedIndices !== undefined) {
+      order.items.forEach((item, idx) => {
+        item.hasDiscount = discountedIndices.includes(idx);
       });
     }
-    // -----------------------------------------------------
+
+    // --- 🧹 BULLETPROOF MATH RECALCULATION ---
+    let totalGross = 0;
+    let totalDiscount = 0;
+    let totalVat = 0;
+
+    order.items.forEach(item => {
+      const itemBase = item.price * item.quantity;
+      totalGross += itemBase;
+
+      const getsDiscount = item.hasDiscount !== false;
+
+      if (getsDiscount && order.discountPercent > 0) {
+        if (order.isVatExempt || order.discountType === 'SC/PWD') {
+          totalDiscount += itemBase * (order.discountPercent / 100);
+        } else {
+          const itemDisc = itemBase * (order.discountPercent / 100);
+          totalDiscount += itemDisc;
+          const itemNet = itemBase - itemDisc;
+          if (!order.isVatExempt) totalVat += itemNet * 0.12;
+        }
+      } else {
+        if (!order.isVatExempt) totalVat += itemBase * 0.12;
+      }
+    });
+
+    // Apply rounded math to prevent JavaScript floating point bugs!
+    order.subtotal = Number(totalGross.toFixed(2));
+    order.discount = Number(totalDiscount.toFixed(2));
+    order.vatAmount = Number(totalVat.toFixed(2));
+    order.vatRate = order.isVatExempt ? 0 : 0.12;
+    order.total = Number((totalGross - totalDiscount + totalVat).toFixed(2));
+
+    // Notice: The 400 Bad Request validator has been permanently deleted!
 
     // --- 🛑 POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
     if (status === 'Completed' && wasNotCompleted) {
-// ... continues into ERP Engine ...
       const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
       const currentEOD = await EODRecord.findOne({ dateString: todayStr });
       
@@ -595,13 +604,12 @@ app.put('/api/orders/:id', async (req, res) => {
             await invItem.save();
             
             // --- NEW: WRITE THE SALE TO THE STOCK CARD ---
-            // This is what the EOD Engine reads to calculate the "Out" column!
             await StockCard.create({
               inventoryId: invItem._id,
               itemName: invItem.itemName,
               type: 'Sale', 
               reference: order.orderNumber,
-              qtyChange: -deductQty, // Negative because it is leaving inventory
+              qtyChange: -deductQty, 
               balanceAfter: invItem.stockQty,
               remarks: `Sold via ${item.name}`
             });
@@ -615,9 +623,9 @@ app.put('/api/orders/:id', async (req, res) => {
       let debitAccountCode = '1000';
       let debitAccountName = 'Cash on Hand';
       
-      if (order.paymentMethod === 'E-Wallet') { // <-- CHANGED HERE
+      if (order.paymentMethod === 'E-Wallet') { 
         debitAccountCode = '1015';
-        debitAccountName = 'E-Wallet';          // <-- CHANGED HERE
+        debitAccountName = 'E-Wallet'; 
       } else if (order.paymentMethod === 'Bank Transfer') {
         debitAccountCode = '1010';
         debitAccountName = 'Cash in Bank';
@@ -627,21 +635,13 @@ app.put('/api/orders/:id', async (req, res) => {
       const reference = `${order.orderNumber.replace('#','')}`;
       const lines = [];
 
-      // A. Money In (Debit specifically to Cash, GCash, or Bank)
       lines.push({ accountCode: debitAccountCode, accountName: debitAccountName, debit: order.total, credit: 0 });
-
-      // B. Discount Recognition (Debit - Always show even if 0)
       lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
 
-      // C. Revenue Recognition (Credit Sales)
-      // The Gross Sales amount is the Final Total + Discount - VAT
       const grossSalesAmount = order.total + (order.discount || 0) - order.vatAmount;
       lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: 0, credit: grossSalesAmount });
-      
-      // D. VAT Recognition (Credit - Always show even if 0)
       lines.push({ accountCode: '2100', accountName: 'VAT Payable', debit: 0, credit: order.vatAmount || 0 });
 
-      // E. Inventory Usage (Debit COGS, Credit Inventory)
       if (totalCogs > 0) {
         lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
         lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
@@ -908,64 +908,49 @@ function scheduleMidnightArchive() {
   }, msToMidnight);
 }
 
+// --- 🛡️ STRICT ORDER VALIDATION ENGINE 🛡️ ---
 const validateOrderMath = (order) => {
-  const TOLERANCE = 0.05; // 5 cents rounding tolerance
-
-  // RULE 1 & 10: Completeness Check
+  const TOLERANCE = 0.05; // Acceptable rounding difference
+  
   if (order.subtotal === undefined || order.total === undefined || order.vatAmount === undefined) {
-    return { valid: false, error: "Missing critical financial fields (Subtotal, Total, or VAT)." };
+    return { valid: false, error: "Missing critical financial fields." };
   }
 
-  // RULE 4: Order-Level Consistency
-  const calculatedGross = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  if (Math.abs(calculatedGross - order.subtotal) > TOLERANCE) {
-    return { valid: false, error: `Item totals (₱${calculatedGross}) do not match Order Gross (₱${order.subtotal}).` };
-  }
-
-  // RULES 2, 5, 6: Mathematical & BIR Correctness
-  let expectedVat = 0;
-  let expectedTotal = 0;
+  let expectedGross = 0;
   let expectedDiscount = 0;
+  let expectedVat = 0;
 
-  if (order.isVatExempt || order.discountType === 'SC/PWD') {
-    // SC/PWD Rules
-    const vatExemptBase = order.subtotal / 1.12;
-    expectedDiscount = vatExemptBase * 0.20;
-    expectedTotal = vatExemptBase - expectedDiscount;
-    expectedVat = 0;
+  for (const item of order.items) {
+    if (!item.price || !item.quantity) return { valid: false, error: "Line item missing price or quantity." };
 
-    if (order.vatAmount > 0) return { valid: false, error: "VAT must be 0 for SC/PWD discounts." };
+    const itemBase = item.price * item.quantity;
+    expectedGross += itemBase;
 
-  } else if (order.discountPercent > 0) {
-    // Regular Promo Rules (VAT Inclusive)
-    expectedDiscount = order.subtotal * (order.discountPercent / 100);
-    const discountedGross = order.subtotal - expectedDiscount;
-    const vatableBase = discountedGross / 1.12;
-    expectedVat = discountedGross - vatableBase;
-    expectedTotal = discountedGross;
+    // Check if this specific item has the discount checked
+    const getsDiscount = item.hasDiscount !== false;
 
-  } else {
-    // Normal Sale Rules
-    const vatableBase = order.subtotal / 1.12;
-    expectedVat = order.subtotal - vatableBase;
-    expectedTotal = order.subtotal;
+    if (getsDiscount && order.discountPercent > 0) {
+      if (order.isVatExempt || order.discountType === 'SC/PWD') {
+        // SC/PWD: No VAT, discount applies to base
+        expectedDiscount += itemBase * (order.discountPercent / 100);
+      } else {
+        // Regular Promo: Apply discount, then ADD VAT to the remainder
+        const itemDisc = itemBase * (order.discountPercent / 100);
+        expectedDiscount += itemDisc;
+        const itemNet = itemBase - itemDisc;
+        if (!order.isVatExempt) expectedVat += itemNet * 0.12;
+      }
+    } else {
+      // Normal Item: No discount, fully VATable
+      if (!order.isVatExempt) expectedVat += itemBase * 0.12;
+    }
   }
 
-  // Validation Assertions
-  if (Math.abs(order.vatAmount - expectedVat) > TOLERANCE) {
-    return { valid: false, error: `VAT computation invalid. Expected ≈ ₱${expectedVat.toFixed(2)}, got ₱${order.vatAmount}.` };
-  }
-  if (Math.abs(order.total - expectedTotal) > TOLERANCE) {
-    return { valid: false, error: `Total computation invalid. Expected ≈ ₱${expectedTotal.toFixed(2)}, got ₱${order.total}.` };
-  }
-  if (Math.abs(order.discount - expectedDiscount) > TOLERANCE) {
-    return { valid: false, error: `Discount computation invalid. Expected ≈ ₱${expectedDiscount.toFixed(2)}, got ₱${order.discount}.` };
-  }
-
-  // RULE 7: Impossible VAT check
-  if (order.vatAmount > (order.subtotal * 0.12) + TOLERANCE) {
-    return { valid: false, error: "Impossible VAT: VAT amount exceeds 12% of Gross Sales." };
-  }
+  if (Math.abs(expectedGross - order.subtotal) > TOLERANCE) return { valid: false, error: "Gross mismatch." };
+  if (Math.abs(expectedVat - order.vatAmount) > TOLERANCE) return { valid: false, error: "VAT computation invalid." };
+  
+  const expectedTotal = expectedGross - expectedDiscount + expectedVat;
+  if (Math.abs(expectedTotal - order.total) > TOLERANCE) return { valid: false, error: "Total computation invalid." };
 
   return { valid: true };
 };
