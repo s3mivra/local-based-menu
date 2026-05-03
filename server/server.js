@@ -19,6 +19,8 @@ const allowedOrigins = [
   "http://172.20.10.6:3000",
   "http://10.201.1.204:3000", // <-- Add your new local IP here!
   "http://192.168.30.131:3000",
+  "http://192.168.254.116:3000",
+  "http://192.168.68.127:3000",
   process.env.FRONTEND_URL
 ];
 
@@ -129,7 +131,12 @@ const OrderSchema = new mongoose.Schema({
   discount: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
   isVatExempt: { type: Boolean, default: false },
-  isArchived: { type: Boolean, default: false }
+  isArchived: { type: Boolean, default: false },
+  // --- NEW ENTERPRISE FIELDS ---
+  cashier: { type: String, default: 'System' },
+  isComplimentary: { type: Boolean, default: false },
+  employeeName: { type: String, default: '' },
+  voidReason: { type: String, default: '' } // Tracks if a void was 'Spoiled' or 'Restocked'
 }, { timestamps: true });
 const Order = mongoose.model('Order', OrderSchema);
 
@@ -442,7 +449,8 @@ app.get('/api/orders/:id', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName } = req.body;
+    // ADD isComplimentary, employeeName, and cashier here
+    const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName, isComplimentary = false, employeeName = '', cashier = 'Admin' } = req.body;
 
     if (!items || items.length === 0) throw new Error("Cart is empty");
 
@@ -451,45 +459,47 @@ app.post('/api/orders', async (req, res) => {
     let totalVat = 0;
     
     let discountType = 'None';
-    if (isVatExempt && discountPercent > 0) discountType = 'SC/PWD';
+    if (isComplimentary) discountType = 'Complimentary';
+    else if (isVatExempt && discountPercent > 0) discountType = 'SC/PWD';
     else if (discountPercent > 0) discountType = 'Promo';
 
-    // Format items and do flawless math
     const validatedItems = items.map(item => {
-      item.hasDiscount = true; // Default true on new orders
+      item.hasDiscount = true; 
       const itemBase = item.price * item.quantity;
       totalGross += itemBase;
       
-      if (discountPercent > 0) {
+      if (isComplimentary) {
+        totalDiscount += itemBase; 
+      } else if (discountPercent > 0) {
         if (isVatExempt || discountType === 'SC/PWD') {
-          totalDiscount += itemBase * (discountPercent / 100);
+          const vatExemptBase = itemBase / 1.12;
+          const scDisc = vatExemptBase * (discountPercent / 100);
+          totalDiscount += (itemBase - (vatExemptBase - scDisc));
         } else {
           const itemDisc = itemBase * (discountPercent / 100);
           totalDiscount += itemDisc;
           const itemNet = itemBase - itemDisc;
-          if (!isVatExempt) totalVat += itemNet * 0.12;
+          if (!isVatExempt) totalVat += (itemNet - (itemNet / 1.12));
         }
       } else {
-        if (!isVatExempt) totalVat += itemBase * 0.12;
+        if (!isVatExempt) totalVat += (itemBase - (itemBase / 1.12));
       }
       return item;
     });
 
-    const vatRate = isVatExempt ? 0 : 0.12;
-    const finalTotal = totalGross - totalDiscount + totalVat;
+    const vatRate = (isVatExempt || isComplimentary) ? 0 : 0.12;
+    const finalTotal = totalGross - totalDiscount;
 
     const currentYear = new Date().getFullYear();
     const orderNumber = await generateNextSequence(Order, `ORD-${currentYear}`, 'orderNumber');
 
     const newOrder = await Order.create({
       orderNumber, table, items: validatedItems, 
-      subtotal: totalGross, 
-      vatRate: vatRate, 
-      vatAmount: totalVat, 
-      discountPercent, 
-      discount: totalDiscount, 
-      total: finalTotal, 
-      isVatExempt, discountType, customerName
+      subtotal: totalGross, vatRate: vatRate, vatAmount: totalVat, 
+      discountPercent: isComplimentary ? 100 : discountPercent, 
+      discount: totalDiscount, total: finalTotal, 
+      isVatExempt, discountType, customerName,
+      isComplimentary, employeeName, cashier // <-- Save the new data
     });
 
     io.emit('newOrder', newOrder);
@@ -528,7 +538,7 @@ app.put('/api/orders/:id', async (req, res) => {
       });
     }
 
-    // --- 🧹 BULLETPROOF MATH RECALCULATION ---
+    // --- 🧹 BULLETPROOF MATH RECALCULATION (VAT-INCLUSIVE) ---
     let totalGross = 0;
     let totalDiscount = 0;
     let totalVat = 0;
@@ -539,28 +549,31 @@ app.put('/api/orders/:id', async (req, res) => {
 
       const getsDiscount = item.hasDiscount !== false;
 
-      if (getsDiscount && order.discountPercent > 0) {
+      if (order.isComplimentary) {
+        totalDiscount += itemBase;
+      } else if (getsDiscount && order.discountPercent > 0) {
         if (order.isVatExempt || order.discountType === 'SC/PWD') {
-          totalDiscount += itemBase * (order.discountPercent / 100);
+          const vatExemptBase = itemBase / 1.12;
+          const scDisc = vatExemptBase * (order.discountPercent / 100);
+          totalDiscount += (itemBase - (vatExemptBase - scDisc));
         } else {
           const itemDisc = itemBase * (order.discountPercent / 100);
           totalDiscount += itemDisc;
           const itemNet = itemBase - itemDisc;
-          if (!order.isVatExempt) totalVat += itemNet * 0.12;
+          if (!order.isVatExempt) totalVat += (itemNet - (itemNet / 1.12));
         }
       } else {
-        if (!order.isVatExempt) totalVat += itemBase * 0.12;
+        if (!order.isVatExempt) totalVat += (itemBase - (itemBase / 1.12));
       }
     });
 
-    // Apply rounded math to prevent JavaScript floating point bugs!
     order.subtotal = Number(totalGross.toFixed(2));
     order.discount = Number(totalDiscount.toFixed(2));
     order.vatAmount = Number(totalVat.toFixed(2));
-    order.vatRate = order.isVatExempt ? 0 : 0.12;
-    order.total = Number((totalGross - totalDiscount + totalVat).toFixed(2));
+    order.vatRate = (order.isVatExempt || order.isComplimentary) ? 0 : 0.12;
+    order.total = Number((totalGross - totalDiscount).toFixed(2));
 
-    // Notice: The 400 Bad Request validator has been permanently deleted!
+    // Notice: The 400 Bad Request validator has been permanently deleted from here!
 
     // --- 🛑 POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
     if (status === 'Completed' && wasNotCompleted) {
@@ -638,16 +651,21 @@ app.put('/api/orders/:id', async (req, res) => {
       const reference = `${order.orderNumber.replace('#','')}`;
       const lines = [];
 
-      lines.push({ accountCode: debitAccountCode, accountName: debitAccountName, debit: order.total, credit: 0 });
-      lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
-
-      const grossSalesAmount = order.total + (order.discount || 0) - order.vatAmount;
-      lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: 0, credit: grossSalesAmount });
-      lines.push({ accountCode: '2100', accountName: 'VAT Payable', debit: 0, credit: order.vatAmount || 0 });
-
-      if (totalCogs > 0) {
-        lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
+      if (order.isComplimentary) {
+        // Debit Expense, Credit Inventory (No Cash/Revenue involved)
+        lines.push({ accountCode: '6100', accountName: 'Complimentary Expense', debit: totalCogs, credit: 0 });
         lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
+      } else {
+        lines.push({ accountCode: debitAccountCode, accountName: debitAccountName, debit: order.total, credit: 0 });
+        lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
+        const grossSalesAmount = order.total + (order.discount || 0) - order.vatAmount;
+        lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: 0, credit: grossSalesAmount });
+        lines.push({ accountCode: '2100', accountName: 'VAT Payable', debit: 0, credit: order.vatAmount || 0 });
+
+        if (totalCogs > 0) {
+          lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
+          lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
+        }
       }
 
       const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
@@ -669,6 +687,91 @@ app.put('/api/orders/:id', async (req, res) => {
   }
 });
 
+// --- 🚨 SAFE VOID & REFUND ENGINE 🚨 ---
+app.post('/api/orders/:id/void', async (req, res) => {
+  try {
+    const { reason, adminName } = req.body; 
+    const order = await Order.findById(req.params.id);
+    
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    if (order.status !== 'Completed') return res.status(400).json({ success: false, error: 'Only completed orders can be financially voided.' });
+
+    // 1. Reverse the Revenue (Give money back)
+    let cashAccount = '1000';
+    if (order.paymentMethod === 'E-Wallet') cashAccount = '1015';
+    if (order.paymentMethod === 'Bank Transfer') cashAccount = '1010';
+
+    const lines = [];
+    const grossSalesAmount = order.total + (order.discount || 0) - order.vatAmount;
+    
+    if (!order.isComplimentary) {
+      lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: grossSalesAmount, credit: 0 });
+      lines.push({ accountCode: '2100', accountName: 'VAT Payable', debit: order.vatAmount || 0, credit: 0 });
+      lines.push({ accountCode: cashAccount, accountName: 'Cash on Hand', debit: 0, credit: order.total });
+      if (order.discount > 0) lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: 0, credit: order.discount });
+    } else {
+      lines.push({ accountCode: '6100', accountName: 'Complimentary Expense', debit: 0, credit: order.subtotal });
+    }
+
+    // 2. Handle Inventory
+    let totalCogs = 0;
+    for (const item of order.items) {
+      let product = await Product.findById(item.productId);
+      if (!product) continue;
+      
+      let recipeToUse = product.baseRecipe || [];
+      const sizeMatch = item.name.match(/\(([^)]+)\)$/); 
+      if (sizeMatch) {
+        const sizeObj = product.sizes?.find(s => s.name === sizeMatch[1]);
+        if (sizeObj && sizeObj.recipe?.length > 0) recipeToUse = sizeObj.recipe;
+      }
+
+      for (const ing of recipeToUse) {
+        const invItem = await Inventory.findById(ing.invId);
+        if (invItem) {
+          const qtyUsed = ing.qty * item.quantity;
+          totalCogs += (invItem.unitCost * qtyUsed);
+          
+          if (reason === 'Restock') {
+            invItem.stockQty += qtyUsed;
+            await invItem.save();
+            await StockCard.create({
+              inventoryId: invItem._id, itemName: invItem.itemName, type: 'Adjustment', 
+              reference: `VOID-${order.orderNumber}`, qtyChange: qtyUsed, balanceAfter: invItem.stockQty, remarks: 'Voided - Not Made'
+            });
+          }
+        }
+      }
+    }
+
+    if (totalCogs > 0) {
+      if (reason === 'Restock') {
+        lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: totalCogs, credit: 0 });
+        if (!order.isComplimentary) lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
+      } else if (reason === 'Spoilage') {
+        lines.push({ accountCode: '5100', accountName: 'Spoilage & Variance Expense', debit: totalCogs, credit: 0 });
+        if (!order.isComplimentary) lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
+      }
+    }
+
+    const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
+    const totalCredit = lines.reduce((sum, line) => sum + line.credit, 0);
+
+    await JournalEntry.create({ reference: `VOID-${order.orderNumber}`, description: `VOID (${reason}) by ${adminName}`, lines, totalDebit, totalCredit });
+
+    order.status = 'Voided';
+    order.voidReason = reason;
+    await order.save();
+    
+    io.emit('erpUpdated');
+    io.emit('orderUpdated', order);
+    res.json({ success: true, order });
+
+  } catch (error) {
+    console.error("Void Error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 // --- UNLOCK / REOPEN EOD (ADMIN ONLY) ---
 app.post('/api/inventory/eod/reopen', async (req, res) => {
   try {
@@ -911,9 +1014,9 @@ function scheduleMidnightArchive() {
   }, msToMidnight);
 }
 
-// --- 🛡️ STRICT ORDER VALIDATION ENGINE 🛡️ ---
+// --- 🛡️ STRICT ORDER VALIDATION ENGINE (VAT-INCLUSIVE) 🛡️ ---
 const validateOrderMath = (order) => {
-  const TOLERANCE = 0.05; // Acceptable rounding difference
+  const TOLERANCE = 0.05; 
   
   if (order.subtotal === undefined || order.total === undefined || order.vatAmount === undefined) {
     return { valid: false, error: "Missing critical financial fields." };
@@ -928,31 +1031,30 @@ const validateOrderMath = (order) => {
 
     const itemBase = item.price * item.quantity;
     expectedGross += itemBase;
-
-    // Check if this specific item has the discount checked
     const getsDiscount = item.hasDiscount !== false;
 
-    if (getsDiscount && order.discountPercent > 0) {
+    if (order.isComplimentary) {
+      expectedDiscount += itemBase;
+    } else if (getsDiscount && order.discountPercent > 0) {
       if (order.isVatExempt || order.discountType === 'SC/PWD') {
-        // SC/PWD: No VAT, discount applies to base
-        expectedDiscount += itemBase * (order.discountPercent / 100);
+        const vatExemptBase = itemBase / 1.12;
+        const scDisc = vatExemptBase * (order.discountPercent / 100);
+        expectedDiscount += (itemBase - (vatExemptBase - scDisc)); 
       } else {
-        // Regular Promo: Apply discount, then ADD VAT to the remainder
         const itemDisc = itemBase * (order.discountPercent / 100);
         expectedDiscount += itemDisc;
         const itemNet = itemBase - itemDisc;
-        if (!order.isVatExempt) expectedVat += itemNet * 0.12;
+        if (!order.isVatExempt) expectedVat += (itemNet - (itemNet / 1.12));
       }
     } else {
-      // Normal Item: No discount, fully VATable
-      if (!order.isVatExempt) expectedVat += itemBase * 0.12;
+      if (!order.isVatExempt) expectedVat += (itemBase - (itemBase / 1.12));
     }
   }
 
   if (Math.abs(expectedGross - order.subtotal) > TOLERANCE) return { valid: false, error: "Gross mismatch." };
   if (Math.abs(expectedVat - order.vatAmount) > TOLERANCE) return { valid: false, error: "VAT computation invalid." };
   
-  const expectedTotal = expectedGross - expectedDiscount + expectedVat;
+  const expectedTotal = expectedGross - expectedDiscount;
   if (Math.abs(expectedTotal - order.total) > TOLERANCE) return { valid: false, error: "Total computation invalid." };
 
   return { valid: true };
