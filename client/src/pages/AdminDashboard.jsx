@@ -3,8 +3,9 @@ import { io } from 'socket.io-client';
 import QRCode from '../components/QRCode.jsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-
-const API_URL = 'https://local-based-menu.onrender.com';
+//const API_URL ='http://192.168.254.116:5002';
+const API_URL = 'http://192.168.68.127:5002';
+//const API_URL = 'https://local-based-menu.onrender.com';
 //const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 //const API_URL = 'http://10.201.1.204:5002';
 //const API_URL='http://172.20.10.6:5002';
@@ -42,6 +43,7 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('orders');
   const [navMode, setNavMode] = useState('libellus'); // 'libellus' (Operations) or 'negotium' (Management)
   const [orderFilter, setOrderFilter] = useState('All'); 
+  const [departmentFilter, setDepartmentFilter] = useState('All'); // 'All', 'Kitchen', 'Bar'
   const [expandedDays, setExpandedDays] = useState({}); 
   const [expandedOrderLists, setExpandedOrderLists] = useState({});
   
@@ -76,12 +78,8 @@ export default function AdminDashboard() {
   const [historyItemName, setHistoryItemName] = useState('');
 
   const [cashOnHand, setCashOnHand] = useState(0);
-
-  const [isAuthenticated, setIsAuthenticated] = useState(false); //This is false, true for low wifi
-  
   // --- NEW LOGIN STATES ---
   const [loginForm, setLoginForm] = useState({ name: '', password: '' });
-  const [activeAdmin, setActiveAdmin] = useState(null); // Tracks who is currently logged in
 
   // Add this near your other state variables
   const [invSubTab, setInvSubTab] = useState('live'); // 'live' or 'eod'
@@ -104,6 +102,38 @@ export default function AdminDashboard() {
 
   // --- ITEM-LEVEL DISCOUNT TRACKING ---
   const [discountedItems, setDiscountedItems] = useState({}); // Tracks selected items per order
+
+  // Change your default state to check local storage first
+  const [activeAdmin, setActiveAdmin] = useState(() => {
+    const saved = localStorage.getItem('kasa_admin');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('kasa_admin'));
+
+  const [compSelections, setCompSelections] = useState({});
+  const [shiftFilter, setShiftFilter] = useState('All');
+  const [users, setUsers] = useState([]); // Stores the employee list
+  
+  // Update the login handler to save to local storage
+  const handleSystemLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_URL}/api/users/login`, {
+        method: 'POST',  headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginForm)
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        setIsAuthenticated(true);
+        setActiveAdmin(data.user); 
+        localStorage.setItem('kasa_admin', JSON.stringify(data.user)); // <-- SAVE TO MEMORY
+      } else {
+        alert("Access Denied: Invalid name or password.");
+      }
+    } catch (err) { console.error("Login failed", err); }
+  };
+
 
   const getSelectedItems = (order) => {
     if (discountedItems[order._id] !== undefined) return discountedItems[order._id];
@@ -148,27 +178,6 @@ export default function AdminDashboard() {
       fetchData(); // Refresh the table instantly
     } catch (err) {
       console.error("Failed to update price", err);
-    }
-  };
-  
-  const handleSystemLogin = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await fetch(`${API_URL}/api/users/login`, {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loginForm)
-      });
-      const data = await res.json();
-      
-      if (data.success) {
-        setIsAuthenticated(true);
-        setActiveAdmin(data.user); // Save their data (like ADN-A0001) to state
-      } else {
-        alert("Access Denied: Invalid name or password.");
-      }
-    } catch (err) { 
-      console.error("Login failed", err); 
     }
   };
 
@@ -249,7 +258,8 @@ export default function AdminDashboard() {
     { accountCode: '4000', accountName: 'Sales Revenue', type: 'Revenue' },
     { accountCode: '4150', accountName: 'Sales Returns', type: 'Revenue' },
     { accountCode: '5000', accountName: 'Cost of Goods Sold', type: 'Expense' },
-    { accountCode: '6000', accountName: 'Operating Expenses', type: 'Expense' }
+    { accountCode: '6000', accountName: 'Operating Expenses', type: 'Expense' },
+    { accountCode: '6100', accountName: 'Complimentary Expense', type: 'Expense' } // NEW!
   ];
 
   useEffect(() => {
@@ -280,9 +290,11 @@ export default function AdminDashboard() {
       if (pRes.ok) setProducts((await pRes.json()).products || []);
       const cRes = await fetch(`${API_URL}/api/categories`);
       if (cRes.ok) setCategories((await cRes.json()).categories || []);
-      // --- Fetch Discounts ---
       const dRes = await fetch(`${API_URL}/api/discounts`);
       if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
+      // NEW: Fetch Users for the Complimentary Dropdown
+      const uRes = await fetch(`${API_URL}/api/users`);
+      if (uRes.ok) setUsers((await uRes.json()).users || []);
     } catch (err) { console.error('Failed to fetch menu data', err); }
   };
 
@@ -373,14 +385,22 @@ export default function AdminDashboard() {
   }
 
   const updateStatus = async (orderId, newStatus) => {
-    const payload = { status: newStatus };
-    if (newStatus === 'Completed') {
-      payload.paymentMethod = paymentSelections[orderId] || 'Cash';
+    const payload = { status: newStatus, cashier: activeAdmin ? activeAdmin.name : 'System' };
+    if (newStatus === 'Preparing') {
+      payload.paymentMethod = paymentSelections[orderId] || 'Cash'; // Lock payment in early
     }
-
     setOrders(prev => prev.map(o => o._id === orderId ? { ...o, ...payload } : o));
     socket.emit('updateOrderStatus', { orderId, status: newStatus });
     await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  };
+
+  const applyComplimentary = async (orderId) => {
+    const empName = compSelections[orderId];
+    if (!empName) return alert("Please select an employee for the complimentary item.");
+    await fetch(`${API_URL}/api/orders/${orderId}`, { 
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify({ isComplimentary: true, employeeName: empName, discountPercent: 100, isVatExempt: true }) 
+    });
   };
   const toggleVat = async (orderId, currentVatRate) => { await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isVatExempt: currentVatRate > 0 }) }); };
   const applyDiscount = async (orderId, isRemoving = false) => {
@@ -432,6 +452,74 @@ export default function AdminDashboard() {
       }
     } catch (err) { 
       console.error("Failed to archive:", err); 
+    }
+  };
+  // --- 🖨️ THERMAL RECEIPT / ORDER SLIP PRINTER ---
+  const printOrderSlip = (order) => {
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Order Slip - ${order.orderNumber}</title>
+          <style>
+            body { font-family: monospace; padding: 10px; color: #000; }
+            .center { text-align: center; }
+            .bold { font-weight: bold; }
+            .flex { display: flex; justify-content: space-between; }
+            hr { border-top: 1px dashed #000; margin: 10px 0; }
+          </style>
+        </head>
+        <body>
+          <h2 class="center mb-0">KASA LOKAL</h2>
+          <p class="center mt-0 text-sm">Order: ${order.orderNumber}</p>
+          <hr/>
+          <p>Table: <b>${order.table}</b><br/>Name: <b>${order.customerName || 'Guest'}</b></p>
+          <hr/>
+          ${order.items.map(i => `
+            <div class="flex">
+              <span>${i.quantity}x ${i.name}</span>
+              <span>P${(i.price * i.quantity).toFixed(2)}</span>
+            </div>
+          `).join('')}
+          <hr/>
+          <div class="flex bold"><span>Subtotal:</span><span>P${order.subtotal.toFixed(2)}</span></div>
+          <div class="flex bold"><span>VAT:</span><span>P${order.vatAmount.toFixed(2)}</span></div>
+          <div class="flex bold"><span>Discount:</span><span>-P${(order.discount || 0).toFixed(2)}</span></div>
+          <h3 class="flex bold" style="font-size: 18px;"><span>TOTAL:</span><span>P${order.total.toFixed(2)}</span></h3>
+          <p class="center" style="margin-top: 20px;">*** END OF TICKET ***</p>
+          <script>window.onload = function() { window.print(); window.close(); }</script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // --- 🚨 SAFE VOID & REFUND SYSTEM ---
+  const handleVoidOrder = async (orderId) => {
+    const reason = window.prompt("WARNING: You are voiding a completed order.\n\nType 'Restock' if the food was NOT made (refunds inventory).\nType 'Spoilage' if the food WAS made (records as waste/loss).");
+    
+    if (!reason) return;
+    if (reason !== 'Restock' && reason !== 'Spoilage') {
+      return alert("Action Cancelled. You must type exactly 'Restock' or 'Spoilage'.");
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/orders/${orderId}/void`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason, adminName: activeAdmin ? activeAdmin.name : 'Admin' })
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        alert(`Order Voided Successfully. Inventory & Ledger updated for ${reason}.`);
+        fetchOrders();
+        fetchERPData();
+      } else {
+        alert("Failed to void order: " + data.error);
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
   const handleShowQR = () => {
@@ -1087,6 +1175,24 @@ const submitPhysicalCounts = async () => {
     daysElapsed = Math.max(1, Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24)));
   }
 
+  const displayOrders = filteredOrders.filter(order => {
+    if (orderFilter === 'Kitchen') {
+      // Show orders containing Mains or Sides
+      return order.items.some(item => {
+        const prod = products.find(p => p._id === item.productId);
+        return prod && (prod.category === 'Mains' || prod.category === 'Sides');
+      });
+    }
+    if (orderFilter === 'Bar') {
+      // Show orders containing Drinks
+      return order.items.some(item => {
+        const prod = products.find(p => p._id === item.productId);
+        return prod && prod.category === 'Drinks';
+      });
+    }
+    return true; // For 'All', 'Pending', etc.
+  });
+
   const rawMaterialUsage = {};
   allCompletedOrders.forEach(o => {
     o.items.forEach(orderItem => {
@@ -1198,7 +1304,7 @@ const submitPhysicalCounts = async () => {
             Show QR
           </button>
           <button 
-            onClick={() => { setIsAuthenticated(false); setPinInput(''); }} 
+            onClick={() => { setIsAuthenticated(false); setActiveAdmin(null); localStorage.removeItem('kasa_admin'); }}
             className="flex-1 md:flex-none border  bg-red-500 text-white px-4 py-2 rounded-md font-bold hover:bg-white hover:text-red-500 hover:border-red-500 transition"
           >
             Lock
@@ -1390,190 +1496,288 @@ const submitPhysicalCounts = async () => {
         </div>
       )}
 
-      {/* --- ACTIVE ORDERS TAB (Kitchen View) --- */}
-      {/* --- ACTIVE ORDERS TAB (Kitchen View) --- */}
-      {activeTab === 'orders' && (
-        <div className="w-full">
-          <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
-            {['All', 'Pending', 'Preparing', 'Completed', 'Cancelled'].map(filter => (
-              <button key={filter} onClick={() => setOrderFilter(filter)} className={`px-4 py-2 rounded-full text-sm font-bold transition whitespace-nowrap ${orderFilter === filter ? 'bg-accent text-dark' : 'bg-transparent border border-gray-700 text-gray-400 hover:text-accent'}`}>
-                {filter}
-              </button>
-            ))}
-          </div>
+      {/* --- ACTIVE ORDERS TAB (Kitchen & Bar View) --- */}
+      {activeTab === 'orders' && (() => {
+        // --- 🍳 KITCHEN & BAR ROUTING LOGIC ---
+        const displayOrders = filteredOrders.filter(order => {
+          if (departmentFilter === 'Kitchen') {
+            return order.items.some(item => {
+              const prod = products.find(p => p._id === item.productId);
+              return prod && (prod.category === 'Mains' || prod.category === 'Sides');
+            });
+          }
+          if (departmentFilter === 'Bar') {
+            return order.items.some(item => {
+              const prod = products.find(p => p._id === item.productId);
+              return prod && prod.category === 'Drinks';
+            });
+          }
+          return true; // Show 'All'
+        });
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredOrders.length === 0 ? (
-              <div className="col-span-full text-center py-12 text-dark">No {orderFilter.toLowerCase()} orders found.</div>
-            ) : filteredOrders.map(order => (
-              <div key={order._id} className="bg-accent rounded-xl p-5 border border-accentShadow flex flex-col shadow-lg">
-                <div className="flex justify-between items-center mb-4 border-b border-dark pb-3">
-                  <h2 className="text-lg font-black flex items-center gap-2 flex-wrap">
-                    <span>{order.orderNumber}</span>
-                    {order.customerName && (
-                      <span className="text-sm bg-black text-dark px-2 py-0.5 rounded border border-gray-700">
-                        {order.customerName}
-                      </span>
-                    )}
-                    {order.table && <span className="text-sm font-bold text-dark uppercase tracking-wider">({order.table})</span>}
-                  </h2>
-                  <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${order.status === 'Pending' ? 'bg-red-900/50 text-red-400' : order.status === 'Preparing' ? 'bg-yellow-900/50 text-accent' : order.status === 'Completed' ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-400'}`}>{order.status}</span>
-                </div>
-
-                {/* --- UPDATED: ITEMIZED SELECTION UI --- */}
-                <div className="space-y-2 mb-4 flex-1">
-                  {order.items.map((item, idx) => {
-                    // Default to selected if no specific selection has been made yet
-                    const currentSelection = discountedItems[order._id];
-                    const isSelected = currentSelection ? currentSelection.includes(idx) : true;
-                    
-                    return (
-                      <div key={idx} className="flex justify-between items-center text-sm mb-1">
-                        <div className="flex items-center gap-2">
-                          {(order.status === 'Pending' || order.status === 'Preparing') && (
-                            <input 
-                              type="checkbox" 
-                              checked={isSelected} 
-                              onChange={() => toggleItemDiscount(order._id, idx)} 
-                              className="w-3 h-3 accent-accent cursor-pointer rounded border-gray-600 focus:ring-accent"
-                            />
-                          )}
-                          <span className={`font-semibold ${isSelected ? 'text-gray-200' : 'text-dark'}`}>
-                            {item.quantity}x {item.name}
-                          </span>
-                        </div>
-                        <span className="text-dark">P{(item.price * item.quantity).toFixed(2)}</span>
-                      </div>
-                    );
-                  })}
-                  
-                  {/* Select All / Deselect All Button */}
-                  {(order.status === 'Pending' || order.status === 'Preparing') && order.items.length > 1 && (
-                    <div className="pt-2 border-t border-dark flex justify-start">
-                      <button 
-                        onClick={() => toggleAllItems(order._id, order.items.length)}
-                        className="text-[10px] text-accent hover:text-dark hover:bg-accent font-bold uppercase tracking-wider transition bg-dark px-2 py-1 rounded border border-gray-700 hover:border-accent"
-                      >
-                        {(discountedItems[order._id] === undefined || discountedItems[order._id].length === order.items.length) ? 'Deselect All' : 'Select All'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {/* --------------------------------------- */}
-
-                <div className="bg-dark p-3 rounded-lg border border-gray-800/50 space-y-2 mb-4">
-                  <div className="flex justify-between text-xs text-black">
-                    <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
-                  </div>
-                  
-                 <div className="flex justify-between items-center text-xs text-black">
-                    <div className="flex items-center gap-2">
-                      <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
-                      {(order.status === 'Pending' || order.status === 'Preparing') && (
-                        <button 
-                          onClick={() => toggleVat(order._id, order.vatRate)} 
-                          className="bg-accent hover:bg-dark hover:text-accent text-white px-2 py-0.5 rounded text-[9px] uppercase font-bold transition"
-                        >
-                          {order.vatRate > 0 ? 'Off' : 'On'}
-                        </button>
-                      )}
-                    </div>
-                    <span>P{order.vatAmount.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-xs text-black border-b border-gray-800/50 pb-2">
-                    <div className="flex items-center gap-2 w-full pr-2">
-                      <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
-                      {(order.status === 'Pending' || order.status === 'Preparing') && (
-                        <div className="flex gap-1 items-center flex-1 justify-end">
-                          <select 
-                            className="w-full max-w-[120px] bg-dark border border-gray-600 rounded px-1 text-[10px] text-black outline-none h-6"
-                            value={discountInputs[order._id] || ''}
-                            onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
-                          >
-                            <option value="">Select...</option>
-                            <option value="custom">Manual %</option>
-                            {discounts.map(d => <option key={d._id} value={d.percentage}>{d.name} ({d.percentage}%)</option>)}
-                          </select>
-                          
-                          {discountInputs[order._id] === 'custom' && (
-                            <input 
-                              type="number" 
-                              placeholder="%" 
-                              className="w-12 bg-dark border border-gray-600 rounded px-1 text-center text-white outline-none h-6" 
-                              onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} 
-                            />
-                          )}
-                          
-                          <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accent hover:text-dark text-white px-2 rounded font-bold transition h-6">✓</button>
-                          {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-500 text-white px-2 rounded font-bold h-6">✕</button>}
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-red-500 whitespace-nowrap">-P{(order.discount || 0).toFixed(2)}</span>
-                  </div>
-                  
-                  {order.discountType && order.discountType !== 'None' && (
-                     <div className="flex justify-between text-[10px] text-black font-bold uppercase tracking-wider">
-                       <span>Type:</span>
-                       <span className={order.discountType === 'SC/PWD' ? 'text-accent' : 'text-gray-400'}>{order.discountType}</span>
-                     </div>
-                  )}
-
-                  <div className="flex justify-between font-black text-black pt-1">
-                    <span>Total:</span><span className="text-accent">P{order.total.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 mt-auto">
-                  {order.status === 'Pending' && (
-                    <>
-                      <button onClick={() => updateStatus(order._id, 'Preparing')} className="flex-1 bg-dark border border-accent text-accent py-2.5 rounded-lg hover:bg-accent hover:text-dark font-bold text-sm transition">Start Prep</button>
-                      <button onClick={() => updateStatus(order._id, 'Cancelled')} className="flex-1 bg-dark border border-red-500/50 text-red-400 py-2.5 rounded-lg hover:bg-red-700 font-bold text-sm transition">Cancel</button>
-                    </>
-                  )}
-                  {order.status === 'Preparing' && (
-                    <div className="flex flex-col w-full gap-2">
-                      <select 
-                        value={paymentSelections[order._id] || 'Cash'} 
-                        onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
-                        className="w-full bg-dark border border-gray-600 rounded p-2 text-sm text-black outline-none focus:border-accent"
-                      >
-                        <option value="Cash">Cash</option>
-                        <option value="E-Wallet">E-Wallet</option>
-                        <option value="Bank Transfer">Bank Transfer</option>
-                      </select>
-                      <button onClick={() => updateStatus(order._id, 'Completed')} className="w-full bg-dark text-accent py-2.5 rounded-lg hover:bg-accent hover:text-dark backdrop:font-bold text-sm shadow-lg shadow-accent/10 transition">
-                        Mark Completed
-                      </button>
-                    </div>
-                  )}
-                </div>
+        return (
+          <div className="w-full">
+            {/* TOP BAR: Department Splitter (Fixed White/Green Styling) */}
+            <div className="flex justify-between items-center mb-6 bg-white p-3 rounded-xl border-2 border-accent flex-wrap gap-4 shadow-sm">
+              <div className="flex gap-2 overflow-x-auto">
+                {['All', 'Kitchen', 'Bar'].map(dept => (
+                  <button 
+                    key={dept} 
+                    onClick={() => setDepartmentFilter(dept)} 
+                    className={`px-6 py-2 rounded-lg text-sm font-black uppercase tracking-widest transition whitespace-nowrap ${departmentFilter === dept ? 'bg-accent text-white shadow-md' : 'bg-transparent text-gray-500 hover:text-accent'}`}
+                  >
+                    {dept} View
+                  </button>
+                ))}
               </div>
-            ))}
+              
+              {/* Status Filters */}
+              <div className="flex gap-2 overflow-x-auto pr-2">
+                {['All', 'Pending', 'Preparing', 'Completed', 'Cancelled'].map(filter => (
+                  <button key={filter} onClick={() => setOrderFilter(filter)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap ${orderFilter === filter ? 'bg-accent text-white' : 'bg-transparent border border-gray-300 text-gray-500 hover:border-accent'}`}>
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {displayOrders.length === 0 ? (
+                <div className="col-span-full text-center py-12 text-gray-500 font-bold uppercase tracking-widest">No orders in {departmentFilter} queue.</div>
+              ) : displayOrders.map(order => (
+                <div key={order._id} className={`bg-accent rounded-xl p-5 border flex flex-col shadow-lg transition-all ${order.status === 'Completed' ? 'border-green-600 shadow-green-600/20' : order.status === 'Cancelled' || order.status === 'Voided' ? 'border-red-500 opacity-75' : 'border-accentShadow'}`}>
+                  
+                  {/* Order Header */}
+                  <div className="flex justify-between items-center mb-4 border-b border-white/30 pb-3">
+                    <h2 className="text-lg font-black flex items-center gap-2 flex-wrap text-white">
+                      <span>{order.orderNumber}</span>
+                      {order.customerName && (
+                        <span className="text-sm bg-black text-white px-2 py-0.5 rounded shadow-sm">
+                          {order.customerName}
+                        </span>
+                      )}
+                      {order.table && <span className="text-sm font-bold text-white/90 uppercase tracking-wider">({order.table})</span>}
+                    </h2>
+                    
+                    {/* Action Icons (Print) */}
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => printOrderSlip(order)} className="p-1.5 bg-white text-accent rounded hover:bg-gray-100 transition shadow-sm" title="Print Slip">
+                        🖨️
+                      </button>
+                      <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-wider text-white ${order.status === 'Pending' ? 'bg-red-500 animate-pulse' : order.status === 'Preparing' ? 'bg-yellow-500 text-black' : order.status === 'Completed' ? 'bg-green-600' : 'bg-gray-800'}`}>
+                        {order.status}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Itemized List with Checkboxes */}
+                  <div className="space-y-2 mb-4">
+                    {order.items.map((item, idx) => {
+                      const currentSelection = discountedItems[order._id];
+                      const isSelected = currentSelection ? currentSelection.includes(idx) : true;
+                      
+                      return (
+                        <div key={idx} className="flex justify-between items-center text-sm mb-1">
+                          <div className="flex items-center gap-2">
+                            {(order.status === 'Pending' || order.status === 'Preparing') && (
+                              <input 
+                                type="checkbox" 
+                                checked={isSelected} 
+                                onChange={() => toggleItemDiscount(order._id, idx)} 
+                                className="w-3 h-3 cursor-pointer rounded"
+                              />
+                            )}
+                            <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
+                              {item.quantity}x {item.name}
+                            </span>
+                          </div>
+                          <span className="text-white font-mono font-bold">P{(item.price * item.quantity).toFixed(2)}</span>
+                        </div>
+                      );
+                    })}
+                    
+                    {/* Select All Button */}
+                    {(order.status === 'Pending' || order.status === 'Preparing') && order.items.length > 1 && (
+                      <div className="pt-2 flex justify-start">
+                        <button 
+                          onClick={() => toggleAllItems(order._id, order.items.length)}
+                          className="text-[9px] text-accent bg-white hover:bg-gray-200 font-bold uppercase tracking-widest px-2 py-1 rounded transition shadow-sm"
+                        >
+                          {(discountedItems[order._id] === undefined || discountedItems[order._id].length === order.items.length) ? 'Deselect All' : 'Select All'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Spacer to push bottom content down */}
+                  <div className="flex-1"></div>
+
+                  {/* NEW: Complimentary Employee Select (Perfectly separated from items) */}
+                  {(order.status === 'Pending' || order.status === 'Preparing') && (
+                    <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
+                      <span className="font-bold uppercase tracking-wider">Complimentary?</span>
+                      <div className="flex gap-1">
+                        <select className="bg-white text-black text-[10px] rounded p-1.5 border-none outline-none font-bold" onChange={(e) => setCompSelections({...compSelections, [order._id]: e.target.value})}>
+                          <option value="">Select Employee...</option>
+                          {users.map(u => <option key={u._id} value={u.name}>{u.name}</option>)}
+                        </select>
+                        <button onClick={() => applyComplimentary(order._id)} className="bg-white hover:bg-gray-200 text-accent px-2 rounded font-black transition">✓</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Financials Box (bg-dark = White in your theme) */}
+                  <div className="bg-dark p-4 rounded-lg shadow-inner space-y-2 mb-4">
+                    <div className="flex justify-between text-xs text-gray-500 font-bold">
+                      <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center text-xs text-gray-500 font-bold">
+                      <div className="flex items-center gap-2">
+                        <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
+                        {(order.status === 'Pending' || order.status === 'Preparing') && (
+                          <button 
+                            onClick={() => toggleVat(order._id, order.vatRate)} 
+                            className="bg-accent hover:bg-accentShadow text-white px-2 py-0.5 rounded text-[9px] uppercase font-black transition shadow-sm"
+                          >
+                            {order.vatRate > 0 ? 'Off' : 'On'}
+                          </button>
+                        )}
+                      </div>
+                      <span>P{order.vatAmount.toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-xs text-gray-500 font-bold border-b border-gray-200 pb-2">
+                      <div className="flex items-center gap-2 w-full pr-2">
+                        <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
+                        {(order.status === 'Pending' || order.status === 'Preparing') && (
+                          <div className="flex gap-1 items-center flex-1 justify-end">
+                            <select 
+                              className="w-full max-w-[100px] bg-gray-100 border border-gray-300 rounded px-1 text-[10px] text-black outline-none h-6"
+                              value={discountInputs[order._id] || ''}
+                              onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
+                            >
+                              <option value="">Select...</option>
+                              <option value="custom">Manual %</option>
+                              {discounts.map(d => <option key={d._id} value={d.percentage}>{d.name} ({d.percentage}%)</option>)}
+                            </select>
+                            
+                            {discountInputs[order._id] === 'custom' && (
+                              <input 
+                                type="number" 
+                                placeholder="%" 
+                                className="w-10 bg-gray-100 border border-gray-300 rounded px-1 text-center text-black outline-none h-6" 
+                                onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} 
+                              />
+                            )}
+                            
+                            <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accentShadow text-white px-2 rounded font-black transition h-6">✓</button>
+                            {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-500 text-white px-2 rounded font-black h-6 shadow-sm">✕</button>}
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-red-500 whitespace-nowrap font-mono">-P{(order.discount || 0).toFixed(2)}</span>
+                    </div>
+                    
+                    {order.discountType && order.discountType !== 'None' && (
+                       <div className="flex justify-between text-[9px] text-gray-400 font-black uppercase tracking-widest pt-1">
+                         <span>Type:</span>
+                         <span className={order.discountType === 'SC/PWD' ? 'text-accent' : 'text-gray-500'}>{order.discountType}</span>
+                       </div>
+                    )}
+
+                    <div className="flex justify-between font-black text-lg pt-1 text-black">
+                      <span>Total:</span><span className="text-accent tracking-wider">P{order.total.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Buttons / Actions */}
+                  <div className="flex flex-col gap-2 mt-auto">
+                    {order.status === 'Pending' && (
+                      <div className="flex flex-col w-full gap-2">
+                        <select 
+                          value={paymentSelections[order._id] || 'Cash'} 
+                          onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
+                          className="w-full bg-white text-black border-2 border-transparent rounded-lg p-2.5 text-sm font-bold outline-none focus:border-accent shadow-sm"
+                        >
+                          <option value="Cash">💵 Paid via Cash</option>
+                          <option value="E-Wallet">📱 Paid via E-Wallet</option>
+                          <option value="Bank Transfer">🏦 Paid via Bank Transfer</option>
+                        </select>
+                        <div className="flex gap-2">
+                          <button onClick={() => updateStatus(order._id, 'Preparing')} className="flex-1 bg-white text-accent py-3 rounded-lg hover:bg-gray-100 font-black text-xs uppercase tracking-widest transition shadow-md">Pay & Send</button>
+                          <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {order.status === 'Preparing' && (
+                      <div className="flex gap-2">
+                        <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
+                          Ready to Serve
+                        </button>
+                        {/* Always allow dropping ghost orders */}
+                        <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                      </div>
+                    )}
+
+                    {order.status === 'Ready' && (
+                      <div className="flex gap-2">
+                        <button onClick={() => updateStatus(order._id, 'Completed')} className="flex-1 bg-green-500 text-white py-3 rounded-lg hover:bg-green-600 font-black uppercase tracking-widest text-xs shadow-md transition">
+                          Give to Cust.
+                        </button>
+                        {/* Always allow dropping ghost orders */}
+                        <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                      </div>
+                    )}
+
+                    {/* SAFE VOID BUTTON FOR COMPLETED ORDERS */}
+                    {order.status === 'Completed' && (
+                      <button onClick={() => handleVoidOrder(order._id)} className="w-full bg-white border border-red-500 text-red-500 py-2.5 rounded-lg hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition">
+                        Void / Refund Order
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* --- SALES HISTORY & REGISTER TAB --- */}
-      {activeTab === 'history' && (
+      {activeTab === 'history' && (() => {
+        // Filter calculations based on the Shift Dropdown
+        const todayShiftOrders = todayCompleted.filter(o => shiftFilter === 'All' || o.cashier === shiftFilter);
+        const shiftRevenue = todayShiftOrders.reduce((sum, o) => sum + o.total, 0);
+        const shiftVat = todayShiftOrders.reduce((sum, o) => sum + o.vatAmount, 0);
+
+        return (
         <div className="w-full max-w-4xl mx-auto flex flex-col gap-6">
           <div className="bg-accent border border-accentShadow rounded-xl p-6 shadow-xl shadow-accent/5">
-            <h3 className="text-dark font-black tracking-widest uppercase text-sm mb-4 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-dark animate-pulse"></span> Active Register
-            </h3>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-dark font-black tracking-widest uppercase text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-dark animate-pulse"></span> Active Register
+              </h3>
+              <select className="bg-dark text-white p-2 rounded text-xs font-bold outline-none border border-gray-700 shadow-sm" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
+                <option value="All">All Shifts (Store Total)</option>
+                {users.map(u => <option key={u._id} value={u.name}>{u.name}'s Shift</option>)}
+              </select>
+            </div>
+            
             <div className="space-y-4 mb-6">
               <div>
-                <p className="text-dark text-xs font-bold uppercase tracking-wider mb-1">Today's Revenue</p>
-                <p className="text-4xl font-black text-white">P{todayRevenue.toFixed(2)}</p>
+                <p className="text-dark text-xs font-bold uppercase tracking-wider mb-1">Revenue</p>
+                <p className="text-4xl font-black text-white">P{shiftRevenue.toFixed(2)}</p>
               </div>
               <div className="flex justify-between border-t border-dark pt-4">
                 <div>
                   <p className="text-dark text-[10px] font-bold uppercase tracking-wider">Completed Orders</p>
-                  <p className="text-lg font-bold text-dark">{todayCompleted.length}</p>
+                  <p className="text-lg font-bold text-dark">{todayShiftOrders.length}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-dark text-[10px] font-bold uppercase tracking-wider">VAT Collected</p>
-                  <p className="text-lg font-bold text-gray-300">P{todayVat.toFixed(2)}</p>
+                  <p className="text-lg font-bold text-gray-300">P{shiftVat.toFixed(2)}</p>
                 </div>
               </div>
             </div>
@@ -1660,7 +1864,9 @@ const submitPhysicalCounts = async () => {
             </div>
           </div>
         </div>
-      )}
+        ); // <--- This closes the return() statement
+      })()}
+
 
       {/* --- INVENTORY TAB --- */}
       {activeTab === 'inventory' && (

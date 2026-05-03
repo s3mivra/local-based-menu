@@ -7,7 +7,9 @@ import { io } from 'socket.io-client';
 //const API_URL='http://172.20.10.6:5002';
 //const API_URL = 'http://10.201.1.204:5002';
 //const API_URL='http://192.168.30.131:5002';
-const API_URL = 'https://local-based-menu.onrender.com';
+//const API_URL ='http://192.168.254.116:5002';
+const API_URL = 'http://192.168.68.127:5002';
+//const API_URL = 'https://local-based-menu.onrender.com';
 const socket = io(API_URL, {
   transports: ['websocket'],
   upgrade: false
@@ -364,6 +366,17 @@ export default function CustomerMenu() {
     }
     return acc;
   }, {});
+
+  // --- FAST LOADING UX ---
+  if (products.length === 0 && !successMessage) {
+    return (
+      <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6 text-center">
+         <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mb-4"></div>
+         <h2 className="text-xl font-black text-accent tracking-widest uppercase animate-pulse">Waking up the Kitchen...</h2>
+         <p className="text-gray-400 text-sm mt-2">Loading today's fresh menu</p>
+      </div>
+    );
+  }
 
   // --- NEW: WAITING SCREEN WHILE CHECKING LOCALSTORAGE ---
   if (isCheckingSession) {
