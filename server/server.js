@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 
 // ... (imports remain the same)
 
@@ -59,27 +60,53 @@ mongoose.connect(process.env.MONGO_URI)
 
 mongoose.connect(process.env.MONGO_URI)
   .then(async () => {
-    console.log('✅ Connected to MongoDB Atlas');
+    console.log('  Connected to MongoDB Atlas');
     
     // --- SUPER ADMIN SEEDER ---
     try {
       const adminCount = await User.countDocuments();
       if (adminCount === 0) {
         const defaultPass = process.env.ADMIN_PASS || 'fallback123';
-        
-        // Hash the password before saving!
         const saltRounds = 10;
         const hashedPassword = await bcrypt.hash(defaultPass, saltRounds);
         
-        const userCode = await generateNextSequence(User, 'ADN', 'userCode');
+        // Ensure generateNextSequence is defined before this, or move this block down.
+        // For simplicity in this snippet, assuming the collection is empty, we can manually set the first code.
+        const userCode = 'ADN-A0001'; 
         await User.create({ userCode, name: 'Super Admin', password: hashedPassword });
-        console.log(`🌱 Default Admin seeded: Code [${userCode}]`);
+        console.log(`  Default Admin seeded: Code [${userCode}]`);
       }
     } catch (err) {
       console.error("Seeding error:", err);
     }
   })
-// --- DATABASE SCHEMAS ---
+  .catch(err => console.error('  MongoDB Connection Error:', err));
+
+  // --- 🔒 NEW: JWT MIDDLEWARE 🔒 ---
+  const verifyToken = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, message: 'Unauthorized: No token provided' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = decoded; // Attach user info to the request
+      next();
+    } catch (error) {
+      return res.status(403).json({ success: false, message: 'Forbidden: Invalid or expired token' });
+    }
+  };
+
+  // --- NEW: RBAC MIDDLEWARE (Optional but recommended) ---
+  // const requireAdmin = (req, res, next) => {
+  //   if (req.user.role !== 'Admin') {
+  //     return res.status(403).json({ success: false, message: 'Forbidden: Requires Admin privileges' });
+  //   }
+  //   next();
+  // };
+  // --- DATABASE SCHEMAS ---
 const CategorySchema = new mongoose.Schema({ name: String });
 const Category = mongoose.model('Category', CategorySchema);
 
@@ -139,6 +166,14 @@ const OrderSchema = new mongoose.Schema({
   voidReason: { type: String, default: '' } // Tracks if a void was 'Spoiled' or 'Restocked'
 }, { timestamps: true });
 const Order = mongoose.model('Order', OrderSchema);
+
+const QRSessionSchema = new mongoose.Schema({
+  sessionId: { type: String, unique: true },
+  table: String,
+  isActive: { type: Boolean, default: true },
+  expiresAt: Date
+});
+const QRSession = mongoose.model('QRSession', QRSessionSchema);
 
 // --- NEW ERP SCHEMAS ---
 const InventorySchema = new mongoose.Schema({
@@ -214,10 +249,12 @@ const EODRecordSchema = new mongoose.Schema({
 });
 const EODRecord = mongoose.model('EODRecord', EODRecordSchema);
 
+
+
 // --- API ROUTES ---
 
 // --- DISCOUNT ROUTES ---
-app.get('/api/discounts', async (req, res) => {
+app.get('/api/discounts', verifyToken, async (req, res) => {
   try {
     const discounts = await Discount.find();
     res.json({ success: true, discounts });
@@ -226,7 +263,7 @@ app.get('/api/discounts', async (req, res) => {
   }
 });
 
-app.post('/api/discounts', async (req, res) => {
+app.post('/api/discounts', verifyToken, async (req, res) => {
   try {
     const newDiscount = await Discount.create(req.body);
     res.json({ success: true, discount: newDiscount });
@@ -235,7 +272,7 @@ app.post('/api/discounts', async (req, res) => {
   }
 });
 
-app.delete('/api/discounts/:id', async (req, res) => {
+app.delete('/api/discounts/:id', verifyToken, async (req, res) => {
   try {
     await Discount.findByIdAndDelete(req.params.id);
     res.json({ success: true });
@@ -247,7 +284,7 @@ app.delete('/api/discounts/:id', async (req, res) => {
 // --- INVENTORY PHYSICAL COUNT & DAILY CLOSE ---
 
 // --- 1. FETCH EOD STATUS & REAL MOVEMENTS ---
-app.get('/api/inventory/eod-data', async (req, res) => {
+app.get('/api/inventory/eod-data', verifyToken, async (req, res) => {
   try {
     // Get local date string (e.g., "2026-04-29")
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
@@ -258,7 +295,6 @@ app.get('/api/inventory/eod-data', async (req, res) => {
     // Calculate real movements for today using StockCard
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
-
     const movements = await StockCard.aggregate([
       { $match: { date: { $gte: startOfDay } } },
       { $group: {
@@ -281,19 +317,22 @@ app.get('/api/inventory/eod-data', async (req, res) => {
 });
 
 // --- 2. SUBMIT & LOCK EOD ---
-app.post('/api/inventory/count', async (req, res) => {
+app.post('/api/inventory/count', verifyToken, async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
     
     // STRICT CHECK: Is it already locked?
-    const existingEOD = await EODRecord.findOne({ dateString: todayStr });
+    const existingEOD = await EODRecord.findOne({ dateString: todayStr }).session(session);
     if (existingEOD && existingEOD.status === 'LOCKED') {
+      await session.abortTransaction(); session.endSession();
       return res.status(403).json({ success: false, error: 'ALREADY_CLOSED: You cannot submit another EOD for today.' });
     }
 
     const { counts, reasons, adminName } = req.body; 
-
-    const items = await Inventory.find();
+    const items = await Inventory.find().session(session);
 
     for (const item of items) {
       if (counts[item._id] === undefined || counts[item._id] === '') continue; 
@@ -303,52 +342,80 @@ app.post('/api/inventory/count', async (req, res) => {
 
       if (variance !== 0) {
         const specificReason = reasons && reasons[item._id] ? reasons[item._id] : 'Unaccounted Variance';
-
-        await StockCard.create({
+        
+        await StockCard.create([{
           inventoryId: item._id, itemName: item.itemName, type: 'Adjustment',
           reference: 'EOD-COUNT', qtyChange: variance, balanceAfter: actualCount,
           remarks: `EOD Audit: ${specificReason}`
-        });
+        }], { session });
 
         const valueAbs = Math.abs(variance) * item.unitCost;
+        
         if (valueAbs > 0) {
           const entryCount = await JournalEntry.countDocuments();
           const reference = `ADJ-${(entryCount + 1).toString().padStart(4, '0')}`;
           
           if (variance < 0) {
-            await JournalEntry.create({
+            await JournalEntry.create([{
               reference, description: `Shrinkage (${specificReason}): ${item.itemName}`,
               lines: [
                 { accountCode: '5100', accountName: 'Spoilage & Variance Expense', debit: valueAbs, credit: 0 },
                 { accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: valueAbs }
               ], totalDebit: valueAbs, totalCredit: valueAbs
-            });
+            }], { session });
           } else {
-            await JournalEntry.create({
+            await JournalEntry.create([{
               reference, description: `Gain (${specificReason}): ${item.itemName}`,
               lines: [
                 { accountCode: '1500', accountName: 'Inventory Asset', debit: valueAbs, credit: 0 },
                 { accountCode: '4200', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueAbs }
               ], totalDebit: valueAbs, totalCredit: valueAbs
-            });
+            }], { session });
           }
         }
       }
+
       item.stockQty = actualCount;
-      await item.save();
+      await item.save({ session });
     }
 
     // LOCK THE DAY
     await EODRecord.findOneAndUpdate(
       { dateString: todayStr },
       { status: 'LOCKED', lockedAt: new Date(), lockedBy: adminName || 'Admin' },
-      { upsert: true, new: true }
+      { upsert: true, new: true, session }
     );
+
+    await session.commitTransaction();
+    session.endSession();
 
     io.emit('erpUpdated');
     res.json({ success: true, message: "End of day locked." });
+
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// --- UNLOCK / REOPEN EOD (ADMIN ONLY) ---
+app.post('/api/inventory/eod/reopen', verifyToken, async (req, res) => {
+  try {
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    
+    // Find today's lock
+    const eod = await EODRecord.findOne({ dateString: todayStr });
+    if (!eod || eod.status === 'OPEN') return res.status(400).json({ success: false, error: 'Day is not locked.' });
+
+    // Reopen it
+    eod.status = 'OPEN';
+    await eod.save();
+
+    io.emit('erpUpdated'); // Tell all iPads the register is open again!
+    res.json({ success: true, message: 'Day reopened successfully.' });
+  } catch(err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -376,16 +443,67 @@ app.get('/api/categories', async (req, res) => {
   res.json({ success: true, categories });
 });
 
-app.post('/api/categories', async (req, res) => {
+app.post('/api/categories', verifyToken, async (req, res) => {
   const newCat = await Category.create({ name: req.body.name });
   io.emit('menuUpdated');
   res.json({ success: true, category: newCat });
 });
 
-app.delete('/api/categories/:id', async (req, res) => {
+app.delete('/api/categories/:id', verifyToken, async (req, res) => {
   await Category.findByIdAndDelete(req.params.id);
   io.emit('menuUpdated');
   res.json({ success: true });
+});
+
+// --- 📱 STRICT QR SESSION CONTROL ---
+app.post('/api/sessions/generate', verifyToken, async (req, res) => {
+  try {
+    const { table } = req.body;
+    // KILL any previously active links for this table so there's never a duplicate online
+    await QRSession.updateMany({ table, isActive: true }, { isActive: false });
+    
+    // Generate a secure random string
+    const sessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // Expires in exactly 10 minutes
+    
+    await QRSession.create({ sessionId, table, expiresAt });
+    res.json({ success: true, sessionId, table });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// The customer's phone calls this to stay alive
+app.post('/api/sessions/:id/heartbeat', async (req, res) => {
+  try {
+    const session = await QRSession.findOne({ sessionId: req.params.id, isActive: true });
+    if (!session) return res.status(404).json({ success: false, error: 'Session closed or invalid' });
+    
+    // Check if the 10 minutes ran out
+    if (new Date() > session.expiresAt) {
+      session.isActive = false;
+      await session.save();
+      return res.status(403).json({ success: false, error: 'Session expired due to inactivity' });
+    }
+    
+    // If they are still active, push the expiration back another 10 minutes
+    session.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await session.save();
+    
+    res.json({ success: true, table: session.table });
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
+// Burn the link after the order is received
+app.post('/api/sessions/:id/close', async (req, res) => {
+  try {
+    await QRSession.findOneAndUpdate({ sessionId: req.params.id }, { isActive: false });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
 });
 
 // Products
@@ -394,7 +512,7 @@ app.get('/api/products', async (req, res) => {
   res.json({ success: true, products });
 });
 
-app.post('/api/products', async (req, res) => {
+app.post('/api/products', verifyToken, async (req, res) => {
   // Generate base product code (e.g., DRS-A0001)
   const catPrefix = getCategoryPrefix(req.body.category);
   req.body.productCode = await generateNextSequence(Product, catPrefix, 'productCode');
@@ -413,25 +531,25 @@ app.post('/api/products', async (req, res) => {
   res.json({ success: true, product: newProduct });
 });
 
-app.put('/api/products/:id', async (req, res) => {
+app.put('/api/products/:id', verifyToken, async (req, res) => {
   const updatedProduct = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
   io.emit('menuUpdated');
   res.json({ success: true, product: updatedProduct });
 });
 
-app.delete('/api/products/:id', async (req, res) => {
+app.delete('/api/products/:id', verifyToken, async (req, res) => {
   await Product.findByIdAndDelete(req.params.id);
   io.emit('menuUpdated');
   res.json({ success: true });
 });
 
 // Orders
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', verifyToken, async (req, res) => {
   const orders = await Order.find({ isArchived: false }).sort({ createdAt: -1 });
   res.json({ success: true, orders });
 });
 
-app.get('/api/orders/archives', async (req, res) => {
+app.get('/api/orders/archives', verifyToken, async (req, res) => {
   const archives = await Order.find({ isArchived: true }).sort({ createdAt: -1 });
   res.json({ success: true, archives });
 });
@@ -449,7 +567,6 @@ app.get('/api/orders/:id', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
-    // ADD isComplimentary, employeeName, and cashier here
     const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName, isComplimentary = false, employeeName = '', cashier = 'Admin' } = req.body;
 
     if (!items || items.length === 0) throw new Error("Cart is empty");
@@ -465,7 +582,7 @@ app.post('/api/orders', async (req, res) => {
 
     const validatedItems = items.map(item => {
       item.hasDiscount = true; 
-      const itemBase = item.price * item.quantity;
+      const itemBase = isComplimentary ? 0 : (item.price * item.quantity);
       totalGross += itemBase;
       
       if (isComplimentary) {
@@ -495,11 +612,14 @@ app.post('/api/orders', async (req, res) => {
 
     const newOrder = await Order.create({
       orderNumber, table, items: validatedItems, 
-      subtotal: totalGross, vatRate: vatRate, vatAmount: totalVat, 
+      subtotal: totalGross, 
+      vatRate: vatRate, 
+      vatAmount: totalVat, 
       discountPercent: isComplimentary ? 100 : discountPercent, 
-      discount: totalDiscount, total: finalTotal, 
+      discount: totalDiscount, 
+      total: finalTotal, 
       isVatExempt, discountType, customerName,
-      isComplimentary, employeeName, cashier // <-- Save the new data
+      isComplimentary, employeeName, cashier
     });
 
     io.emit('newOrder', newOrder);
@@ -510,28 +630,38 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-app.put('/api/orders/:id', async (req, res) => {
+app.put('/api/orders/:id', verifyToken, async (req, res) => {
+  // Start a MongoDB Session for ACID compliance
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices } = req.body;
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ success: false });
+    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices, cashier } = req.body;
+    
+    // Pass the session to the query
+    const order = await Order.findById(req.params.id).session(session);
+    if (!order) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ success: false });
+    }
 
     const wasNotCompleted = order.status !== 'Completed';
+    
     if (status) order.status = status;
     if (paymentMethod) order.paymentMethod = paymentMethod;
+    if (cashier) order.cashier = cashier; // Update cashier on status change
 
     if (discountPercent !== undefined) order.discountPercent = discountPercent;
     if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
     if (discountType !== undefined) order.discountType = discountType;
 
-    // Ensure discountType is accurate based on isVatExempt if not explicitly provided
     if(order.discountPercent > 0 && (!order.discountType || order.discountType === 'None')) {
         order.discountType = order.isVatExempt ? 'SC/PWD' : 'Promo';
     } else if (order.discountPercent === 0) {
         order.discountType = 'None';
     }
 
-    // Update which items have the discount toggled on
     if (discountedIndices !== undefined) {
       order.items.forEach((item, idx) => {
         item.hasDiscount = discountedIndices.includes(idx);
@@ -573,33 +703,40 @@ app.put('/api/orders/:id', async (req, res) => {
     order.vatRate = (order.isVatExempt || order.isComplimentary) ? 0 : 0.12;
     order.total = Number((totalGross - totalDiscount).toFixed(2));
 
-    // Notice: The 400 Bad Request validator has been permanently deleted from here!
+    const validation = validateOrderMath(order);
+    if (!validation.valid) {
+      await session.abortTransaction();
+      session.endSession();
+      console.error(`[VALIDATION FAILED] Order ${order.orderNumber}: ${validation.error}`);
+      return res.status(400).json({ success: false, error: `SYSTEM AUDIT REJECTED: ${validation.error}` });
+    }
 
     // --- 🛑 POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
     if (status === 'Completed' && wasNotCompleted) {
       const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-      const currentEOD = await EODRecord.findOne({ dateString: todayStr });
+      // Pass session
+      const currentEOD = await EODRecord.findOne({ dateString: todayStr }).session(session);
       
       if (currentEOD && currentEOD.status === 'LOCKED') {
-        return res.status(403).json({ 
-          success: false, 
-          error: 'REGISTER CLOSED: EOD has already been locked for today. An Admin must reopen the day to process this order.' 
-        });
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(403).json({ success: false, error: 'REGISTER CLOSED: EOD is locked.' });
       }
     }
 
-    // --- 🔥 THE STRICT ERP ENGINE 🔥 ---
+    // --- 🔥 THE STRICT ERP ENGINE (Protected by Transaction) 🔥 ---
     if (status === 'Completed' && wasNotCompleted) {
-      console.log(`\n[ERP ENGINE] Processing Order: ${order.orderNumber} via ${order.paymentMethod}...`);
+      console.log(`\n[ERP ENGINE] Processing Order: ${order.orderNumber}...`);
       let totalCogs = 0; 
 
       for (const item of order.items) {
+        // Pass session
         let product = null;
         if (item.productId) {
-          product = await Product.findById(item.productId);
+          product = await Product.findById(item.productId).session(session);
         } else {
           const baseName = item.name.replace(/\s*\(.*?\)\s*/g, '').trim();
-          product = await Product.findOne({ name: baseName });
+          product = await Product.findOne({ name: baseName }).session(session);
         }
 
         if (!product) continue;
@@ -613,14 +750,23 @@ app.put('/api/orders/:id', async (req, res) => {
 
         for (const ing of recipeToUse) {
           if (!ing.invId) continue;
-          const invItem = await Inventory.findById(ing.invId);
+          // Pass session
+          const invItem = await Inventory.findById(ing.invId).session(session);
           if (invItem) {
             const deductQty = (ing.qty * item.quantity);
-            invItem.stockQty -= deductQty;
-            await invItem.save();
             
-            // --- NEW: WRITE THE SALE TO THE STOCK CARD ---
-            await StockCard.create({
+            // 🚨 NEGATIVE INVENTORY GUARDRAIL 🚨
+            // If you want to strictly prevent negative stock, uncomment these lines:
+            // if (invItem.stockQty - deductQty < 0) {
+            //   await session.abortTransaction();
+            //   session.endSession();
+            //   return res.status(400).json({ success: false, error: `Insufficient stock for ${invItem.itemName}` });
+            // }
+
+            invItem.stockQty -= deductQty;
+            await invItem.save({ session }); // Save within session
+            
+            await StockCard.create([{
               inventoryId: invItem._id,
               itemName: invItem.itemName,
               type: 'Sale', 
@@ -628,7 +774,7 @@ app.put('/api/orders/:id', async (req, res) => {
               qtyChange: -deductQty, 
               balanceAfter: invItem.stockQty,
               remarks: `Sold via ${item.name}`
-            });
+            }], { session }); // Create within session
 
             totalCogs += (invItem.unitCost * deductQty); 
           }
@@ -647,17 +793,17 @@ app.put('/api/orders/:id', async (req, res) => {
         debitAccountName = 'Cash in Bank';
       }
 
-      // --- 4. THE PERFECT COMBINED JOURNAL ENTRY ---
+      // --- THE COMBINED JOURNAL ENTRY ---
       const reference = `${order.orderNumber.replace('#','')}`;
       const lines = [];
 
       if (order.isComplimentary) {
-        // Debit Expense, Credit Inventory (No Cash/Revenue involved)
         lines.push({ accountCode: '6100', accountName: 'Complimentary Expense', debit: totalCogs, credit: 0 });
         lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
       } else {
         lines.push({ accountCode: debitAccountCode, accountName: debitAccountName, debit: order.total, credit: 0 });
         lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
+
         const grossSalesAmount = order.total + (order.discount || 0) - order.vatAmount;
         lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: 0, credit: grossSalesAmount });
         lines.push({ accountCode: '2100', accountName: 'VAT Payable', debit: 0, credit: order.vatAmount || 0 });
@@ -671,32 +817,57 @@ app.put('/api/orders/:id', async (req, res) => {
       const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
       const totalCredit = lines.reduce((sum, line) => sum + line.credit, 0);
 
-      await JournalEntry.create({ reference, description: `Sales & COGS for Order ${order.orderNumber}`, lines, totalDebit, totalCredit });
-      console.log(`[ERP LEDGER] Single AUTO Entry ${reference} created successfully.`);
-      
+      await JournalEntry.create([{ 
+        reference, 
+        description: `Sales & COGS for Order ${order.orderNumber}`, 
+        lines, 
+        totalDebit, 
+        totalCredit 
+      }], { session }); // Create within session
+
+      console.log(`[ERP LEDGER] Single AUTO Entry ${reference} created.`);
       io.emit('erpUpdated');
     }
 
-    await order.save();
+    await order.save({ session }); // Save within session
+    
+    // Commit the transaction - Everything succeeded!
+    await session.commitTransaction();
+    session.endSession();
+
     io.emit('orderUpdated', order);
     res.json({ success: true, order });
     
   } catch (error) {
+    // If ANY error occurs, roll back ALL database changes in this block
+    await session.abortTransaction();
+    session.endSession();
     console.error("[ERP CRITICAL ERROR] Failed to process order:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // --- 🚨 SAFE VOID & REFUND ENGINE 🚨 ---
-app.post('/api/orders/:id/void', async (req, res) => {
-  try {
-    const { reason, adminName } = req.body; 
-    const order = await Order.findById(req.params.id);
-    
-    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
-    if (order.status !== 'Completed') return res.status(400).json({ success: false, error: 'Only completed orders can be financially voided.' });
+app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    // 1. Reverse the Revenue (Give money back)
+  try {
+    const { reason } = req.body; // 'Restock' or 'Spoilage'
+    // Extract admin name securely from the JWT token, NOT the request body
+    const adminName = req.user.name; 
+    
+    const order = await Order.findById(req.params.id).session(session);
+    
+    if (!order) {
+        await session.abortTransaction(); session.endSession();
+        return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+    if (order.status !== 'Completed') {
+        await session.abortTransaction(); session.endSession();
+        return res.status(400).json({ success: false, error: 'Only completed orders can be voided.' });
+    }
+
     let cashAccount = '1000';
     if (order.paymentMethod === 'E-Wallet') cashAccount = '1015';
     if (order.paymentMethod === 'Bank Transfer') cashAccount = '1010';
@@ -710,13 +881,13 @@ app.post('/api/orders/:id/void', async (req, res) => {
       lines.push({ accountCode: cashAccount, accountName: 'Cash on Hand', debit: 0, credit: order.total });
       if (order.discount > 0) lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: 0, credit: order.discount });
     } else {
+      // Reversing a complimentary item
       lines.push({ accountCode: '6100', accountName: 'Complimentary Expense', debit: 0, credit: order.subtotal });
     }
 
-    // 2. Handle Inventory
     let totalCogs = 0;
     for (const item of order.items) {
-      let product = await Product.findById(item.productId);
+      let product = await Product.findById(item.productId).session(session);
       if (!product) continue;
       
       let recipeToUse = product.baseRecipe || [];
@@ -727,18 +898,18 @@ app.post('/api/orders/:id/void', async (req, res) => {
       }
 
       for (const ing of recipeToUse) {
-        const invItem = await Inventory.findById(ing.invId);
+        const invItem = await Inventory.findById(ing.invId).session(session);
         if (invItem) {
           const qtyUsed = ing.qty * item.quantity;
           totalCogs += (invItem.unitCost * qtyUsed);
           
           if (reason === 'Restock') {
             invItem.stockQty += qtyUsed;
-            await invItem.save();
-            await StockCard.create({
+            await invItem.save({ session });
+            await StockCard.create([{
               inventoryId: invItem._id, itemName: invItem.itemName, type: 'Adjustment', 
-              reference: `VOID-${order.orderNumber}`, qtyChange: qtyUsed, balanceAfter: invItem.stockQty, remarks: 'Voided - Not Made'
-            });
+              reference: `VOID-${order.orderNumber}`, qtyChange: qtyUsed, balanceAfter: invItem.stockQty, remarks: `Voided (${reason})`
+            }], { session });
           }
         }
       }
@@ -757,23 +928,35 @@ app.post('/api/orders/:id/void', async (req, res) => {
     const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
     const totalCredit = lines.reduce((sum, line) => sum + line.credit, 0);
 
-    await JournalEntry.create({ reference: `VOID-${order.orderNumber}`, description: `VOID (${reason}) by ${adminName}`, lines, totalDebit, totalCredit });
+    // If totalDebit/Credit is 0, it means the item had no BOM and wasn't complimentary. We still log the order status change.
+    if (totalDebit > 0) {
+        await JournalEntry.create([{ 
+        reference: `VOID-${order.orderNumber}`, 
+        description: `VOID (${reason}) by ${adminName}`, 
+        lines, totalDebit, totalCredit 
+        }], { session });
+    }
 
     order.status = 'Voided';
     order.voidReason = reason;
-    await order.save();
+    await order.save({ session });
     
+    await session.commitTransaction();
+    session.endSession();
+
     io.emit('erpUpdated');
     io.emit('orderUpdated', order);
     res.json({ success: true, order });
 
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("Void Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 // --- UNLOCK / REOPEN EOD (ADMIN ONLY) ---
-app.post('/api/inventory/eod/reopen', async (req, res) => {
+app.post('/api/inventory/eod/reopen', verifyToken, async (req, res) => {
   try {
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
     
@@ -792,7 +975,7 @@ app.post('/api/inventory/eod/reopen', async (req, res) => {
   }
 });
 
-app.post('/api/orders/archive', async (req, res) => {
+app.post('/api/orders/archive', verifyToken, async (req, res) => {
   try {
     // 1. Force any hanging kitchen orders to Cancelled
     await Order.updateMany(
@@ -817,12 +1000,12 @@ app.post('/api/orders/archive', async (req, res) => {
 // --- ERP ROUTES ---
 
 // Inventory CRUD
-app.get('/api/inventory', async (req, res) => {
+app.get('/api/inventory', verifyToken, async (req, res) => {
   const items = await Inventory.find().sort({ itemName: 1 });
   res.json({ success: true, items });
 });
 
-app.post('/api/inventory', async (req, res) => {
+app.post('/api/inventory', verifyToken, async (req, res) => {
   try {
     const existing = await Inventory.findOne({ itemName: { $regex: new RegExp(`^${req.body.itemName.trim()}$`, 'i') } });
     if (existing) return res.status(400).json({ success: false, error: 'Item already exists.' });
@@ -851,7 +1034,7 @@ app.post('/api/inventory', async (req, res) => {
 });
 
 // --- NEW: RESTOCK EXISTING INVENTORY (Weighted Average Cost) ---
-app.post('/api/inventory/restock/:id', async (req, res) => {
+app.post('/api/inventory/restock/:id', verifyToken, async (req, res) => {
   try {
     const { addedStock, totalCost } = req.body;
     const item = await Inventory.findById(req.params.id);
@@ -897,23 +1080,23 @@ app.post('/api/inventory/restock/:id', async (req, res) => {
   }
 });
 
-app.put('/api/inventory/:id', async (req, res) => {
+app.put('/api/inventory/:id', verifyToken, async (req, res) => {
   const updatedItem = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
   res.json({ success: true, item: updatedItem });
 });
 
-app.delete('/api/inventory/:id', async (req, res) => {
+app.delete('/api/inventory/:id', verifyToken, async (req, res) => {
   await Inventory.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });
 
 // Accounting Ledger / Journal Entries
-app.get('/api/journal', async (req, res) => {
+app.get('/api/journal', verifyToken, async (req, res) => {
   const entries = await JournalEntry.find().sort({ date: -1 });
   res.json({ success: true, entries });
 });
 
-app.post('/api/journal', async (req, res) => {
+app.post('/api/journal', verifyToken, async (req, res) => {
   try {
     const { description, lines } = req.body;
     
@@ -940,7 +1123,7 @@ app.post('/api/journal', async (req, res) => {
   }
 });
 
-app.get('/api/finance/balances', async (req, res) => {
+app.get('/api/finance/balances', verifyToken, async (req, res) => {
   try {
     const entries = await JournalEntry.find();
     let cashOnHand = 0;
@@ -975,41 +1158,79 @@ io.on('connection', (socket) => {
 });
 
 
+
+// --- AUTO-CODE GENERATORS (Make sure these are defined BEFORE the routes) ---
+const getCategoryPrefix = (categoryName) => {
+  const clean = categoryName.toUpperCase().replace(/[^A-Z]/g, '');
+  if (clean.length < 3) return (clean + 'XXX').substring(0, 3);
+  return clean[0] + clean[1] + clean[clean.length - 1]; 
+};
+
+const generateNextSequence = async (Model, prefix, fieldName) => {
+  const lastDoc = await Model.findOne({ [fieldName]: new RegExp(`^${prefix}-A`) })
+                             .sort({ [fieldName]: -1 });
+  let nextNumber = 1;
+  if (lastDoc && lastDoc[fieldName]) {
+     const match = lastDoc[fieldName].match(/-A(\d+)$/);
+     if (match) nextNumber = parseInt(match[1], 10) + 1;
+  }
+  return `${prefix}-A${nextNumber.toString().padStart(4, '0')}`;
+};
+
 // --- MIDNIGHT AUTO-ARCHIVE SYSTEM ---
 function scheduleMidnightArchive() {
   const now = new Date();
-  const midnight = new Date();
-  midnight.setHours(24, 0, 0, 0); // Sets time to exactly 12:00:00 AM tonight
-  const msToMidnight = midnight.getTime() - now.getTime();
+  
+  // 1. Calculate precise time to Midnight in the Philippines (Asia/Manila)
+  const manilaDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Manila" }));
+  const manilaMidnight = new Date(manilaDate);
+  manilaMidnight.setHours(24, 0, 0, 0); 
+  const msToMidnight = manilaMidnight.getTime() - manilaDate.getTime();
 
-  // Notice the "async" keyword here! Everything using "await" must be inside this block.
+  // 2. Set the countdown timer
   setTimeout(async () => {
-    console.log('🌙 Midnight reached: Auto-closing the day...');
+    console.log('  Midnight reached (PH Time): Auto-closing the day...');
     
-    // 1. Archive the Orders
-    await Order.updateMany(
-      { status: { $in: ['Pending', 'Preparing'] }, isArchived: false }, 
-      { $set: { status: 'Cancelled' } }
-    );
-    await Order.updateMany({ isArchived: false }, { $set: { isArchived: true } });
-    
-    io.emit('ordersArchived'); // Tell all iPads/phones to reset
+    try {
+      // Step A: Force any hanging orders (Pending/Preparing/Ready) to Cancelled
+      await Order.updateMany(
+        { status: { $in: ['Pending', 'Preparing', 'Ready'] }, isArchived: false }, 
+        { $set: { status: 'Cancelled' } }
+      );
 
-    // 2. Take the Midnight Inventory Snapshot
-    const allItems = await Inventory.find();
-    const todayDate = new Date();
-    todayDate.setHours(0, 0, 0, 0); // Normalize to start of day
+      // Step B: Sweep everything active into the archive
+      await Order.updateMany({ isArchived: false }, { $set: { isArchived: true } });
+      io.emit('ordersArchived'); // Tell all iPads/phones to clear their screens
 
-    for (const item of allItems) {
-      await InventoryMovement.create({
-        date: todayDate,
-        inventoryId: item._id,
-        itemName: item.itemName,
-        systemEndingBalance: item.stockQty,
-      });
+      // Step C: Take the Midnight Inventory Snapshot
+      const allItems = await Inventory.find();
+      const todayDate = new Date();
+      todayDate.setHours(0, 0, 0, 0); 
+      for (const item of allItems) {
+        await InventoryMovement.create({
+          date: todayDate,
+          inventoryId: item._id,
+          itemName: item.itemName,
+          systemEndingBalance: item.stockQty,
+        });
+      }
+
+      // Step D: 🚨 LOCK THE REGISTER IN THE EOD RECORD 🚨
+      const closedDateStr = manilaDate.toLocaleDateString('en-CA'); // YYYY-MM-DD
+      await EODRecord.findOneAndUpdate(
+        { dateString: closedDateStr },
+        { status: 'LOCKED', lockedAt: new Date(), lockedBy: 'SYSTEM AUTO-CLOSE' },
+        { upsert: true, new: true }
+      );
+
+      console.log(`  Register locked automatically for ${closedDateStr}`);
+      io.emit('erpUpdated'); // Refreshes the Admin UI to show "EOD Locked"
+      
+    } catch (error) {
+      console.error("Auto-Archive Error:", error);
     }
 
-    // 3. Schedule it again for tomorrow night!
+    // 3. Schedule it again for tomorrow!
     scheduleMidnightArchive(); 
   }, msToMidnight);
 }
@@ -1019,7 +1240,7 @@ const validateOrderMath = (order) => {
   const TOLERANCE = 0.05; 
   
   if (order.subtotal === undefined || order.total === undefined || order.vatAmount === undefined) {
-    return { valid: false, error: "Missing critical financial fields." };
+    return { valid: false, error: "Missing critical financial fields (Subtotal, Total, or VAT)." };
   }
 
   let expectedGross = 0;
@@ -1062,54 +1283,37 @@ const validateOrderMath = (order) => {
 // Start the timer when the server boots up
 scheduleMidnightArchive();
 
-// --- AUTO-CODE GENERATORS ---
-const getCategoryPrefix = (categoryName) => {
-  const clean = categoryName.toUpperCase().replace(/[^A-Z]/g, '');
-  if (clean.length < 3) return (clean + 'XXX').substring(0, 3);
-  return clean[0] + clean[1] + clean[clean.length - 1]; // e.g., "DRINKS" -> "DRS"
-};
-
-const generateNextSequence = async (Model, prefix, fieldName) => {
-  // Finds the highest existing code matching the prefix (e.g., ORD-2026-A0042)
-  const lastDoc = await Model.findOne({ [fieldName]: new RegExp(`^${prefix}-A`) })
-                             .sort({ [fieldName]: -1 });
-  
-  let nextNumber = 1;
-  if (lastDoc && lastDoc[fieldName]) {
-     const match = lastDoc[fieldName].match(/-A(\d+)$/);
-     if (match) nextNumber = parseInt(match[1], 10) + 1;
-  }
-  return `${prefix}-A${nextNumber.toString().padStart(4, '0')}`;
-};
-
-// --- USER / ADMIN ROUTES ---
-
 // --- USER / ADMIN ROUTES ---
 
 app.post('/api/users/login', async (req, res) => {
   const { name, password } = req.body;
   const user = await User.findOne({ name });
-  
   if (!user) return res.status(401).json({ success: false, message: 'Invalid name or password' });
-
-  // Compare the typed password with the database hash
-  const isMatch = await bcrypt.compare(password, user.password);
   
+  const isMatch = await bcrypt.compare(password, user.password);
   if (isMatch) {
-    // Never send the password hash back to the frontend
-    res.json({ success: true, user: { _id: user._id, name: user.name, userCode: user.userCode } });
+    // 🔑 Generate JWT
+    const token = jwt.sign(
+      { _id: user._id, name: user.name, userCode: user.userCode },
+      process.env.JWT_SECRET,
+      { expiresIn: '12h' } // Token expires in 12 hours
+    );
+
+    res.json({ 
+      success: true, 
+      token, // Send token to frontend
+      user: { _id: user._id, name: user.name, userCode: user.userCode } 
+    });
   } else {
     res.status(401).json({ success: false, message: 'Invalid name or password' });
   }
 });
 
-app.get('/api/users', async (req, res) => {
-  // .select('-password') hides the hash from the API response
+app.get('/api/users', verifyToken, async (req, res) => {
   const users = await User.find().select('-password').sort({ userCode: 1 });
   res.json({ success: true, users });
 });
-
-app.post('/api/users', async (req, res) => {
+app.post('/api/users', verifyToken, async (req, res) => {
   try {
     const existing = await User.findOne({ name: { $regex: new RegExp(`^${req.body.name.trim()}$`, 'i') } });
     if (existing) return res.status(400).json({ success: false, error: 'User already exists' });
@@ -1125,7 +1329,7 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-app.put('/api/users/:id', async (req, res) => {
+app.put('/api/users/:id', verifyToken, async (req, res) => {
   try {
     const updateData = { name: req.body.name };
     
@@ -1141,7 +1345,7 @@ app.put('/api/users/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', async (req, res) => {
+app.delete('/api/users/:id', verifyToken, async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });

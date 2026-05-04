@@ -4,9 +4,9 @@ import QRCode from '../components/QRCode.jsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 //const API_URL ='http://192.168.254.116:5002';
-const API_URL = 'http://192.168.68.127:5002';
+//const API_URL = 'http://192.168.68.127:5002';
 //const API_URL = 'https://local-based-menu.onrender.com';
-//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 //const API_URL = 'http://10.201.1.204:5002';
 //const API_URL='http://172.20.10.6:5002';
 //const API_URL='http://192.168.30.131:5002';
@@ -114,12 +114,47 @@ export default function AdminDashboard() {
   const [shiftFilter, setShiftFilter] = useState('All');
   const [users, setUsers] = useState([]); // Stores the employee list
   
+  // --- JWT API HELPER ---
+  // Use this wrapper for ALL fetch requests to the backend API.
+  // It automatically attaches the JWT token from memory.
+  const apiFetch = async (endpoint, options = {}) => {
+    const token = localStorage.getItem('kasa_token');
+    
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
+
+    const finalOptions = {
+      ...options,
+      headers: {
+        ...defaultHeaders,
+        ...(options.headers || {})
+      }
+    };
+
+    const response = await fetch(`${API_URL}${endpoint}`, finalOptions);
+    
+    // If the token expires while they are working, kick them out
+    if (response.status === 401 || response.status === 403) {
+      setIsAuthenticated(false);
+      setActiveAdmin(null);
+      localStorage.removeItem('kasa_admin');
+      localStorage.removeItem('kasa_token');
+      alert("Session expired. Please log in again.");
+      throw new Error('Session Expired');
+    }
+
+    return response;
+  };
+
   // Update the login handler to save to local storage
   const handleSystemLogin = async (e) => {
     e.preventDefault();
     try {
       const res = await fetch(`${API_URL}/api/users/login`, {
-        method: 'POST',  headers: { 'Content-Type': 'application/json' },
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(loginForm)
       });
       const data = await res.json();
@@ -127,11 +162,14 @@ export default function AdminDashboard() {
       if (data.success) {
         setIsAuthenticated(true);
         setActiveAdmin(data.user); 
-        localStorage.setItem('kasa_admin', JSON.stringify(data.user)); // <-- SAVE TO MEMORY
+        localStorage.setItem('kasa_admin', JSON.stringify(data.user)); 
+        localStorage.setItem('kasa_token', data.token); // <-- NEW: SAVE JWT
       } else {
         alert("Access Denied: Invalid name or password.");
       }
-    } catch (err) { console.error("Login failed", err); }
+    } catch (err) { 
+       console.error("Login failed", err); 
+    }
   };
 
 
@@ -183,20 +221,21 @@ export default function AdminDashboard() {
 
   const fetchERPData = async () => {
     try {
-      const invRes = await fetch(`${API_URL}/api/inventory`);
+      // Replaced fetch with apiFetch and removed ${API_URL}
+      const invRes = await apiFetch(`/api/inventory`);
       if (invRes.ok) setInventory((await invRes.json()).items || []);
-      const jeRes = await fetch(`${API_URL}/api/journal`);
+      
+      const jeRes = await apiFetch(`/api/journal`);
       if (jeRes.ok) setJournalEntries((await jeRes.json()).entries || []);
       
-      // NEW: Fetch balances
-      const balRes = await fetch(`${API_URL}/api/finance/balances`);
+      const balRes = await apiFetch(`/api/finance/balances`);
       if (balRes.ok) setCashOnHand((await balRes.json()).cashOnHand || 0);
     } catch (err) { console.error('Failed to fetch ERP data', err); }
   };
 
   const fetchEODData = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/inventory/eod-data`);
+      const res = await apiFetch(`/api/inventory/eod-data`);
       const data = await res.json();
       if (data.success) {
         setEodStatus(data.status);
@@ -204,6 +243,40 @@ export default function AdminDashboard() {
         setDailyMovement(data.movement);
       }
     } catch (err) { console.error("Failed to fetch EOD data"); }
+  };
+
+  const fetchDiscounts = async () => {
+    try {
+      const res = await apiFetch(`/api/discounts`);
+      if (res.ok) setDiscountList((await res.json()).discounts);
+    } catch (err) { console.error("Failed to fetch discounts"); }
+  };
+
+  const fetchData = async () => {
+    try {
+      // Products and Categories are PUBLIC (Customer Menu needs them), so they use regular fetch
+      const pRes = await fetch(`${API_URL}/api/products`);
+      if (pRes.ok) setProducts((await pRes.json()).products || []);
+      
+      const cRes = await fetch(`${API_URL}/api/categories`);
+      if (cRes.ok) setCategories((await cRes.json()).categories || []);
+      
+      // Discounts are PROTECTED, use apiFetch
+      const dRes = await apiFetch(`/api/discounts`);
+      if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
+      
+    } catch (err) { console.error('Failed to fetch menu data', err); }
+  };
+
+  const fetchOrders = async () => {
+    try {
+      const cacheBuster = new Date().getTime(); 
+      const res = await apiFetch(`/api/orders?t=${cacheBuster}`, { cache: 'no-store' });
+      if (res.ok) setOrders((await res.json()).orders || []);
+      
+      const archRes = await apiFetch(`/api/orders/archives?t=${cacheBuster}`, { cache: 'no-store' });
+      if (archRes.ok) setArchivedOrders((await archRes.json()).archives || []);
+    } catch (err) { console.error('Failed to fetch orders', err); }
   };
 
   const injectOwnerCapital = async () => {
@@ -278,35 +351,7 @@ export default function AdminDashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  const fetchDiscounts = async () => {
-    const res = await fetch(`${API_URL}/api/discounts`);
-    if (res.ok) setDiscountList((await res.json()).discounts);
-  };
   useEffect(() => { if (isAuthenticated) fetchDiscounts(); }, [isAuthenticated]);
-
-  const fetchData = async () => {
-    try {
-      const pRes = await fetch(`${API_URL}/api/products`);
-      if (pRes.ok) setProducts((await pRes.json()).products || []);
-      const cRes = await fetch(`${API_URL}/api/categories`);
-      if (cRes.ok) setCategories((await cRes.json()).categories || []);
-      const dRes = await fetch(`${API_URL}/api/discounts`);
-      if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
-      // NEW: Fetch Users for the Complimentary Dropdown
-      const uRes = await fetch(`${API_URL}/api/users`);
-      if (uRes.ok) setUsers((await uRes.json()).users || []);
-    } catch (err) { console.error('Failed to fetch menu data', err); }
-  };
-
-  const fetchOrders = async () => {
-    try {
-      const cacheBuster = new Date().getTime(); 
-      const res = await fetch(`${API_URL}/api/orders?t=${cacheBuster}`, { cache: 'no-store' });
-      if (res.ok) setOrders((await res.json()).orders || []);
-      const archRes = await fetch(`${API_URL}/api/orders/archives?t=${cacheBuster}`, { cache: 'no-store' });
-      if (archRes.ok) setArchivedOrders((await archRes.json()).archives || []);
-    } catch (err) { console.error('Failed to fetch orders', err); }
-  };
 
   // --- REAL-TIME AUTO REFRESH ---
   useEffect(() => {
@@ -397,8 +442,8 @@ export default function AdminDashboard() {
   const applyComplimentary = async (orderId) => {
     const empName = compSelections[orderId];
     if (!empName) return alert("Please select an employee for the complimentary item.");
-    await fetch(`${API_URL}/api/orders/${orderId}`, { 
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, 
+    await apiFetch(`/api/orders/${orderId}`, { 
+      method: 'PUT',
       body: JSON.stringify({ isComplimentary: true, employeeName: empName, discountPercent: 100, isVatExempt: true }) 
     });
   };
@@ -424,9 +469,8 @@ export default function AdminDashboard() {
       discountType = 'Promo';
     }
 
-    await fetch(`${API_URL}/api/orders/${orderId}`, { 
+    await apiFetch(`/api/orders/${orderId}`, { 
       method: 'PUT', 
-      headers: { 'Content-Type': 'application/json' }, 
       body: JSON.stringify({ 
         discountPercent: percent,
         isVatExempt,
@@ -522,10 +566,28 @@ export default function AdminDashboard() {
       console.error(err);
     }
   };
-  const handleShowQR = () => {
-    const uniqueId = Math.floor(1000 + Math.random() * 9000);
-    setAutoTableId(`T-${uniqueId}`);
-    setShowQR(true);
+  const [qrSessionId, setQrSessionId] = useState(''); // Add this to your states at the top if needed
+
+  const handleShowQR = async () => {
+    try {
+      const uniqueId = Math.floor(1000 + Math.random() * 9000);
+      const newTable = `T-${uniqueId}`;
+      
+      // Request a secure, timed link from the backend
+      const res = await apiFetch('/api/sessions/generate', {
+        method: 'POST',
+        body: JSON.stringify({ table: newTable })
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        setAutoTableId(newTable);
+        setQrSessionId(data.sessionId);
+        setShowQR(true);
+      }
+    } catch (err) {
+      console.error("Failed to generate secure QR session");
+    }
   };
 
   const handleRestockSubmit = async (e) => {
@@ -608,425 +670,289 @@ const submitPhysicalCounts = async () => {
   };
   const deleteInventory = async (id) => { if(window.confirm('Delete inventory item?')) { await fetch(`${API_URL}/api/inventory/${id}`, { method: 'DELETE' }); fetchERPData(); } };
 
-  // ==========================================
-  // 📄 PDF EXPORT ENGINE
+// ==========================================
+  //   PDF EXPORT ENGINE
   // ==========================================
 
-  // 1. Inventory & Movement History PDF
   const formatMoney = (val) => `P${(val || 0).toFixed(2)}`;
 
+  // 1. Inventory & Movement History PDF (Unchanged)
   const exportInventoryToPDF = async () => {
     if (inventory.length === 0) return alert("No inventory to export.");
     try {
       const res = await fetch(`${API_URL}/api/inventory/history`);
       const data = await res.json();
       const allHistory = data.success ? data.history : [];
-
       const doc = new jsPDF('landscape');
-      doc.setFontSize(18); 
-      doc.text("Daily Inventory & Movement Report", 14, 15);
-      
+      doc.setFontSize(18); doc.text("Daily Inventory & Movement Report", 14, 15);
       const todayStr = new Date().toLocaleDateString();
-      doc.setFontSize(10); 
-      doc.text(`Date: ${todayStr} | Generated: ${new Date().toLocaleString()}`, 14, 22);
-
-      // Filter history for TODAY to calculate daily movement
+      doc.setFontSize(10); doc.text(`Date: ${todayStr} | Generated: ${new Date().toLocaleString()}`, 14, 22);
+      
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
       const todayHistory = allHistory.filter(h => new Date(h.date) >= startOfDay);
-
+      
       const stockBody = inventory.map(item => {
         const itemHistory = todayHistory.filter(h => h.inventoryId === item._id);
-        
         let purchases = 0, sales = 0, adjustments = 0;
-        
         itemHistory.forEach(h => {
           if (h.type === 'Restock' || h.type === 'Initial') purchases += h.qtyChange;
           else if (h.type === 'Sale') sales += Math.abs(h.qtyChange);
-          else if (h.type === 'Adjustment') adjustments += h.qtyChange; 
+          else if (h.type === 'Adjustment') adjustments += h.qtyChange;
         });
-        
-        // Math: Ending = Beginning + Purchases - Sales + Adjustments
-        // Therefore: Beginning = Ending - Purchases + Sales - Adjustments
         const ending = item.stockQty;
         const beginning = ending - purchases + sales - adjustments;
-
         return [
-          item.itemName,
-          item.unit,
-          beginning.toString(), // Beginning Balance
-          purchases.toString(), // Purchases (In)
-          sales.toString(),     // Sales (Out)
-          adjustments > 0 ? `+${adjustments}` : adjustments.toString(), // Adjustments
-          ending.toString()     // Ending Balance
+          item.itemName, item.unit, beginning.toString(), purchases.toString(), 
+          sales.toString(), adjustments > 0 ? `+${adjustments}` : adjustments.toString(), ending.toString()
         ];
       });
-
       autoTable(doc, {
         startY: 30,
         head: [['Item Name', 'Unit', 'Beginning Bal.', 'Purchases (In)', 'Sales (Out)', 'Adjustments', 'Ending Bal.']],
-        body: stockBody,
-        theme: 'grid',
-        headStyles: { fillColor: [204, 163, 0], textColor: [0,0,0] }
+        body: stockBody, theme: 'grid', headStyles: { fillColor: [204, 163, 0], textColor: [0,0,0] }
       });
-
       doc.save(`Inventory_Movement_${new Date().toISOString().split('T')[0]}.pdf`);
-    } catch (err) { 
-      alert("Failed to generate PDF: " + err.message); 
-    }
+    } catch (err) { alert("Failed to generate PDF: " + err.message); }
   };
 
   const exportLedgerToPDF = () => {
     if (journalEntries.length === 0) return alert("No entries to export.");
-    
     const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("General Ledger Report", 14, 15);
-    doc.setFontSize(10); 
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
-    
+    doc.setFontSize(18); doc.text("General Ledger Report", 14, 15);
+    doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
     let currentY = 30;
-
     journalEntries.forEach(entry => {
-      // Add a new page if the entry won't fit
-      if (currentY > doc.internal.pageSize.getHeight() - 40) {
-        doc.addPage();
-        currentY = 20;
-      }
-
-      // Print Entry Headers above the table
-      doc.setFontSize(11);
-      doc.setFont(undefined, 'bold');
+      if (currentY > doc.internal.pageSize.getHeight() - 40) { doc.addPage(); currentY = 20; }
+      doc.setFontSize(11); doc.setFont(undefined, 'bold');
       doc.text(`Ref: ${entry.reference}  |  Date: ${new Date(entry.date).toLocaleDateString()}`, 14, currentY);
-      
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
+      doc.setFontSize(10); doc.setFont(undefined, 'normal');
       doc.text(`Memo: ${entry.description}`, 14, currentY + 6);
-
-      const rows = entry.lines.map(line => [
-        `${line.accountCode} - ${line.accountName}`,
-        line.debit ? line.debit.toFixed(2) : '',
-        line.credit ? line.credit.toFixed(2) : ''
-      ]);
-
-      // Add the balancing Totals row at the bottom
-      rows.push([
-        'TOTAL',
-        entry.totalDebit ? entry.totalDebit.toFixed(2) : '0.00',
-        entry.totalCredit ? entry.totalCredit.toFixed(2) : '0.00'
-      ]);
-
+      const rows = entry.lines.map(line => [`${line.accountCode} - ${line.accountName}`, line.debit ? line.debit.toFixed(2) : '', line.credit ? line.credit.toFixed(2) : '']);
+      rows.push(['TOTAL', entry.totalDebit ? entry.totalDebit.toFixed(2) : '0.00', entry.totalCredit ? entry.totalCredit.toFixed(2) : '0.00']);
       autoTable(doc, {
-        startY: currentY + 10,
-        head: [['Account', 'Debit (P)', 'Credit (P)']],
-        body: rows,
-        theme: 'grid',
-        headStyles: { fillColor: [40, 40, 40] },
-        styles: { fontSize: 9 }
+        startY: currentY + 10, head: [['Account', 'Debit (P)', 'Credit (P)']], body: rows,
+        theme: 'grid', headStyles: { fillColor: [40, 40, 40] }, styles: { fontSize: 9 }
       });
-
-      // Move down for the next Journal Entry
       currentY = doc.lastAutoTable.finalY + 15;
     });
-
     doc.save(`General_Ledger_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  const generateSalesPDF = (ordersList, filename, title) => {
-    if (ordersList.length === 0) return alert("No orders to export.");
-    const doc = new jsPDF('landscape'); doc.text(title, 14, 15);
-    const rows = ordersList.map(order => [
-      new Date(order.createdAt).toLocaleString(), order.orderNumber, order.status,
-      order.items.map(i => `${i.quantity}x ${i.name}`).join(', '),
-      `P${order.subtotal.toFixed(2)}`, `P${order.vatAmount.toFixed(2)}`, `P${order.discount.toFixed(2)}`, `P${order.total.toFixed(2)}`
-    ]);
-    autoTable(doc, { startY: 25, head: [['Date', 'Order #', 'Status', 'Items', 'Subtotal', 'VAT', 'Discount', 'Total']], body: rows, theme: 'grid', styles: { fontSize: 8 }, columnStyles: { 3: { cellWidth: 80 } } });
-    doc.save(filename);
-  };
-
-
   // 1. COMPLETE SALES HISTORY (Master Summary + Daily Breakdown)
   const exportAllToPDF = () => {
-    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const allOrders = [...orders.filter(o => o.status !== 'Pending' && o.status !== 'Preparing' && o.status !== 'Ready'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     if (allOrders.length === 0) return alert("No orders to export.");
-
+    
     const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text("Complete Sales History", 14, 15);
-    
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
-
-    // --- GROUP DATA FOR MASTER SUMMARY ---
+    
     const grouped = {};
     allOrders.forEach(o => {
       const date = new Date(o.createdAt).toLocaleDateString();
       if (!grouped[date]) grouped[date] = { orders: [], ordersCount: 0, gross: 0, vatable: 0, vatExempt: 0, vat: 0, discount: 0, netSales: 0 };
-      
       grouped[date].orders.push(o);
-      grouped[date].ordersCount++;
-      grouped[date].gross += o.subtotal;
       
-      if (o.isVatExempt) {
-        grouped[date].vatExempt += (o.subtotal / 1.12);
-      } else {
-        grouped[date].vatable += (o.total / 1.12);
+      // ONLY calculate revenue if the order is officially 'Completed'
+      if (o.status === 'Completed') {
+        grouped[date].ordersCount++;
+        grouped[date].gross += o.subtotal;
+        if (o.isVatExempt) { grouped[date].vatExempt += (o.subtotal / 1.12); } 
+        else { grouped[date].vatable += (o.total / 1.12); }
+        grouped[date].vat += o.vatAmount || 0;
+        grouped[date].discount += o.discount || 0;
+        grouped[date].netSales += o.total;
       }
-      
-      grouped[date].vat += o.vatAmount || 0;
-      grouped[date].discount += o.discount || 0;
-      grouped[date].netSales += o.total;
     });
 
-    // --- A. MASTER SUMMARY TABLE ---
+    // MASTER SUMMARY TABLE
     const summaryBody = Object.keys(grouped).map(date => [
-      date,
-      grouped[date].ordersCount.toString(),
-      formatMoney(grouped[date].gross),
-      formatMoney(grouped[date].vatable),
-      formatMoney(grouped[date].vatExempt),
-      formatMoney(grouped[date].vat),
-      formatMoney(grouped[date].discount),
-      formatMoney(grouped[date].netSales)
+      date, grouped[date].ordersCount.toString(), formatMoney(grouped[date].gross), formatMoney(grouped[date].vatable),
+      formatMoney(grouped[date].vatExempt), formatMoney(grouped[date].vat), formatMoney(grouped[date].discount), formatMoney(grouped[date].netSales)
     ]);
-
     autoTable(doc, {
-      startY: 28,
-      head: [['Date', 'Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD/SC)', 'VAT (12%)', 'Discounts', 'Net Sales']],
-      body: summaryBody,
-      theme: 'grid',
-      headStyles: { fillColor: [40, 40, 40] }
+      startY: 28, head: [['Date', 'Completed Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD)', 'VAT (12%)', 'Discounts', 'Net Sales']],
+      body: summaryBody, theme: 'grid', headStyles: { fillColor: [40, 40, 40] }
     });
 
     let currentY = doc.lastAutoTable.finalY + 15;
 
-    // --- B. INDIVIDUAL DAILY BREAKDOWN TABLES ---
+    // INDIVIDUAL DAILY BREAKDOWN TABLES
     Object.keys(grouped).forEach(date => {
-      if (currentY > doc.internal.pageSize.getHeight() - 40) {
-        doc.addPage();
-        currentY = 20;
-      }
+      if (currentY > doc.internal.pageSize.getHeight() - 40) { doc.addPage(); currentY = 20; }
+      doc.setFontSize(14); doc.setTextColor(204, 163, 0); doc.text(`Sales Breakdown: ${date}`, 14, currentY); doc.setTextColor(0, 0, 0);
       
-      doc.setFontSize(14);
-      doc.setTextColor(204, 163, 0); 
-      doc.text(`Sales Breakdown: ${date}`, 14, currentY);
-      doc.setTextColor(0, 0, 0);
-
       const dayRows = [];
       let dayTotals = { cash: 0, bank: 0, ewallet: 0, grand: 0 };
-
+      
       grouped[date].orders.forEach(order => {
         const time = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
         const isCash = order.paymentMethod === 'Cash' || !order.paymentMethod;
         const isBank = order.paymentMethod === 'Bank Transfer';
         const isEwallet = order.paymentMethod === 'E-Wallet';
+        const isCompleted = order.status === 'Completed';
 
-        dayTotals.cash += isCash ? order.total : 0;
-        dayTotals.bank += isBank ? order.total : 0;
-        dayTotals.ewallet += isEwallet ? order.total : 0;
-        dayTotals.grand += order.total;
-
-        // Determine Discount Type
-        let discType = '-';
-        if (order.discountPercent > 0) {
-          discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
+        // Add to daily totals ONLY if completed
+        if (isCompleted) {
+          dayTotals.cash += isCash ? order.total : 0;
+          dayTotals.bank += isBank ? order.total : 0;
+          dayTotals.ewallet += isEwallet ? order.total : 0;
+          dayTotals.grand += order.total;
         }
 
-        // Spread out the Line Items
+        let discType = '-';
+        if (order.discountPercent > 0) discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
+        if (order.isComplimentary) discType = 'COMPLIMENTARY';
+
         order.items.forEach((item, index) => {
           const isLastItem = index === order.items.length - 1;
           dayRows.push([
-            time,
-            order.orderNumber,
-            `${item.quantity}x ${item.name}`,
+            time, order.orderNumber, order.status, `${item.quantity}x ${item.name}`,
             formatMoney(item.price * item.quantity),
-            isLastItem ? formatMoney(order.vatAmount) : '-',
-            isLastItem ? formatMoney(order.discount) : '-', 
+            isLastItem && isCompleted ? formatMoney(order.vatAmount) : '-',
+            isLastItem && isCompleted ? formatMoney(order.discount) : '-', 
             isLastItem ? discType : '-',
-            isLastItem && isCash ? formatMoney(order.total) : '-',
-            isLastItem && isBank ? formatMoney(order.total) : '-',
-            isLastItem && isEwallet ? formatMoney(order.total) : '-',
-            isLastItem ? formatMoney(order.total) : '-'
+            isLastItem && isCash && isCompleted ? formatMoney(order.total) : '-',
+            isLastItem && isBank && isCompleted ? formatMoney(order.total) : '-',
+            isLastItem && isEwallet && isCompleted ? formatMoney(order.total) : '-',
+            isLastItem ? (isCompleted ? formatMoney(order.total) : 'VOID') : '-' // Flags Voided/Cancelled
           ]);
         });
       });
 
-      // Daily Footer (Padded with empty strings to align with payment columns)
-      dayRows.push(['', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
-
+      // Daily Footer
+      dayRows.push(['', '', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
       autoTable(doc, {
         startY: currentY + 5,
-        head: [['Time', 'Order #', 'Item', 'Gross (VAT Inc)', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
-        body: dayRows,
-        theme: 'striped',
-        styles: { fontSize: 7.5 }, // Slightly smaller font to fit all 11 columns comfortably
-        columnStyles: { 2: { cellWidth: 55 } }, // Control the item name width
+        head: [['Time', 'Order #', 'Status', 'Item', 'Gross', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
+        body: dayRows, theme: 'striped', styles: { fontSize: 7.5 }, columnStyles: { 3: { cellWidth: 50 } },
         willDrawCell: function(data) {
-          if (data.row.index === dayRows.length - 1) {
-            doc.setFont(undefined, 'bold');
-            doc.setTextColor(204, 163, 0); 
-          }
+          if (data.row.index === dayRows.length - 1) { doc.setFont(undefined, 'bold'); doc.setTextColor(204, 163, 0); }
         }
       });
-
-      currentY = doc.lastAutoTable.finalY + 15; 
+      currentY = doc.lastAutoTable.finalY + 15;
     });
-
     doc.save(`Complete_Sales_History_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  // 2. EXPORT SPECIFIC DAY (Uses the exact same Line-Item format)
-  const exportDayToPDF = (dateString, dayOrders) => { 
+  // 2. EXPORT SPECIFIC DAY 
+  const exportDayToPDF = (dateString, dayOrders) => {
     if (dayOrders.length === 0) return alert("No orders to export.");
-    const doc = new jsPDF('landscape'); 
+    const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text(`Sales Report: ${dateString}`, 14, 15);
-    
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
-
+    
     const dayRows = [];
     let dayTotals = { cash: 0, bank: 0, ewallet: 0, grand: 0 };
-
+    
     dayOrders.forEach(order => {
       const time = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const isCash = order.paymentMethod === 'Cash' || !order.paymentMethod;
       const isBank = order.paymentMethod === 'Bank Transfer';
       const isEwallet = order.paymentMethod === 'E-Wallet';
+      const isCompleted = order.status === 'Completed';
 
-      dayTotals.cash += isCash ? order.total : 0;
-      dayTotals.bank += isBank ? order.total : 0;
-      dayTotals.ewallet += isEwallet ? order.total : 0;
-      dayTotals.grand += order.total;
-
-      // Determine Discount Type
-      let discType = '-';
-      if (order.discountPercent > 0) {
-        discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
+      // Protect Daily Totals from Voided/Cancelled Orders
+      if (isCompleted) {
+        dayTotals.cash += isCash ? order.total : 0;
+        dayTotals.bank += isBank ? order.total : 0;
+        dayTotals.ewallet += isEwallet ? order.total : 0;
+        dayTotals.grand += order.total;
       }
+
+      let discType = '-';
+      if (order.discountPercent > 0) discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
+      if (order.isComplimentary) discType = 'COMPLIMENTARY';
 
       order.items.forEach((item, index) => {
         const isLastItem = index === order.items.length - 1;
         dayRows.push([
-          time,
-          order.orderNumber,
-          `${item.quantity}x ${item.name}`,
+          time, order.orderNumber, order.status, `${item.quantity}x ${item.name}`,
           formatMoney(item.price * item.quantity),
-          isLastItem ? formatMoney(order.vatAmount) : '-',
-          isLastItem ? formatMoney(order.discount) : '-', 
+          isLastItem && isCompleted ? formatMoney(order.vatAmount) : '-',
+          isLastItem && isCompleted ? formatMoney(order.discount) : '-', 
           isLastItem ? discType : '-',
-          isLastItem && isCash ? formatMoney(order.total) : '-',
-          isLastItem && isBank ? formatMoney(order.total) : '-',
-          isLastItem && isEwallet ? formatMoney(order.total) : '-',
-          isLastItem ? formatMoney(order.total) : '-'
+          isLastItem && isCash && isCompleted ? formatMoney(order.total) : '-',
+          isLastItem && isBank && isCompleted ? formatMoney(order.total) : '-',
+          isLastItem && isEwallet && isCompleted ? formatMoney(order.total) : '-',
+          isLastItem ? (isCompleted ? formatMoney(order.total) : 'VOID') : '-'
         ]);
       });
     });
 
-    dayRows.push(['', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
-
+    dayRows.push(['', '', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
     autoTable(doc, {
       startY: 28,
-      head: [['Time', 'Order #', 'Item', 'Gross (VAT Inc)', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
-      body: dayRows,
-      theme: 'striped',
-      styles: { fontSize: 7.5 },
-      columnStyles: { 2: { cellWidth: 55 } },
+      head: [['Time', 'Order #', 'Status', 'Item', 'Gross', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
+      body: dayRows, theme: 'striped', styles: { fontSize: 7.5 }, columnStyles: { 3: { cellWidth: 50 } },
       willDrawCell: function(data) {
-        if (data.row.index === dayRows.length - 1) {
-          doc.setFont(undefined, 'bold');
-          doc.setTextColor(204, 163, 0); 
-        }
+        if (data.row.index === dayRows.length - 1) { doc.setFont(undefined, 'bold'); doc.setTextColor(204, 163, 0); }
       }
     });
-
     doc.save(`Sales_${dateString.replace(/,/g, '').replace(/ /g, '_')}.pdf`);
   };
 
   // 3. DAILY SALES SUMMARY (Analytics Trend Export)
   const exportAnalyticsToPDF = () => {
-    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    if (allOrders.length === 0) return alert("No analytics data to export.");
+    // STRICT FILTER: Analytics must ONLY track Completed orders. Voided orders must never touch analytics.
+    const allCompletedOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders.filter(o => o.status === 'Completed')].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (allCompletedOrders.length === 0) return alert("No analytics data to export.");
     
-    const doc = new jsPDF('landscape'); 
+    const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text("Daily Sales Trend & Summary", 14, 15);
-    
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
-
+    
     const grouped = {};
-    allOrders.forEach(o => {
+    allCompletedOrders.forEach(o => {
       const date = new Date(o.createdAt).toLocaleDateString();
       if (!grouped[date]) grouped[date] = { ordersCount: 0, gross: 0, vatable: 0, vatExempt: 0, vat: 0, discount: 0, netSales: 0 };
-      
       grouped[date].ordersCount++;
       grouped[date].gross += o.subtotal;
-      
-      if (o.isVatExempt) {
-        grouped[date].vatExempt += (o.subtotal / 1.12);
-      } else {
-        grouped[date].vatable += (o.total / 1.12);
-      }
-      
+      if (o.isVatExempt) { grouped[date].vatExempt += (o.subtotal / 1.12); } 
+      else { grouped[date].vatable += (o.total / 1.12); }
       grouped[date].vat += o.vatAmount || 0;
       grouped[date].discount += o.discount || 0;
       grouped[date].netSales += o.total;
     });
 
     const summaryBody = Object.keys(grouped).map(date => [
-      date,
-      grouped[date].ordersCount.toString(),
-      formatMoney(grouped[date].gross),
-      formatMoney(grouped[date].vatable),
-      formatMoney(grouped[date].vatExempt),
-      formatMoney(grouped[date].vat),
-      formatMoney(grouped[date].discount),
-      formatMoney(grouped[date].netSales)
+      date, grouped[date].ordersCount.toString(), formatMoney(grouped[date].gross), formatMoney(grouped[date].vatable),
+      formatMoney(grouped[date].vatExempt), formatMoney(grouped[date].vat), formatMoney(grouped[date].discount), formatMoney(grouped[date].netSales)
     ]);
-
     autoTable(doc, {
-      startY: 28,
-      head: [['Date', 'Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD/SC)', 'VAT (12%)', 'Discounts', 'Net Sales']],
-      body: summaryBody,
-      theme: 'grid',
-      headStyles: { fillColor: [40, 40, 40] }
+      startY: 28, head: [['Date', 'Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD/SC)', 'VAT (12%)', 'Discounts', 'Net Sales']],
+      body: summaryBody, theme: 'grid', headStyles: { fillColor: [40, 40, 40] }
     });
-
     doc.save(`Daily_Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
   };
-  const exportMonthlyToPDF = () => {
-    const allOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    if (allOrders.length === 0) return alert("No orders to export.");
 
+  const exportMonthlyToPDF = () => {
+    // STRICT FILTER: Only Completed orders.
+    const allCompletedOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders.filter(o => o.status === 'Completed')].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (allCompletedOrders.length === 0) return alert("No orders to export.");
+    
     const doc = new jsPDF();
     doc.setFontSize(18); doc.text("Monthly Sales Summary", 14, 15);
-
     const groupedByMonth = {};
-    allOrders.forEach(o => {
+    allCompletedOrders.forEach(o => {
       const month = new Date(o.createdAt).toLocaleString('default', { month: 'long', year: 'numeric' });
       if (!groupedByMonth[month]) groupedByMonth[month] = { cash: 0, bank: 0, ewallet: 0, total: 0 };
-      
       groupedByMonth[month].cash += (o.paymentMethod === 'Cash' || !o.paymentMethod) ? o.total : 0;
       groupedByMonth[month].bank += (o.paymentMethod === 'Bank Transfer') ? o.total : 0;
       groupedByMonth[month].ewallet += (o.paymentMethod === 'E-Wallet') ? o.total : 0;
       groupedByMonth[month].total += o.total;
     });
-
     const rows = Object.keys(groupedByMonth).map(month => [
-      month,
-      `P${groupedByMonth[month].cash.toFixed(2)}`,
-      `P${groupedByMonth[month].bank.toFixed(2)}`,
-      `P${groupedByMonth[month].ewallet.toFixed(2)}`,
-      `P${groupedByMonth[month].total.toFixed(2)}`
+      month, `P${groupedByMonth[month].cash.toFixed(2)}`, `P${groupedByMonth[month].bank.toFixed(2)}`, `P${groupedByMonth[month].ewallet.toFixed(2)}`, `P${groupedByMonth[month].total.toFixed(2)}`
     ]);
-
     autoTable(doc, {
-      startY: 25,
-      head: [['Month', 'Cash', 'Bank', 'E-Wallet', 'Total Revenue']],
-      body: rows,
-      theme: 'grid',
-      headStyles: { fillColor: [40, 40, 40] }
+      startY: 25, head: [['Month', 'Cash', 'Bank', 'E-Wallet', 'Total Revenue']],
+      body: rows, theme: 'grid', headStyles: { fillColor: [40, 40, 40] }
     });
-
     doc.save(`Monthly_Summary_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
@@ -1325,7 +1251,7 @@ const submitPhysicalCounts = async () => {
             
             <div className="bg-white rounded-xl shadow-inner w-full flex justify-center items-center overflow-hidden">
               {/* Note: The QRCode component handles its own internal padding and styling */}
-              <QRCode url={`${FRONTEND_URL}/?table=${autoTableId}&token=${SECRET_TOKEN}`} size={220} />
+              <QRCode url={`${FRONTEND_URL}/?session=${qrSessionId}&table=${autoTableId}`} size={220} />
             </div>
             
             <button 
