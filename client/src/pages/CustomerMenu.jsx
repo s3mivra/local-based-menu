@@ -43,6 +43,7 @@ export default function CustomerMenu() {
   
   const [isVibrating, setIsVibrating] = useState(false);
   const vibrationInterval = useRef(null);
+  const [isFinished, setIsFinished] = useState(false);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const wakeLockRef = useRef(null);
 
@@ -59,11 +60,12 @@ export default function CustomerMenu() {
     }
   };
 
-  // --- 1. INITIALIZATION & HEARTBEAT ENGINE ---
+  // --- 1. INITIALIZATION & PRELOAD ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const session = params.get('session');
     
+    // If there is no secure session token in the URL, block them instantly.
     if (!session) {
       setIsAuthorized(false);
       setIsCheckingSession(false);
@@ -72,12 +74,12 @@ export default function CustomerMenu() {
     
     setSessionToken(session);
 
-    // PRELOAD MENU DATA SILENTLY
+    // PRELOAD MENU DATA SILENTLY SO THERE IS NO LOADING SCREEN
     fetchProducts();
 
     const validateSessionAndCheckMemory = async () => {
       try {
-        // 1. Verify with the backend that this link hasn't expired
+        // 1. Verify with the backend that this link hasn't expired (10 min rule)
         const heartbeatRes = await fetch(`${API_URL}/api/sessions/${session}/heartbeat`, { method: 'POST' });
         const heartbeatData = await heartbeatRes.json();
 
@@ -100,7 +102,7 @@ export default function CustomerMenu() {
             }
           }
         } else {
-          setIsAuthorized(false); // Link is dead or 10 mins expired
+          setIsAuthorized(false); 
         }
       } catch (err) {
         setIsAuthorized(false);
@@ -111,7 +113,7 @@ export default function CustomerMenu() {
     validateSessionAndCheckMemory();
   }, []);
 
-  // --- INACTIVITY TRACKER (10 MINS) ---
+  // --- 10-MINUTE INACTIVITY TRACKER ---
   useEffect(() => {
     if (!isAuthorized || !sessionToken) return;
 
@@ -183,7 +185,7 @@ export default function CustomerMenu() {
     };
   }, [tableNum]);
 
-  // --- 3. STATUS ALERTS (Vibration & Notifications) ---
+  // --- 3. HARDWARE ALERTS ---
   useEffect(() => {
     if (lockedOrder?.status === 'Preparing') {
       playCustomerDing();
@@ -225,7 +227,7 @@ export default function CustomerMenu() {
     };
   }, [lockedOrder?.status]);
 
-  // --- BURN AFTER READING ---
+  // --- BURN AFTER RECEIVING ---
   const handleReceived = async () => {
     setIsVibrating(false);
     if (vibrationInterval.current) clearInterval(vibrationInterval.current);
@@ -238,9 +240,12 @@ export default function CustomerMenu() {
     localStorage.removeItem('semivra_active_order');
     localStorage.removeItem('semivra_order_time');
 
-    // 🔥 Kill the QR link permanently in the backend
+    // 🔥 PERMANENTLY DESTROY THE LINK
     await fetch(`${API_URL}/api/sessions/${sessionToken}/close`, { method: 'POST' });
-    setIsAuthorized(false); // Shuts down their access permanently
+    
+    setIsFinished(true); 
+    setLockedOrder(null);
+    setCart([]);
   };
 
   const fetchProducts = async () => {
@@ -336,7 +341,6 @@ export default function CustomerMenu() {
   //                RENDER VIEWS
   // ==========================================
 
-  // --- 1. SESSION CHECK SPINNER ---
   if (isCheckingSession) {
     return (
       <div className="min-h-screen bg-dark flex items-center justify-center">
@@ -345,227 +349,37 @@ export default function CustomerMenu() {
     );
   }
 
-  // --- 2. ACCESS DENIED / LINK EXPIRED ---
   if (!isAuthorized) {
     return (
       <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6 text-center">
-        <div className="bg-surface p-8 rounded-xl border border-red-900/50 shadow-2xl max-w-sm w-full">
+        <div className="bg-surface p-8 rounded-xl border border-red-900/50 shadow-2xl max-w-sm w-full animate-fade-in">
           <h1 className="text-2xl font-black text-white uppercase tracking-widest mb-2">Link Expired</h1>
-          <p className="text-gray-400 text-sm">This ordering session is no longer active. Please request a new QR code from the staff to order.</p>
+          <p className="text-gray-400 text-sm">This ordering session is closed. Please ask the staff to generate a new QR code for your table.</p>
         </div>
       </div>
     );
   }
 
-  // --- 3. THE LANDING SCREEN (STEP 1) ---
-  if (flowState === 'landing') {
+  if (isFinished) {
     return (
-      <div className="min-h-[100dvh] bg-dark flex flex-col items-center justify-center p-6 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-accent/10 to-transparent pointer-events-none"></div>
-        <div className="z-10 text-center w-full max-w-sm">
-          <div className="w-24 h-24 bg-accent rounded-full mx-auto mb-6 shadow-[0_0_30px_rgba(255,193,7,0.3)] flex items-center justify-center">
-             <span className="text-4xl">☕</span>
+      <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6">
+        <div className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl text-center max-w-sm w-full animate-fade-in">
+          <h2 className="text-3xl font-black text-accent mb-4 uppercase tracking-widest">Thank You!</h2>
+          <p className="text-gray-300 font-medium mb-8">We hope you enjoy your order.</p>
+          <div className="border-t border-gray-800 pt-6 mt-2">
+            <p className="text-gray-500 text-xs uppercase font-bold tracking-widest">You may now close this page.</p>
           </div>
-          <h1 className="text-4xl font-black text-white tracking-tight mb-2">INFU COFFEE</h1>
-          <p className="text-gray-400 font-bold uppercase tracking-widest text-sm mb-12">Table {tableNum}</p>
-          
-          <button 
-            onClick={() => setFlowState('name_input')}
-            className="w-full bg-accent text-dark font-black py-4 rounded-xl text-lg hover:bg-yellow-500 transition shadow-xl shadow-accent/20 active:scale-95 uppercase tracking-widest"
-          >
-            Start Order
-          </button>
         </div>
       </div>
     );
   }
 
-  // --- 4. NAME CAPTURE SCREEN (STEP 2) ---
-  if (flowState === 'name_input') {
-    return (
-      <div className="min-h-[100dvh] bg-dark flex flex-col items-center justify-center p-6 animate-fade-in">
-        <div className="w-full max-w-sm bg-surface p-8 rounded-2xl border border-gray-800 shadow-2xl">
-          <h2 className="text-2xl font-black text-white mb-2">Who is ordering?</h2>
-          <p className="text-gray-400 text-sm mb-6">We'll use this to call your order when it's ready.</p>
-          
-          <input 
-            type="text" 
-            placeholder="Enter your nickname"
-            value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-4 rounded-xl outline-none mb-6 font-bold text-lg transition"
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && customerName.trim().length > 0) setFlowState('menu');
-            }}
-          />
-          
-          <button 
-            onClick={() => setFlowState('menu')}
-            disabled={customerName.trim().length === 0}
-            className={`w-full font-black py-4 rounded-xl text-lg transition shadow-xl uppercase tracking-widest ${customerName.trim().length === 0 ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-dark hover:bg-yellow-500 shadow-accent/20 active:scale-95'}`}
-          >
-            View Menu
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- 5. THE ACTIVE MENU SCREEN (STEP 3 - ORIGINAL CSS PRESERVED) ---
-  if (flowState === 'menu') {
-    return (
-      <div className="min-h-screen bg-dark text-white pb-48 animate-fade-in">
-        
-        {/* 5-SECOND SUCCESS POPUP */}
-        {successMessage && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-            <div className="bg-surface p-8 rounded-xl text-center shadow-[0_0_40px_rgba(234,179,8,0.2)] border border-accent max-w-sm w-full">
-              <h2 className="text-3xl font-black text-accent mb-2 uppercase tracking-widest">Received!</h2>
-              <p className="text-gray-300 font-medium">Your order has been sent to the kitchen.</p>
-            </div>
-          </div>
-        )}
-
-        <header className="bg-surface pt-6 px-4 pb-4 sticky top-0 z-30 border-b border-gray-800 text-center shadow-lg">
-          <h1 className="text-2xl font-black tracking-widest text-accent uppercase mb-4">Digital Menu</h1>
-          <div className="flex gap-3 overflow-x-auto scrollbar-none pb-2 max-w-5xl mx-auto">
-            {allCategories.map(cat => (
-              <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-full whitespace-nowrap text-sm font-bold transition ${activeCategory === cat ? 'bg-accent text-dark shadow-md shadow-accent/20' : 'bg-dark border border-gray-700 text-gray-400 hover:text-white'}`}>{cat}</button>
-            ))}
-          </div>
-        </header>
-
-        <main className="p-4 max-w-5xl mx-auto space-y-10 mt-6">
-          {displayedCategories.length === 0 ? (
-            <p className="text-center text-gray-500 mt-10">No items available.</p>
-          ) : (
-            displayedCategories.map(category => {
-              const categoryProducts = products.filter(p => p.category === category);
-              if (categoryProducts.length === 0) return null; 
-              return (
-                <div key={category}>
-                  <h2 className="text-2xl font-bold mb-4 text-white border-b-2 border-gray-800 pb-2 inline-block">{category}</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {categoryProducts.map(p => (
-                      <div key={p._id} onClick={() => handleProductClick(p)} className="bg-surface rounded-xl flex flex-col transition hover:shadow-2xl hover:shadow-accent/10 cursor-pointer border border-gray-800 hover:border-accent/50 group relative h-full">
-                        <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none z-0 rounded-xl"></div>
-                        {p.image ? (
-                          <div className="w-full h-40 relative z-20 shrink-0 flex items-center justify-center p-2 mt-2">
-                            <img src={p.image} alt={p.name} className="w-full h-full object-contain transition-all duration-500 group-hover:scale-[1.15] group-hover:-translate-y-3 drop-shadow-2xl" />
-                          </div>
-                        ) : (
-                          <div className="w-full h-40 relative z-10 shrink-0 flex items-center justify-center text-gray-600 text-xs font-bold uppercase tracking-widest mt-2">No Image</div>
-                        )}
-                        <div className="p-5 flex flex-col flex-1 relative z-10">
-                          <h3 className="font-bold text-lg mb-1 text-white leading-tight">{p.name}</h3>
-                          {p.description && <p className="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-3">{p.description}</p>}
-                          <div className="flex justify-between items-center mt-auto pt-4 border-t border-gray-800/50">
-                            <p className="text-accent font-bold text-xl">P{(p.basePrice || 0).toFixed(2)}{p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}</p>
-                            <span className="bg-dark text-white px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">{p.sizes?.length > 0 ? 'Select' : 'Add'}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </main>
-
-        {selectedProduct && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 animate-fade-in">
-            <div className="bg-surface rounded-xl p-6 w-full max-w-md border border-gray-700 shadow-2xl">
-              <h3 className="text-2xl font-bold mb-1 text-white">{selectedProduct.name}</h3>
-              {selectedProduct.description && <p className="text-gray-400 text-sm mb-6 line-clamp-2">{selectedProduct.description}</p>}
-              <p className="text-gray-300 text-sm font-semibold mb-3 uppercase tracking-wider">Choose a size:</p>
-              <div className="space-y-6 mb-8 max-h-[50vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-                {groupedSizes.Hot && (
-                  <div>
-                    <h4 className="text-red-400 font-bold text-sm uppercase tracking-wider mb-2 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400"></span> Hot Options</h4>
-                    <div className="space-y-2">
-                      {groupedSizes.Hot.map((size, idx) => (
-                        <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
-                          <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
-                          <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {groupedSizes.Iced && (
-                  <div>
-                    <h4 className="text-blue-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Iced Options</h4>
-                    <div className="space-y-2">
-                      {groupedSizes.Iced.map((size, idx) => (
-                        <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
-                          <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
-                          <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {groupedSizes.Standard && (
-                  <div>
-                    {Object.keys(groupedSizes).length > 1 && <h4 className="text-gray-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4">Other Options</h4>}
-                    <div className="space-y-2">
-                      {groupedSizes.Standard.map((size, idx) => (
-                        <label key={`std-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
-                          <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white">{size.displayName}</span></div>
-                          <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-3">
-                <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-dark text-white border border-gray-700 py-3 rounded-md font-semibold hover:bg-gray-800 transition">Cancel</button>
-                <button onClick={() => addToCart(selectedProduct, selectedSize)} className="flex-1 bg-accent text-dark py-3 rounded-md font-bold hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Add to Cart</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {cart.length > 0 && (
-          <div className="fixed bottom-0 left-0 right-0 bg-surface border-t border-gray-800 p-4 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] z-40 animate-slide-up">
-            <div className="max-w-4xl mx-auto">
-              <div className="mb-4 max-h-40 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-                {cart.map(item => (
-                  <div key={item.cartItemId} className="flex justify-between items-center py-3 border-b border-gray-800/50">
-                    <div className="flex-1"><span className="text-sm font-bold text-white block">{item.name}</span><span className="text-xs text-accent font-semibold">P{item.price.toFixed(2)}</span></div>
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">-</button>
-                      <span className="text-sm w-4 text-center font-bold">{item.quantity}</span>
-                      <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">+</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* The name input is removed from here because they entered it in Step 2 */}
-
-              <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
-                <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">P{total.toFixed(2)}</span></div>
-                <button type="button" onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // --- 6. LOCKED STATUS SCREEN (STEP 4) ---
-  if (flowState === 'status') {
+  if (lockedOrder || flowState === 'status') {
     return (
       <div className={`min-h-[100dvh] flex flex-col items-center justify-center p-6 text-center transition-colors duration-500 ${
         lockedOrder?.status === 'Ready' || lockedOrder?.status === 'Completed' ? 'bg-green-600' : 'bg-dark'
       }`}>
         <div className="bg-surface p-8 rounded-3xl border border-gray-800 shadow-2xl max-w-sm w-full relative overflow-hidden animate-fade-in">
-          
           {(lockedOrder?.status === 'Pending' || lockedOrder?.status === 'Preparing') && (
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-4 border-accent/20 rounded-full animate-ping pointer-events-none"></div>
           )}
@@ -611,5 +425,201 @@ export default function CustomerMenu() {
     );
   }
 
-  return null;
+  if (flowState === 'landing') {
+    return (
+      <div className="min-h-[100dvh] bg-dark flex flex-col items-center justify-center p-6 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-accent/10 to-transparent pointer-events-none"></div>
+        <div className="z-10 text-center w-full max-w-sm">
+          <div className="w-24 h-24 bg-accent rounded-full mx-auto mb-6 shadow-[0_0_30px_rgba(255,193,7,0.3)] flex items-center justify-center">
+             <span className="text-4xl">☕</span>
+          </div>
+          <h1 className="text-4xl font-black text-white tracking-tight mb-2">INFU COFFEE</h1>
+          <p className="text-gray-400 font-bold uppercase tracking-widest text-sm mb-12">Table {tableNum}</p>
+          
+          <button 
+            onClick={() => setFlowState('name_input')}
+            className="w-full bg-accent text-dark font-black py-4 rounded-xl text-lg hover:bg-yellow-500 transition shadow-xl shadow-accent/20 active:scale-95 uppercase tracking-widest"
+          >
+            Start Order
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (flowState === 'name_input') {
+    return (
+      <div className="min-h-[100dvh] bg-dark flex flex-col items-center justify-center p-6 animate-fade-in">
+        <div className="w-full max-w-sm bg-surface p-8 rounded-2xl border border-gray-800 shadow-2xl">
+          <h2 className="text-2xl font-black text-white mb-2">Who is ordering?</h2>
+          <p className="text-gray-400 text-sm mb-6">We'll use this to call your order when it's ready.</p>
+          
+          <input 
+            type="text" 
+            placeholder="Enter your nickname"
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-4 rounded-xl outline-none mb-6 font-bold text-lg transition"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && customerName.trim().length > 0) setFlowState('menu');
+            }}
+          />
+          
+          <button 
+            onClick={() => setFlowState('menu')}
+            disabled={customerName.trim().length === 0}
+            className={`w-full font-black py-4 rounded-xl text-lg transition shadow-xl uppercase tracking-widest ${customerName.trim().length === 0 ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-dark hover:bg-yellow-500 shadow-accent/20 active:scale-95'}`}
+          >
+            View Menu
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- 7. ORIGINAL MENU DESIGN RESTORED ---
+  return (
+    <div className="min-h-screen bg-dark text-white pb-48 animate-fade-in">
+      
+      {successMessage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-surface p-8 rounded-xl text-center shadow-[0_0_40px_rgba(234,179,8,0.2)] border border-accent max-w-sm w-full">
+            <h2 className="text-3xl font-black text-accent mb-2 uppercase tracking-widest">Received!</h2>
+            <p className="text-gray-300 font-medium">Your order has been sent to the kitchen.</p>
+          </div>
+        </div>
+      )}
+
+      {/* ORIGINAL HEADER PRESERVED */}
+      <header className="bg-surface pt-6 px-4 pb-4 sticky top-0 z-30 border-b border-gray-800 text-center shadow-lg">
+        <h1 className="text-2xl font-black tracking-widest text-accent uppercase mb-4">Digital Menu</h1>
+        <div className="flex gap-3 overflow-x-auto scrollbar-none pb-2 max-w-5xl mx-auto">
+          {allCategories.map(cat => (
+            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-full whitespace-nowrap text-sm font-bold transition ${activeCategory === cat ? 'bg-accent text-dark shadow-md shadow-accent/20' : 'bg-dark border border-gray-700 text-gray-400 hover:text-white'}`}>{cat}</button>
+          ))}
+        </div>
+      </header>
+
+      {/* ORIGINAL MAIN GRID PRESERVED */}
+      <main className="p-4 max-w-5xl mx-auto space-y-10 mt-6">
+        {displayedCategories.length === 0 ? (
+          <p className="text-center text-gray-500 mt-10">No items available.</p>
+        ) : (
+          displayedCategories.map(category => {
+            const categoryProducts = products.filter(p => p.category === category);
+            if (categoryProducts.length === 0) return null; 
+            return (
+              <div key={category}>
+                <h2 className="text-2xl font-bold mb-4 text-white border-b-2 border-gray-800 pb-2 inline-block">{category}</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {categoryProducts.map(p => (
+                    <div key={p._id} onClick={() => handleProductClick(p)} className="bg-surface rounded-xl flex flex-col transition hover:shadow-2xl hover:shadow-accent/10 cursor-pointer border border-gray-800 hover:border-accent/50 group relative h-full">
+                      <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none z-0 rounded-xl"></div>
+                      {p.image ? (
+                        <div className="w-full h-40 relative z-20 shrink-0 flex items-center justify-center p-2 mt-2">
+                          <img src={p.image} alt={p.name} className="w-full h-full object-contain transition-all duration-500 group-hover:scale-[1.15] group-hover:-translate-y-3 drop-shadow-2xl" />
+                        </div>
+                      ) : (
+                        <div className="w-full h-40 relative z-10 shrink-0 flex items-center justify-center text-gray-600 text-xs font-bold uppercase tracking-widest mt-2">No Image</div>
+                      )}
+                      <div className="p-5 flex flex-col flex-1 relative z-10">
+                        <h3 className="font-bold text-lg mb-1 text-white leading-tight">{p.name}</h3>
+                        {p.description && <p className="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-3">{p.description}</p>}
+                        <div className="flex justify-between items-center mt-auto pt-4 border-t border-gray-800/50">
+                          <p className="text-accent font-bold text-xl">P{(p.basePrice || 0).toFixed(2)}{p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}</p>
+                          <span className="bg-dark text-white px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">{p.sizes?.length > 0 ? 'Select' : 'Add'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </main>
+
+      {/* ORIGINAL SIZE MODAL PRESERVED */}
+      {selectedProduct && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-surface rounded-xl p-6 w-full max-w-md border border-gray-700 shadow-2xl">
+            <h3 className="text-2xl font-bold mb-1 text-white">{selectedProduct.name}</h3>
+            {selectedProduct.description && <p className="text-gray-400 text-sm mb-6 line-clamp-2">{selectedProduct.description}</p>}
+            <p className="text-gray-300 text-sm font-semibold mb-3 uppercase tracking-wider">Choose a size:</p>
+            <div className="space-y-6 mb-8 max-h-[50vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+              {groupedSizes.Hot && (
+                <div>
+                  <h4 className="text-red-400 font-bold text-sm uppercase tracking-wider mb-2 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400"></span> Hot Options</h4>
+                  <div className="space-y-2">
+                    {groupedSizes.Hot.map((size, idx) => (
+                      <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                        <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
+                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {groupedSizes.Iced && (
+                <div>
+                  <h4 className="text-blue-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Iced Options</h4>
+                  <div className="space-y-2">
+                    {groupedSizes.Iced.map((size, idx) => (
+                      <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                        <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
+                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {groupedSizes.Standard && (
+                <div>
+                  {Object.keys(groupedSizes).length > 1 && <h4 className="text-gray-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4">Other Options</h4>}
+                  <div className="space-y-2">
+                    {groupedSizes.Standard.map((size, idx) => (
+                      <label key={`std-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                        <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white">{size.displayName}</span></div>
+                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-dark text-white border border-gray-700 py-3 rounded-md font-semibold hover:bg-gray-800 transition">Cancel</button>
+              <button onClick={() => addToCart(selectedProduct, selectedSize)} className="flex-1 bg-accent text-dark py-3 rounded-md font-bold hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Add to Cart</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ORIGINAL CART BOTTOM SHEET (Name Input Removed) */}
+      {cart.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-surface border-t border-gray-800 p-4 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] z-40">
+          <div className="max-w-4xl mx-auto">
+            <div className="mb-4 max-h-40 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+              {cart.map(item => (
+                <div key={item.cartItemId} className="flex justify-between items-center py-3 border-b border-gray-800/50">
+                  <div className="flex-1"><span className="text-sm font-bold text-white block">{item.name}</span><span className="text-xs text-accent font-semibold">P{item.price.toFixed(2)}</span></div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">-</button>
+                    <span className="text-sm w-4 text-center font-bold">{item.quantity}</span>
+                    <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
+              <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">P{total.toFixed(2)}</span></div>
+              <button type="button" onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
