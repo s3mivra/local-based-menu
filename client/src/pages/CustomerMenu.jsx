@@ -27,8 +27,11 @@ export default function CustomerMenu() {
   const [flowState, setFlowState] = useState('landing'); // 'landing' -> 'name_input' -> 'menu' -> 'status'
   
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]); // <-- THE FIX: Add this state
   const [cart, setCart] = useState([]);
   const [customerName, setCustomerName] = useState('');
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   const [activeCategory, setActiveCategory] = useState('All');
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -250,10 +253,19 @@ export default function CustomerMenu() {
 
   const fetchProducts = async () => {
     try {
+      // Fetch Products
       const res = await fetch(`${API_URL}/api/products?t=${new Date().getTime()}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.success) setProducts(data.products);
-    } catch (err) { console.error("Failed to fetch menu"); }
+      
+      // FIX: Fetch Categories so the dynamic Kitchen/Bar routing knows where to send items!
+      const catRes = await fetch(`${API_URL}/api/categories?t=${new Date().getTime()}`, { cache: 'no-store' });
+      const catData = await catRes.json();
+      if (catData.success) setCategories(catData.categories);
+      
+    } catch (err) { 
+      console.error("Failed to fetch menu data"); 
+    }
   };
 
   const handleProductClick = (product) => {
@@ -269,11 +281,18 @@ export default function CustomerMenu() {
     const price = size ? size.price : (product.basePrice || 0);
     const sizeName = size ? size.name : 'Regular';
     const cartItemId = `${product._id}-${sizeName}`;
+    
+    // --- SMART ROUTING ---
+    // Look up the category and assign the department. Default to Kitchen if missing.
+    const categoryObject = categories.find(c => c.name === product.category);
+    const dept = categoryObject ? (categoryObject.department || 'Kitchen') : 'Kitchen'; 
 
     setCart(prev => {
       const existing = prev.find(item => item.cartItemId === cartItemId);
       if (existing) return prev.map(item => item.cartItemId === cartItemId ? { ...item, quantity: item.quantity + 1 } : item);
-      return [...prev, { cartItemId, productId: product._id, name: size ? `${product.name} (${sizeName})` : product.name, price, quantity: 1 }];
+      
+      // Inject department and itemStatus into the cart payload
+      return [...prev, { cartItemId, productId: product._id, name: size ? `${product.name} (${sizeName})` : product.name, price, quantity: 1, department: dept, itemStatus: 'Received' }];
     });
     setSelectedProduct(null); setSelectedSize(null);
   };
@@ -298,10 +317,25 @@ export default function CustomerMenu() {
   };
 
   const confirmOrder = async () => {
+    if (isSubmitting) return; 
+    setIsSubmitting(true);
+
+    const idempotencyKey = `${sessionToken}-${Date.now()}`;
     try {
       const res = await fetch(`${API_URL}/api/orders`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: cart, discountPercent: 0, isVatExempt: false, table: tableNum, customerName: customerName.trim() })
+        method: 'POST', 
+        headers: { 
+          'Content-Type': 'application/json',
+          'idempotency-key': idempotencyKey // <-- FIX 1: Added header
+        },
+        body: JSON.stringify({ 
+          items: cart, 
+          discountPercent: 0, 
+          isVatExempt: false, 
+          table: tableNum, 
+          customerName: customerName.trim(),
+          sessionId: sessionToken // <-- FIX 2: Added session to body
+        })
       });
       
       const data = await res.json();

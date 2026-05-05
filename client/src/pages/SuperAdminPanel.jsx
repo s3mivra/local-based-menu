@@ -1,148 +1,224 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-//const API_URL = 'http://192.168.100.2:5002'; // Use your local or render URL
-const API_URL = 'https://local-based-menu.onrender.com';
-//const API_URL = 'http://localhost:3000';
-//const API_URL='http://192.168.30.131:3000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5002';
+
 export default function SuperAdminPanel() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [newUserForm, setNewUserForm] = useState({ name: '', password: '', role: 'cashier' });
   const [loginForm, setLoginForm] = useState({ name: '', password: '' });
   
-  const [users, setUsers] = useState([]);
-  const [formData, setFormData] = useState({ name: '', password: '' });
-  const [editingId, setEditingId] = useState(null);
+  // Use localStorage to persist login state across reloads
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('semivra_token'));
+  const navigate = useNavigate();
 
-  const handleLogin = async (e) => {
+  // --- SMART API WRAPPER ---
+  const apiFetch = async (endpoint, options = {}) => {
+    if (!options.headers) options.headers = {};
+    const token = localStorage.getItem('semivra_token');
+    if (token) options.headers['Authorization'] = `Bearer ${token}`;
+    
+    if (options.body && typeof options.body === 'string' && !options.headers['Content-Type']) {
+      options.headers['Content-Type'] = 'application/json';
+    }
+    
+    const cleanEndpoint = endpoint.replace(API_URL, '');
+    const response = await fetch(`${API_URL}${cleanEndpoint}`, options);
+    
+    // Auto-logout if token expires or is invalid
+    if (response.status === 401 || response.status === 403) {
+      if (cleanEndpoint !== '/api/users/login') { // Don't auto-logout if they are just failing a login attempt
+        handleLogout();
+      }
+    }
+    return response;
+  };
+
+  const handleSystemLogin = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_URL}/api/users/login`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await apiFetch('/api/users/login', {
+        method: 'POST', 
         body: JSON.stringify(loginForm)
       });
       const data = await res.json();
+      
       if (data.success) {
+        // Enforce Super Admin only access
+        if (data.user.name !== 'Super Admin') {
+           alert("Access Denied: This panel is restricted to the Super Admin.");
+           return;
+        }
+        localStorage.setItem('semivra_token', data.token);
         setIsAuthenticated(true);
-        fetchUsers();
       } else {
-        alert("Invalid credentials.");
+        alert("Access Denied: Invalid name or password.");
       }
-    } catch (err) { console.error("Login failed"); }
-  };
-
-  const fetchUsers = async () => {
-    const res = await fetch(`${API_URL}/api/users`);
-    const data = await res.json();
-    if (data.success) setUsers(data.users);
-  };
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    if (!formData.name || !formData.password) return;
-
-    const method = editingId ? 'PUT' : 'POST';
-    const url = editingId ? `${API_URL}/api/users/${editingId}` : `${API_URL}/api/users`;
-
-    const res = await fetch(url, {
-      method, headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formData)
-    });
-    const data = await res.json();
-    
-    if (data.success) {
-      setFormData({ name: '', password: '' });
-      setEditingId(null);
-      fetchUsers();
-    } else {
-      alert(data.error);
+    } catch (err) {
+       console.error("Login failed", err);
     }
   };
 
-  const deleteUser = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this admin?")) return;
-    await fetch(`${API_URL}/api/users/${id}`, { method: 'DELETE' });
-    fetchUsers();
+  const handleLogout = () => {
+    localStorage.removeItem('semivra_token');
+    setIsAuthenticated(false);
+    setLoginForm({name: '', password: ''});
+    setUsers([]);
   };
 
+  const fetchUsers = async () => {
+    try {
+      const res = await apiFetch('/api/users');
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(data.users || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch users", err);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchUsers();
+    }
+  }, [isAuthenticated]);
+
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!newUserForm.name || !newUserForm.password) return alert("Name and password required.");
+
+    try {
+      const res = await apiFetch('/api/users', {
+        method: 'POST',
+        body: JSON.stringify(newUserForm)
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        alert("User created successfully!");
+        setNewUserForm({ name: '', password: '', role: 'cashier' });
+        fetchUsers();
+      } else {
+        // This handles the 400 Bad Request if the name already exists
+        alert(`Failed to create user: ${data.error}`);
+      }
+    } catch (err) {
+      console.error("Failed to add user", err);
+    }
+  };
+
+  const handleDeleteUser = async (id, name) => {
+    if (name === 'Super Admin') return alert("You cannot delete the master account.");
+    if (!window.confirm(`Are you sure you want to permanently delete user: ${name}?`)) return;
+
+    try {
+      const res = await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchUsers();
+      } else {
+         alert("Failed to delete user.");
+      }
+    } catch (err) {
+      console.error("Delete failed", err);
+    }
+  };
+
+  // --- LOGIN UI ---
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-dark flex items-center justify-center p-6">
-        <form onSubmit={handleLogin} className="bg-surface p-8 rounded-xl border border-red-900/30 shadow-2xl w-full max-w-sm">
-          <h2 className="text-2xl font-black text-red-500 mb-6 uppercase tracking-widest text-center">System Override</h2>
-          <input type="text" placeholder="Admin Name" value={loginForm.name} onChange={e => setLoginForm({...loginForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-3 text-white mb-4 outline-none focus:border-red-500" required />
-          <input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-3 text-white mb-6 outline-none focus:border-red-500" required />
-          <button type="submit" className="w-full bg-red-600 text-white font-black py-3 rounded hover:bg-red-500 transition shadow-lg shadow-red-500/20 uppercase tracking-widest">Authenticate</button>
+      <div className="min-h-screen bg-light flex flex-col items-center justify-center p-4">
+        <form onSubmit={handleSystemLogin} className="bg-surface p-8 rounded-xl border border-surface-800 shadow-2xl max-w-sm w-full text-center">
+          <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Config</h2>
+          <p className="text-gray-400 text-sm mb-6">Enter master credentials.</p>
+          <input type="text" placeholder="Admin Name" value={loginForm.name} onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" required autoFocus />
+          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
+          <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest mb-4">AUTHENTICATE</button>
+          <button type="button" onClick={() => navigate('/admin')} className="text-gray-500 text-xs hover:text-white uppercase tracking-widest transition font-bold">Return to POS</button>
         </form>
       </div>
     );
   }
 
+  // --- DASHBOARD UI ---
   return (
-    <div className="min-h-screen bg-dark text-white p-8">
+    <div className="min-h-screen bg-dark text-white p-6 lg:p-8">
       <div className="max-w-4xl mx-auto">
+        
+        {/* HEADER */}
         <div className="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
-          <h1 className="text-3xl font-black text-accent uppercase tracking-widest">Admin Control Panel</h1>
-          <button onClick={() => setIsAuthenticated(false)} className="text-red-400 font-bold hover:text-red-300 transition">Logout</button>
+           <div>
+             <h1 className="text-3xl font-black text-accent tracking-tight leading-none mb-1">SYSTEM CONFIG</h1>
+             <p className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em]">Super Admin Control Panel</p>
+           </div>
+           <div className="flex gap-4">
+              <button onClick={() => navigate('/admin')} className="border border-gray-700 text-gray-300 px-4 py-2 rounded font-bold hover:bg-gray-800 hover:text-white transition uppercase text-xs tracking-wider">POS Dashboard</button>
+              <button onClick={handleLogout} className="bg-red-900/30 text-red-500 border border-red-900 px-4 py-2 rounded font-bold hover:bg-red-600 hover:text-white transition uppercase text-xs tracking-wider">Lock Panel</button>
+           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {/* Form */}
-          <div className="col-span-1 bg-surface border border-gray-800 rounded-xl p-6 h-fit">
-            <h3 className="text-lg font-bold mb-4">{editingId ? 'Edit Admin' : 'Add New Admin'}</h3>
-            <form onSubmit={handleSave} className="space-y-4">
-              <div>
-                <label className="text-xs text-gray-400 uppercase font-bold block mb-1">Name</label>
-                <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent" required />
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 uppercase font-bold block mb-1">
-                  {editingId ? 'New Password (Leave blank to keep current)' : 'Password'}
-                </label>
-                <input 
-                  type="text" 
-                  value={formData.password} 
-                  onChange={e => setFormData({...formData, password: e.target.value})} 
-                  className="w-full bg-dark border border-gray-700 rounded p-2 text-white outline-none focus:border-accent placeholder-gray-600" 
-                  placeholder={editingId ? "********" : "Enter password"}
-                  required={!editingId} // Only required if creating a NEW user
-                />
-              </div>
-              <div className="flex gap-2 pt-2">
-                {editingId && <button type="button" onClick={() => { setEditingId(null); setFormData({name:'', password:''}); }} className="flex-1 bg-dark border border-gray-700 rounded py-2 font-bold text-gray-300">Cancel</button>}
-                <button type="submit" className="flex-1 bg-accent text-dark font-black py-2 rounded hover:bg-yellow-500 transition">{editingId ? 'Update' : 'Generate Admin'}</button>
-              </div>
-            </form>
-          </div>
+           
+           {/* LEFT: CREATE USER FORM */}
+           <div className="md:col-span-1 bg-surface border border-gray-800 rounded-xl p-6 h-fit shadow-lg">
+             <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Register User</h3>
+             <form onSubmit={handleAddUser} className="space-y-4">
+               <div>
+                 <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Employee Name</label>
+                 <input type="text" value={newUserForm.name} onChange={e => setNewUserForm({...newUserForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+               </div>
+               <div>
+                 <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Account PIN / Password</label>
+                 <input type="password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+               </div>
+               <div>
+                 <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Access Level</label>
+                 <select value={newUserForm.role} onChange={e => setNewUserForm({...newUserForm, role: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent font-bold">
+                   <option value="cashier">Cashier (Standard)</option>
+                   <option value="admin">Manager (Admin)</option>
+                 </select>
+               </div>
+               <button type="submit" className="w-full bg-accent text-dark font-black py-3 mt-2 rounded hover:bg-dark shadow-lg hover:text-accent shadow-accent/20 transition uppercase tracking-wider text-xs">
+                 Create User
+               </button>
+             </form>
+           </div>
 
-          {/* List */}
-          <div className="col-span-1 md:col-span-2 bg-surface border border-gray-800 rounded-xl p-6">
-            <h3 className="text-lg font-bold mb-4 border-b border-gray-800 pb-2">Active Administrators</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="text-gray-500 border-b border-gray-800">
-                    <th className="pb-2">Admin Code</th>
-                    <th className="pb-2">Name</th>
-                    <th className="pb-2">Security</th>
-                    <th className="pb-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map(user => (
-                    <tr key={user._id} className="border-b border-gray-800/50 hover:bg-dark/50">
-                      <td className="py-3 font-mono font-bold text-accent">{user.userCode}</td>
-                      <td className="py-3 font-bold text-white">{user.name}</td>
-                      <td className="py-3 font-mono text-green-400 text-xs tracking-widest">ENCRYPTED</td>
-                      <td className="py-3 text-right space-x-2">
-                        <button onClick={() => { setEditingId(user._id); setFormData({ name: user.name, password: '' }); }} className="text-blue-400 hover:text-blue-300 font-bold px-2 py-1 bg-blue-900/20 rounded">Edit</button>
-                        <button onClick={() => deleteUser(user._id)} className="text-red-400 hover:text-red-300 font-bold px-2 py-1 bg-red-900/20 rounded">Del</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+           {/* RIGHT: USER LIST */}
+           <div className="md:col-span-2 bg-surface border border-gray-800 rounded-xl p-6 shadow-lg flex flex-col max-h-[600px]">
+             <h3 className="text-xl font-bold mb-4 text-white border-b border-gray-800 pb-2">Active Personnel</h3>
+             
+             <div className="flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700">
+               <div className="space-y-3">
+                 {users.map(user => (
+                   <div key={user._id} className="bg-dark p-4 rounded-lg border border-gray-700 flex justify-between items-center transition hover:border-gray-500">
+                     <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded flex items-center justify-center font-black text-lg ${user.role === 'admin' ? 'bg-accent/20 text-accent' : 'bg-gray-800 text-gray-400'}`}>
+                          {user.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="font-bold text-white text-md">{user.name}</p>
+                          <div className="flex gap-2 items-center mt-1">
+                             <span className="text-[10px] bg-black text-gray-400 px-2 py-0.5 rounded font-mono border border-gray-800">{user.userCode}</span>
+                             <span className={`text-[9px] uppercase tracking-widest font-black ${user.role === 'admin' ? 'text-accent' : 'text-gray-500'}`}>{user.role}</span>
+                          </div>
+                        </div>
+                     </div>
+                     
+                     {user.name !== 'Super Admin' && (
+                       <button onClick={() => handleDeleteUser(user._id, user.name)} className="text-red-500 hover:text-white font-bold px-3 py-1.5 bg-red-900/20 hover:bg-red-600 rounded transition text-xs uppercase tracking-wider">
+                         Revoke
+                       </button>
+                     )}
+                   </div>
+                 ))}
+               </div>
+             </div>
+           </div>
+
         </div>
       </div>
     </div>
-);}
+  );
+}

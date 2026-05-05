@@ -5,8 +5,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 //const API_URL ='http://192.168.254.116:5002';
 //const API_URL = 'http://192.168.68.127:5002';
-const API_URL = 'https://local-based-menu.onrender.com';
-//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+//const API_URL = 'https://local-based-menu.onrender.com';
+const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 //const API_URL = 'http://10.201.1.204:5002';
 //const API_URL='http://172.20.10.6:5002';
 //const API_URL='http://192.168.30.131:5002';
@@ -59,7 +59,8 @@ export default function AdminDashboard() {
     name: '', description: '', category: '', basePrice: '', baseSize: '', sizes: [], image: '', 
     baseRecipe: [] 
   });
-  const [newCatName, setNewCatName] = useState('');
+  const [catForm, setCatForm] = useState({ name: '', department: 'Kitchen' });
+  const [editingCategory, setEditingCategory] = useState(null);
 
   const [autoTableId, setAutoTableId] = useState('');
   const SECRET_TOKEN = 'cafe2026';
@@ -113,38 +114,33 @@ export default function AdminDashboard() {
   const [compSelections, setCompSelections] = useState({});
   const [shiftFilter, setShiftFilter] = useState('All');
   const [users, setUsers] = useState([]); // Stores the employee list
+
   
   // --- JWT API HELPER ---
   // Use this wrapper for ALL fetch requests to the backend API.
   // It automatically attaches the JWT token from memory.
+  // Add 'async' right here 👇
   const apiFetch = async (endpoint, options = {}) => {
-    const token = localStorage.getItem('kasa_token');
+    if (!options.headers) options.headers = {};
+    const token = localStorage.getItem('semivra_token');
+    if (token) {
+      options.headers['Authorization'] = `Bearer ${token}`;
+    }
     
-    const defaultHeaders = {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    };
-
-    const finalOptions = {
-      ...options,
-      headers: {
-        ...defaultHeaders,
-        ...(options.headers || {})
-      }
-    };
-
-    const response = await fetch(`${API_URL}${endpoint}`, finalOptions);
+    // FIX 1: Auto-inject JSON header so Discounts and VAT are read by the backend
+    if (options.body && typeof options.body === 'string' && !options.headers['Content-Type']) {
+      options.headers['Content-Type'] = 'application/json';
+    }
     
-    // If the token expires while they are working, kick them out
+    // FIX 2: Strip out API_URL if it was accidentally passed in to prevent double URLs
+    const cleanEndpoint = endpoint.replace(API_URL, '');
+    const response = await fetch(`${API_URL}${cleanEndpoint}`, options);
+    
     if (response.status === 401 || response.status === 403) {
       setIsAuthenticated(false);
       setActiveAdmin(null);
-      localStorage.removeItem('kasa_admin');
-      localStorage.removeItem('kasa_token');
-      alert("Session expired. Please log in again.");
-      throw new Error('Session Expired');
+      localStorage.removeItem('semivra_token');
     }
-
     return response;
   };
 
@@ -160,18 +156,33 @@ export default function AdminDashboard() {
       const data = await res.json();
       
       if (data.success) {
+        // TIER 1: Save the secure token to the browser
+        localStorage.setItem('semivra_token', data.token); 
         setIsAuthenticated(true);
         setActiveAdmin(data.user); 
-        localStorage.setItem('kasa_admin', JSON.stringify(data.user)); 
-        localStorage.setItem('kasa_token', data.token); // <-- NEW: SAVE JWT
       } else {
         alert("Access Denied: Invalid name or password.");
       }
     } catch (err) { 
-       console.error("Login failed", err); 
+      console.error("Login failed", err); 
     }
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('semivra_token'); 
+    setIsAuthenticated(false);
+    setLoginForm({name: '', password: ''});
+    setActiveAdmin(null);
+  };
+
+  useEffect(() => {
+    const token = localStorage.getItem('semivra_token');
+    if (token) {
+      // In a full production app, you'd verify the token with the backend here.
+      // For now, if the token exists in storage, we bypass the login screen.
+      setIsAuthenticated(true);
+    }
+  }, []);
 
   const getSelectedItems = (order) => {
     if (discountedItems[order._id] !== undefined) return discountedItems[order._id];
@@ -207,7 +218,7 @@ export default function AdminDashboard() {
     }
 
     try {
-      await fetch(`${API_URL}/api/products/${productId}`, {
+      await apiFetch(`/api/products/${productId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedProduct)
@@ -221,7 +232,6 @@ export default function AdminDashboard() {
 
   const fetchERPData = async () => {
     try {
-      // Replaced fetch with apiFetch and removed ${API_URL}
       const invRes = await apiFetch(`/api/inventory`);
       if (invRes.ok) setInventory((await invRes.json()).items || []);
       
@@ -255,10 +265,10 @@ export default function AdminDashboard() {
   const fetchData = async () => {
     try {
       // Products and Categories are PUBLIC (Customer Menu needs them), so they use regular fetch
-      const pRes = await fetch(`${API_URL}/api/products`);
+      const pRes = await apiFetch(`/api/products`);
       if (pRes.ok) setProducts((await pRes.json()).products || []);
       
-      const cRes = await fetch(`${API_URL}/api/categories`);
+      const cRes = await apiFetch(`/api/categories`);
       if (cRes.ok) setCategories((await cRes.json()).categories || []);
       
       // Discounts are PROTECTED, use apiFetch
@@ -292,7 +302,7 @@ export default function AdminDashboard() {
       ]
     };
 
-    await fetch(`${API_URL}/api/journal`, { 
+    await apiFetch(`/api/journal`, { 
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jePayload) 
     });
     fetchERPData();
@@ -301,7 +311,7 @@ export default function AdminDashboard() {
 
   const fetchStockHistory = async (item) => {
     try {
-      const res = await fetch(`${API_URL}/api/inventory/history/${item._id}`);
+      const res = await apiFetch(`/api/inventory/history/${item._id}`);
       const data = await res.json();
       if (data.success) {
         setStockHistory(data.history);
@@ -395,40 +405,6 @@ export default function AdminDashboard() {
     };
   }, [isAuthenticated]);
 
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-4">
-        <form onSubmit={handleSystemLogin} className="bg-accent p-8 rounded-xl border border-accentShadow shadow-2xl max-w-sm w-full text-center">
-          <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Locked</h2>
-          <p className="text-white text-sm mb-6">Enter credentials to access the dashboard.</p>
-          
-          <input 
-            type="text" 
-            placeholder="Admin Name"
-            value={loginForm.name} 
-            onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} 
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-black py-3 rounded-lg outline-none mb-3 font-bold" 
-            required 
-            autoFocus 
-          />
-          
-          <input 
-            type="password" 
-            placeholder="Password"
-            value={loginForm.password} 
-            onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} 
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-black py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" 
-            required 
-          />
-          
-          <button type="submit" className="w-full bg-white border text-accent font-black py-4 rounded-lg hover:bg-accent hover:text-dark transition shadow-lg shadow-accent/20 uppercase tracking-widest">
-            AUTHENTICATE
-          </button>
-        </form>
-      </div>
-    );
-  }
-
   const updateStatus = async (orderId, newStatus) => {
     const payload = { status: newStatus, cashier: activeAdmin ? activeAdmin.name : 'System' };
     if (newStatus === 'Preparing') {
@@ -436,7 +412,21 @@ export default function AdminDashboard() {
     }
     setOrders(prev => prev.map(o => o._id === orderId ? { ...o, ...payload } : o));
     socket.emit('updateOrderStatus', { orderId, status: newStatus });
-    await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    await apiFetch(`/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  };
+
+  const updateItemStatus = async (order, itemIndex, newStatus) => {
+    const newItems = [...order.items];
+    newItems[itemIndex].itemStatus = newStatus;
+    
+    // Update UI instantly
+    setOrders(prev => prev.map(o => o._id === order._id ? { ...o, items: newItems } : o));
+    
+    // Send to backend
+    await apiFetch(`/api/orders/${order._id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ items: newItems })
+    });
   };
 
   const applyComplimentary = async (orderId) => {
@@ -447,7 +437,7 @@ export default function AdminDashboard() {
       body: JSON.stringify({ isComplimentary: true, employeeName: empName, discountPercent: 100, isVatExempt: true }) 
     });
   };
-  const toggleVat = async (orderId, currentVatRate) => { await fetch(`${API_URL}/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isVatExempt: currentVatRate > 0 }) }); };
+  const toggleVat = async (orderId, currentVatRate) => { await apiFetch(`/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isVatExempt: currentVatRate > 0 }) }); };
   const applyDiscount = async (orderId, isRemoving = false) => {
     const order = orders.find(o => o._id === orderId);
     const percent = isRemoving ? 0 : parseFloat(discountInputs[orderId] || 0);
@@ -484,7 +474,7 @@ export default function AdminDashboard() {
     if (!window.confirm("Are you sure you want to close the day? This will archive everything.")) return;
     
     try { 
-      const res = await fetch(`${API_URL}/api/orders/archive`, { method: 'POST' }); 
+      const res = await apiFetch(`/api/orders/archive`, { method: 'POST' }); 
       const data = await res.json();
       
       if (data.success) {
@@ -548,7 +538,7 @@ export default function AdminDashboard() {
     }
 
     try {
-      const res = await fetch(`${API_URL}/api/orders/${orderId}/void`, {
+      const res = await apiFetch(`/api/orders/${orderId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason, adminName: activeAdmin ? activeAdmin.name : 'Admin' })
@@ -593,7 +583,7 @@ export default function AdminDashboard() {
   const handleRestockSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_URL}/api/inventory/restock/${activeInventoryItem._id}`, {
+      const res = await apiFetch(`/api/inventory/restock/${activeInventoryItem._id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -612,7 +602,7 @@ export default function AdminDashboard() {
 
 const submitPhysicalCounts = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/inventory/count`, {
+      const res = await apiFetch(`/api/inventory/count`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -651,7 +641,7 @@ const submitPhysicalCounts = async () => {
       if (!window.confirm(`"${existingItem.itemName}" already exists in inventory. Do you want to RESTOCK it with ${totalStockAdded}${invForm.unit}?`)) return;
       
       // RESTOCK EXISTING ITEM
-      await fetch(`${API_URL}/api/inventory/restock/${existingItem._id}`, { 
+      await apiFetch(`/api/inventory/restock/${existingItem._id}`, { 
         method: 'POST', headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify({ addedStock: totalStockAdded, totalCost }) 
       });
@@ -660,7 +650,7 @@ const submitPhysicalCounts = async () => {
       const costPerMicroUnit = parseFloat(invForm.costPerPack) / parseFloat(invForm.unitPerPack);
       const payload = { itemName: itemNameClean, stockQty: totalStockAdded, unit: invForm.unit, unitCost: costPerMicroUnit };
       
-      const res = await fetch(`${API_URL}/api/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const res = await apiFetch(`/api/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!data.success) return alert(data.error);
     }
@@ -668,7 +658,7 @@ const submitPhysicalCounts = async () => {
     setInvForm({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '' });
     fetchERPData();
   };
-  const deleteInventory = async (id) => { if(window.confirm('Delete inventory item?')) { await fetch(`${API_URL}/api/inventory/${id}`, { method: 'DELETE' }); fetchERPData(); } };
+  const deleteInventory = async (id) => { if(window.confirm('Delete inventory item?')) { await apiFetch(`/api/inventory/${id}`, { method: 'DELETE' }); fetchERPData(); } };
 
 // ==========================================
   //   PDF EXPORT ENGINE
@@ -680,7 +670,7 @@ const submitPhysicalCounts = async () => {
   const exportInventoryToPDF = async () => {
     if (inventory.length === 0) return alert("No inventory to export.");
     try {
-      const res = await fetch(`${API_URL}/api/inventory/history`);
+      const res = await apiFetch(`/api/inventory/history`);
       const data = await res.json();
       const allHistory = data.success ? data.history : [];
       const doc = new jsPDF('landscape');
@@ -957,8 +947,27 @@ const submitPhysicalCounts = async () => {
   };
 
   // 4. Sales History PDF Helper
-  const handleAddCategory = async (e) => { e.preventDefault(); if(!newCatName.trim()) return; await fetch(`${API_URL}/api/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCatName }) }); setNewCatName(''); };
-  const deleteCategory = async (id) => { if(window.confirm('Delete category?')) await fetch(`${API_URL}/api/categories/${id}`, { method: 'DELETE' }); };
+  const handleSaveCategory = async (e) => { 
+    e.preventDefault(); 
+    if(!catForm.name.trim()) return; 
+
+    if (editingCategory) {
+      await apiFetch(`/api/categories/${editingCategory._id}`, { 
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(catForm) 
+      });
+      setEditingCategory(null);
+    } else {
+      await apiFetch(`/api/categories`, { 
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(catForm) 
+      });
+    }
+    setCatForm({ name: '', department: 'Kitchen' }); 
+    fetchData();
+  };
+
+  const deleteCategory = async (id) => { if(window.confirm('Delete category?')) await apiFetch(`/api/categories/${id}`, { method: 'DELETE' }); };
 
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
@@ -980,14 +989,14 @@ const submitPhysicalCounts = async () => {
   const handleSaveProduct = async (e) => { 
     e.preventDefault(); 
     const method = editingProduct ? 'PUT' : 'POST'; 
-    const url = editingProduct ? `${API_URL}/api/products/${editingProduct._id}` : `${API_URL}/api/products`; 
-    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) }); 
+    const url = editingProduct ? `/api/products/${editingProduct._id}` : `/api/products`; 
+    await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) }); 
     setEditingProduct(null); 
     setFormData({ name: '', description: '', category: '', basePrice: '', baseSize: '', sizes: [], image: '', baseRecipe: [] }); 
   };
   const deleteProduct = async (id) => { 
     if(window.confirm("Delete this product permanently?")) {
-      await fetch(`${API_URL}/api/products/${id}`, { method: 'DELETE' }); 
+      await apiFetch(`/api/products/${id}`, { method: 'DELETE' }); 
       if (editingProduct && editingProduct._id === id) { setEditingProduct(null); setFormData({ name: '', description: '', category: '', basePrice: '', baseSize: '', sizes: [], image: '', baseRecipe: [] }); }
     }
   };
@@ -1101,22 +1110,17 @@ const submitPhysicalCounts = async () => {
     daysElapsed = Math.max(1, Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24)));
   }
 
+  // ---   KITCHEN & BAR ROUTING LOGIC ---
   const displayOrders = filteredOrders.filter(order => {
-    if (orderFilter === 'Kitchen') {
-      // Show orders containing Mains or Sides
-      return order.items.some(item => {
-        const prod = products.find(p => p._id === item.productId);
-        return prod && (prod.category === 'Mains' || prod.category === 'Sides');
-      });
+    if (departmentFilter === 'Kitchen') {
+      // Show orders containing items smartly tagged for Kitchen
+      return order.items.some(item => (item.department || 'Kitchen') === 'Kitchen');
     }
-    if (orderFilter === 'Bar') {
-      // Show orders containing Drinks
-      return order.items.some(item => {
-        const prod = products.find(p => p._id === item.productId);
-        return prod && prod.category === 'Drinks';
-      });
+    if (departmentFilter === 'Bar') {
+      // Show orders containing items smartly tagged for Bar
+      return order.items.some(item => item.department === 'Bar');
     }
-    return true; // For 'All', 'Pending', etc.
+    return true; // Show 'All'
   });
 
   const rawMaterialUsage = {};
@@ -1166,6 +1170,21 @@ const submitPhysicalCounts = async () => {
         monthlyNeed: Math.ceil(dailyAvg * 30) // How much to buy for 30 days
       };
     });
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-light flex flex-col items-center justify-center p-4">
+        <form onSubmit={handleSystemLogin} className="bg-surface p-8 rounded-xl border border-surface-800 shadow-2xl max-w-sm w-full text-center">
+          <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Locked</h2>
+          <p className="text-gray-400 text-sm mb-6">Enter credentials to access the dashboard.</p>
+          <input type="text" placeholder="Admin Name" value={loginForm.name} onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" required autoFocus />
+          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
+          <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest">AUTHENTICATE</button>
+        </form>
+      </div>
+    );
+  }
+  
   return (
     <div className="min-h-screen bg-dark text-white p-6 lg:p-8">
       
@@ -1496,50 +1515,67 @@ const submitPhysicalCounts = async () => {
                     </div>
                   </div>
 
-                  {/* Itemized List with Checkboxes */}
-                  <div className="space-y-2 mb-4">
-                    {order.items.map((item, idx) => {
-                      const currentSelection = discountedItems[order._id];
-                      const isSelected = currentSelection ? currentSelection.includes(idx) : true;
+                  {/* --- NEW: DEPARTMENT ROUTING UI --- */}
+                  <div className="space-y-3 mb-4">
+                    {['Kitchen', 'Bar'].map(dept => {
+                      // Filter items for this specific department
+                      const deptItems = order.items.map((item, idx) => ({ ...item, originalIdx: idx })).filter(i => (i.department || 'Kitchen') === dept);
                       
+                      if (deptItems.length === 0) return null;
+                      if (departmentFilter !== 'All' && departmentFilter !== dept) return null;
+
                       return (
-                        <div key={idx} className="flex justify-between items-center text-sm mb-1">
-                          <div className="flex items-center gap-2">
-                            {(order.status === 'Pending' || order.status === 'Preparing') && (
-                              <input 
-                                type="checkbox" 
-                                checked={isSelected} 
-                                onChange={() => toggleItemDiscount(order._id, idx)} 
-                                className="w-3 h-3 cursor-pointer rounded"
-                              />
-                            )}
-                            <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
-                              {item.quantity}x {item.name}
-                            </span>
-                          </div>
-                          <span className="text-white font-mono font-bold">P{(item.price * item.quantity).toFixed(2)}</span>
+                        <div key={dept} className="bg-dark/30 rounded-lg p-2 border border-white/10">
+                          <h4 className="text-[10px] uppercase text-gray-400 font-bold mb-2 pb-1 border-b border-gray-700 tracking-widest">{dept} Station</h4>
+                          {deptItems.map(item => {
+                            const currentSelection = discountedItems[order._id];
+                            const isSelected = currentSelection ? currentSelection.includes(item.originalIdx) : true;
+                            
+                            return (
+                              <div key={item.originalIdx} className="flex justify-between items-center text-sm mb-2">
+                                <div className="flex items-center gap-2">
+                                  {order.status === 'Pending' && (
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => toggleItemDiscount(order._id, item.originalIdx)}
+                                      className="w-3 h-3 cursor-pointer rounded"
+                                    />
+                                  )}
+                                  <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
+                                    {item.quantity}x {item.name}
+                                  </span>
+                                </div>
+                                
+                                {/* ITEM STATUS CONTROLS */}
+                                {(order.status === 'Preparing' || order.status === 'Ready') ? (
+                                  <div className="flex items-center gap-1">
+                                    {item.itemStatus === 'Received' && (
+                                      <button onClick={() => updateItemStatus(order, item.originalIdx, 'Preparing')} className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 hover:bg-yellow-500 hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Prep</button>
+                                    )}
+                                    {item.itemStatus === 'Preparing' && (
+                                      <button onClick={() => updateItemStatus(order, item.originalIdx, 'Finished')} className="bg-accent/20 text-accent border border-accent/50 hover:bg-accent hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Finish</button>
+                                    )}
+                                    {item.itemStatus === 'Finished' && (
+                                      <span className="text-green-500 text-[10px] font-black uppercase tracking-wider px-1">✔ Done</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-white font-mono font-bold">P{(item.price * item.quantity).toFixed(2)}</span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       );
                     })}
-                    
-                    {/* Select All Button */}
-                    {(order.status === 'Pending' || order.status === 'Preparing') && order.items.length > 1 && (
-                      <div className="pt-2 flex justify-start">
-                        <button 
-                          onClick={() => toggleAllItems(order._id, order.items.length)}
-                          className="text-[9px] text-accent bg-white hover:bg-gray-200 font-bold uppercase tracking-widest px-2 py-1 rounded transition shadow-sm"
-                        >
-                          {(discountedItems[order._id] === undefined || discountedItems[order._id].length === order.items.length) ? 'Deselect All' : 'Select All'}
-                        </button>
-                      </div>
-                    )}
                   </div>
 
                   {/* Spacer to push bottom content down */}
                   <div className="flex-1"></div>
 
-                  {/* NEW: Complimentary Employee Select (Perfectly separated from items) */}
-                  {(order.status === 'Pending' || order.status === 'Preparing') && (
+                  {/* NEW: Complimentary Employee Select */}
+                  {order.status === 'Pending' ? (
                     <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
                       <span className="font-bold uppercase tracking-wider">Complimentary?</span>
                       <div className="flex gap-1">
@@ -1547,12 +1583,17 @@ const submitPhysicalCounts = async () => {
                           <option value="">Select Employee...</option>
                           {users.map(u => <option key={u._id} value={u.name}>{u.name}</option>)}
                         </select>
-                        <button onClick={() => applyComplimentary(order._id)} className="bg-white hover:bg-gray-200 text-accent px-2 rounded font-black transition">✓</button>
+                        <button onClick={() => applyComplimentary(order._id)} className="bg-white hover:bg-gray-200 text-accent px-2 rounded font-black transition">✔</button>
                       </div>
+                    </div>
+                  ) : order.isComplimentary && (
+                    <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
+                      <span className="font-bold uppercase tracking-wider text-accent">Complimentary Order:</span>
+                      <span className="font-bold text-white bg-black/50 px-2 py-1 rounded">{order.employeeName}</span>
                     </div>
                   )}
 
-                  {/* Financials Box (bg-dark = White in your theme) */}
+                  {/* Financials Box */}
                   <div className="bg-dark p-4 rounded-lg shadow-inner space-y-2 mb-4">
                     <div className="flex justify-between text-xs text-gray-500 font-bold">
                       <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
@@ -1561,7 +1602,7 @@ const submitPhysicalCounts = async () => {
                     <div className="flex justify-between items-center text-xs text-gray-500 font-bold">
                       <div className="flex items-center gap-2">
                         <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
-                        {(order.status === 'Pending' || order.status === 'Preparing') && (
+                        {order.status === 'Pending' && (
                           <button 
                             onClick={() => toggleVat(order._id, order.vatRate)} 
                             className="bg-accent hover:bg-accentShadow text-white px-2 py-0.5 rounded text-[9px] uppercase font-black transition shadow-sm"
@@ -1576,7 +1617,7 @@ const submitPhysicalCounts = async () => {
                     <div className="flex justify-between items-center text-xs text-gray-500 font-bold border-b border-gray-200 pb-2">
                       <div className="flex items-center gap-2 w-full pr-2">
                         <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
-                        {(order.status === 'Pending' || order.status === 'Preparing') && (
+                        {order.status === 'Pending' && (
                           <div className="flex gap-1 items-center flex-1 justify-end">
                             <select 
                               className="w-full max-w-[100px] bg-gray-100 border border-gray-300 rounded px-1 text-[10px] text-black outline-none h-6"
@@ -1592,13 +1633,13 @@ const submitPhysicalCounts = async () => {
                               <input 
                                 type="number" 
                                 placeholder="%" 
-                                className="w-10 bg-gray-100 border border-gray-300 rounded px-1 text-center text-black outline-none h-6" 
+                                className="w-10 bg-gray-100 border border-gray-300 rounded px-1 text-center text-black outline-none h-6"
                                 onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} 
                               />
                             )}
                             
-                            <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accentShadow text-white px-2 rounded font-black transition h-6">✓</button>
-                            {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-500 text-white px-2 rounded font-black h-6 shadow-sm">✕</button>}
+                            <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accentShadow text-white px-2 rounded font-black transition h-6">✔</button>
+                            {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-500 text-white px-2 rounded font-black h-6 shadow-sm">X</button>}
                           </div>
                         )}
                       </div>
@@ -1638,11 +1679,16 @@ const submitPhysicalCounts = async () => {
                     )}
                     
                     {order.status === 'Preparing' && (
-                      <div className="flex gap-2">
-                        <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
-                          Ready to Serve
-                        </button>
-                        {/* Always allow dropping ghost orders */}
+                      <div className="flex gap-2 mt-2">
+                        {order.items.every(i => i.itemStatus === 'Finished') ? (
+                          <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
+                            Mark Ready to Serve
+                          </button>
+                        ) : (
+                          <div className="flex-1 flex items-center justify-center bg-dark text-gray-500 border border-gray-700 rounded-lg text-[10px] font-bold uppercase tracking-widest">
+                            Waiting on Kitchen/Bar...
+                          </div>
+                        )}
                         <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
                       </div>
                     )}
@@ -1895,7 +1941,7 @@ const submitPhysicalCounts = async () => {
                       <button
                         onClick={async () => {
                           if(window.confirm("WARNING: Reopening the day allows new sales, which will alter your ending inventory. Are you sure?")) {
-                            await fetch(`${API_URL}/api/inventory/eod/reopen`, { method: 'POST' });
+                            await apiFetch(`/api/inventory/eod/reopen`, { method: 'POST' });
                             fetchEODData(); // Refresh the tab
                           }
                         }}
@@ -2187,7 +2233,7 @@ const submitPhysicalCounts = async () => {
                     Credits: {jeForm.lines.reduce((s, l) => s + Number(l.credit||0), 0)}
                   </div>
                   <button onClick={async () => {
-                    await fetch(`${API_URL}/api/journal`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jeForm) });
+                    await apiFetch(`/api/journal`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jeForm) });
                     setJeForm({ description: '', lines: [{accountCode:'', accountName:'', debit:'', credit:''}, {accountCode:'', accountName:'', debit:'', credit:''}] });
                     fetchERPData();
                   }} className="bg-accent text-dark font-bold py-2 px-4 rounded hover:bg-dark hover:text-accent transition shadow-lg shadow-accent/20">Post Entry</button>
@@ -2315,7 +2361,7 @@ const submitPhysicalCounts = async () => {
                     <button 
                       onClick={async () => {
                         if (window.confirm(`Delete ${d.name} discount?`)) {
-                          await fetch(`${API_URL}/api/discounts/${d._id}`, { method: 'DELETE' });
+                          await apiFetch(`/api/discounts/${d._id}`, { method: 'DELETE' });
                           fetchData(); // Refresh the list
                         }
                       }} 
@@ -2334,7 +2380,7 @@ const submitPhysicalCounts = async () => {
                 onSubmit={async (e) => {
                   e.preventDefault();
                   if (!discountForm.name || !discountForm.percentage) return;
-                  await fetch(`${API_URL}/api/discounts`, {
+                  await apiFetch(`/api/discounts`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: discountForm.name, percentage: Number(discountForm.percentage) })
                   });
@@ -2414,16 +2460,46 @@ const submitPhysicalCounts = async () => {
             </div>
             
             <div className="mt-8 border-t border-dark pt-6">
-              <h3 className="text-xl font-bold mb-4 text-dark border-b border-dark pb-2">Manage Categories</h3>
-              <form onSubmit={handleAddCategory} className="flex gap-3 mb-6">
-                <input type="text" value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder="New category name..." className="flex-1 bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" required />
-                <button type="submit" className="bg-accent text-dark font-bold px-6 py-2 rounded border hover:text-accent hover:bg-dark">Add</button>
+              <h3 className="text-xl font-bold mb-4 text-dark border-b border-dark pb-2">Manage Categories & Routing</h3>
+              
+              <form onSubmit={handleSaveCategory} className="flex gap-3 mb-6">
+                <input 
+                  type="text" 
+                  value={catForm.name} 
+                  onChange={e => setCatForm({...catForm, name: e.target.value})} 
+                  placeholder="Category Name" 
+                  className="flex-1 bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" 
+                  required 
+                />
+                <select 
+                  value={catForm.department} 
+                  onChange={e => setCatForm({...catForm, department: e.target.value})} 
+                  className="w-32 bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent font-bold"
+                >
+                  <option value="Kitchen">Kitchen</option>
+                  <option value="Bar">Bar</option>
+                </select>
+                <button type="submit" className="bg-accent text-dark font-bold px-6 py-2 rounded border hover:text-accent hover:bg-dark transition">
+                  {editingCategory ? 'Update' : 'Add'}
+                </button>
+                {editingCategory && (
+                  <button type="button" onClick={() => { setEditingCategory(null); setCatForm({ name: '', department: 'Kitchen' }); }} className="bg-gray-500 text-white font-bold px-4 py-2 rounded hover:bg-gray-600 transition">
+                    Cancel
+                  </button>
+                )}
               </form>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {categories.map(c => (
                   <div key={c._id} className="flex justify-between items-center p-3 border border-gray-800 rounded bg-dark">
-                    <span className="font-bold text-sm text-black">{c.name}</span>
-                    <button onClick={() => deleteCategory(c._id)} className="text-red-500 hover:text-red-400 text-xs font-semibold">✕</button>
+                    <div>
+                      <span className="font-bold text-sm text-black block">{c.name}</span>
+                      <span className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Routes to: {c.department || 'Kitchen'}</span>
+                    </div>
+                    <div className="flex gap-3">
+                      <button onClick={() => { setEditingCategory(c); setCatForm({ name: c.name, department: c.department || 'Kitchen' }); }} className="text-accent hover:text-yellow-600 text-xs font-semibold">Edit</button>
+                      <button onClick={() => deleteCategory(c._id)} className="text-red-500 hover:text-red-400 text-xs font-semibold">Del</button>
+                    </div>
                   </div>
                 ))}
               </div>

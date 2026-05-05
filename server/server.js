@@ -106,8 +106,11 @@ mongoose.connect(process.env.MONGO_URI)
   //   }
   //   next();
   // };
-  // --- DATABASE SCHEMAS ---
-const CategorySchema = new mongoose.Schema({ name: String });
+// --- DATABASE SCHEMAS ---
+const CategorySchema = new mongoose.Schema({ 
+  name: String,
+  department: { type: String, enum: ['Kitchen', 'Bar'], default: 'Kitchen' }
+});
 const Category = mongoose.model('Category', CategorySchema);
 
 // 1. UPDATE THE PRODUCT SCHEMA (Add Recipes)
@@ -137,12 +140,14 @@ const OrderSchema = new mongoose.Schema({
   paymentMethod: { type: String, default: 'Cash' },
   
   // Item Level Tracking
-  items: [{ 
+items: [{ 
     productId: String, 
     name: String, 
     price: Number, 
     quantity: Number,
-    hasDiscount: { type: Boolean, default: true }
+    hasDiscount: { type: Boolean, default: true },
+    department: { type: String, default: 'Kitchen' }, // <-- NEW: Routes to Kitchen or Bar
+    itemStatus: { type: String, default: 'Received' } // <-- NEW: Item-level progress
   }],
   
   // Strict Accounting Fields
@@ -231,9 +236,41 @@ const StockCard = mongoose.model('StockCard', StockCardSchema);
 const UserSchema = new mongoose.Schema({
   userCode: String,
   name: String,
-  password: String
+  password: String,
+  role: { type: String, enum: ['cashier', 'admin'], default: 'cashier' } // Added RBAC Role
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
+
+// 1. Minimal Audit Log Schema (New)
+const AuditLogSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  action: { type: String, required: true },
+  targetReference: { type: String, required: true },
+  details: { type: Object },
+  timestamp: { type: Date, default: Date.now }
+});
+const AuditLog = mongoose.model('AuditLog', AuditLogSchema);
+
+// 2. JWT Middleware (New)
+const requireAuth = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET || 'infu-pass-2026');
+    next();
+  } catch (err) {
+    res.status(401).json({ success: false, error: 'Unauthorized: Invalid token' });
+  }
+};
+
+const requireAdmin = (req, res, next) => {
+  if (req.user?.name !== 'Super Admin') { // Minimal RBAC based on your existing structure
+    return res.status(403).json({ success: false, error: 'Forbidden: Admin access required' });
+  }
+  next();
+};
+
+app.use(express.json());
 
 const DiscountSchema = new mongoose.Schema({
   name: String,        // e.g., "Senior Citizen 20%", "Employee 10%"
@@ -248,8 +285,6 @@ const EODRecordSchema = new mongoose.Schema({
   lockedBy: String
 });
 const EODRecord = mongoose.model('EODRecord', EODRecordSchema);
-
-
 
 // --- API ROUTES ---
 
@@ -444,11 +479,29 @@ app.get('/api/categories', async (req, res) => {
 });
 
 app.post('/api/categories', verifyToken, async (req, res) => {
-  const newCat = await Category.create({ name: req.body.name });
+  // Save the department along with the name
+  const newCat = await Category.create({ 
+    name: req.body.name, 
+    department: req.body.department || 'Kitchen' 
+  });
   io.emit('menuUpdated');
   res.json({ success: true, category: newCat });
 });
 
+// --- NEW: UPDATE CATEGORY ROUTE ---
+app.put('/api/categories/:id', verifyToken, async (req, res) => {
+  try {
+    const updated = await Category.findByIdAndUpdate(
+      req.params.id, 
+      { name: req.body.name, department: req.body.department }, 
+      { new: true }
+    );
+    io.emit('menuUpdated');
+    res.json({ success: true, category: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 app.delete('/api/categories/:id', verifyToken, async (req, res) => {
   await Category.findByIdAndDelete(req.params.id);
   io.emit('menuUpdated');
@@ -537,10 +590,30 @@ app.put('/api/products/:id', verifyToken, async (req, res) => {
   res.json({ success: true, product: updatedProduct });
 });
 
+// Change to PUT or handle inside DELETE for archiving
 app.delete('/api/products/:id', verifyToken, async (req, res) => {
-  await Product.findByIdAndDelete(req.params.id);
-  io.emit('menuUpdated');
-  res.json({ success: true });
+  try {
+    const product = await Product.findByIdAndUpdate(
+      req.params.id, 
+      { isArchived: true }, 
+      { new: true }
+    );
+    
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+
+    // Log the archive event
+    await AuditLog.create({
+      userId: req.user ? req.user.name : 'System',
+      action: 'PRODUCT_ARCHIVED',
+      targetReference: product.productCode || req.params.id,
+      details: { name: product.name }
+    });
+
+    io.emit('menuUpdated');
+    res.json({ success: true, message: 'Product securely archived.' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Orders
@@ -567,9 +640,36 @@ app.get('/api/orders/:id', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const { items, discountPercent = 0, isVatExempt = false, table = 'Takeout', customerName, isComplimentary = false, employeeName = '', cashier = 'Admin' } = req.body;
+    // 1. IDEMPOTENCY CHECK
+    const idempotencyKey = req.headers['idempotency-key'];
+    if (idempotencyKey) {
+      const existingOrder = await Order.findOne({ idempotencyKey });
+      if (existingOrder) return res.status(200).json({ success: true, order: existingOrder, message: "Duplicate prevented." });
+    }
 
-    if (!items || items.length === 0) throw new Error("Cart is empty");
+    // Extract variables safely
+    let { items, discountPercent = 0, isVatExempt = false, table, customerName, sessionId, isComplimentary = false, employeeName = '', cashier = 'System' } = req.body;
+
+    // FIX 1: Safely default to Takeout if the table is null or empty
+    if (!table) table = 'Takeout';
+
+    // SESSION VALIDATION (Only for dine-in tables)
+    if (table !== 'Takeout') {
+      if (!sessionId) throw new Error("Unauthorized: QR Session required.");
+// ... rest of the function remains exactly the same
+      const activeSession = await QRSession.findOne({ sessionId, table, isActive: true });
+      if (!activeSession || new Date() > activeSession.expiresAt) {
+        return res.status(401).json({ success: false, error: "QR Session expired. Please scan again." });
+      }
+      activeSession.isActive = false; // Kill session immediately to prevent reuse
+      await activeSession.save();
+    }
+
+    const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+    if (!items || items.length === 0) {
+      throw new Error("Cart is empty");
+    }
 
     let totalGross = 0;
     let totalDiscount = 0;
@@ -582,30 +682,28 @@ app.post('/api/orders', async (req, res) => {
 
     const validatedItems = items.map(item => {
       item.hasDiscount = true; 
-      const itemBase = isComplimentary ? 0 : (item.price * item.quantity);
+      const itemBase = item.price * item.quantity;
       totalGross += itemBase;
       
       if (isComplimentary) {
-        totalDiscount += itemBase; 
+        totalDiscount += itemBase;
       } else if (discountPercent > 0) {
-        if (isVatExempt || discountType === 'SC/PWD') {
-          const vatExemptBase = itemBase / 1.12;
-          const scDisc = vatExemptBase * (discountPercent / 100);
-          totalDiscount += (itemBase - (vatExemptBase - scDisc));
-        } else {
-          const itemDisc = itemBase * (discountPercent / 100);
-          totalDiscount += itemDisc;
-          const itemNet = itemBase - itemDisc;
-          if (!isVatExempt) totalVat += (itemNet - (itemNet / 1.12));
+        const itemDisc = itemBase * (discountPercent / 100);
+        totalDiscount += itemDisc;
+
+        // If not exempt, add VAT on top of discounted amount
+        if (!isVatExempt && discountType !== 'SC/PWD') {
+          totalVat += (itemBase - itemDisc) * 0.12;
         }
       } else {
-        if (!isVatExempt) totalVat += (itemBase - (itemBase / 1.12));
+        // Standard item
+        if (!isVatExempt) totalVat += (itemBase * 0.12);
       }
       return item;
     });
 
     const vatRate = (isVatExempt || isComplimentary) ? 0 : 0.12;
-    const finalTotal = totalGross - totalDiscount;
+    const finalTotal = totalGross - totalDiscount + totalVat; // Add VAT on top!
 
     const currentYear = new Date().getFullYear();
     const orderNumber = await generateNextSequence(Order, `ORD-${currentYear}`, 'orderNumber');
@@ -631,14 +729,12 @@ app.post('/api/orders', async (req, res) => {
 });
 
 app.put('/api/orders/:id', verifyToken, async (req, res) => {
-  // Start a MongoDB Session for ACID compliance
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices, cashier } = req.body;
+    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices, cashier, items } = req.body;
     
-    // Pass the session to the query
     const order = await Order.findById(req.params.id).session(session);
     if (!order) {
       await session.abortTransaction();
@@ -646,13 +742,22 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ success: false });
     }
 
-    const wasNotCompleted = order.status !== 'Completed';
+    // FIX: Freeze previousStatus to prevent the 500 Internal Server Crash
+    const previousStatus = order.status;
+    const wasNotCompleted = previousStatus !== 'Completed';
     
     if (status) order.status = status;
     if (paymentMethod) order.paymentMethod = paymentMethod;
-    if (cashier) order.cashier = cashier; // Update cashier on status change
+    if (cashier) order.cashier = cashier; 
+
+    // NEW: Allow the Kitchen/Bar to update specific item statuses
+    if (items) {
+      order.items = items;
+      order.markModified('items');
+    }
 
     if (discountPercent !== undefined) order.discountPercent = discountPercent;
+// ... rest of the math engine stays the same
     if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
     if (discountType !== undefined) order.discountType = discountType;
 
@@ -666,34 +771,40 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       order.items.forEach((item, idx) => {
         item.hasDiscount = discountedIndices.includes(idx);
       });
+      order.markModified('items'); // <-- CRITICAL FIX: Tells MongoDB to save the checkboxes
     }
 
-    // --- 🧹 BULLETPROOF MATH RECALCULATION (VAT-INCLUSIVE) ---
+    // --- BULLETPROOF MATH RECALCULATION (VAT-EXCLUSIVE / ADD 12% ON TOP) ---
     let totalGross = 0;
     let totalDiscount = 0;
     let totalVat = 0;
 
     order.items.forEach(item => {
-      const itemBase = item.price * item.quantity;
+      // FIX 2: Safety fallback to prevent 'NaN' crashes if price is missing
+      const price = item.price || 0; 
+      const qty = item.quantity || 1;
+      
+      const itemBase = price * qty;
       totalGross += itemBase;
-
+      
       const getsDiscount = item.hasDiscount !== false;
 
       if (order.isComplimentary) {
         totalDiscount += itemBase;
       } else if (getsDiscount && order.discountPercent > 0) {
         if (order.isVatExempt || order.discountType === 'SC/PWD') {
-          const vatExemptBase = itemBase / 1.12;
-          const scDisc = vatExemptBase * (order.discountPercent / 100);
-          totalDiscount += (itemBase - (vatExemptBase - scDisc));
+          // SC/PWD: Discount applied to base, NO VAT
+          const scDisc = itemBase * (order.discountPercent / 100);
+          totalDiscount += scDisc;
         } else {
+          // Regular Promo: Discount applied, then VAT added on top
           const itemDisc = itemBase * (order.discountPercent / 100);
           totalDiscount += itemDisc;
-          const itemNet = itemBase - itemDisc;
-          if (!order.isVatExempt) totalVat += (itemNet - (itemNet / 1.12));
+          if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0.12;
         }
       } else {
-        if (!order.isVatExempt) totalVat += (itemBase - (itemBase / 1.12));
+        // Standard item: Add 12% VAT
+        if (!order.isVatExempt) totalVat += (itemBase * 0.12);
       }
     });
 
@@ -701,7 +812,9 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     order.discount = Number(totalDiscount.toFixed(2));
     order.vatAmount = Number(totalVat.toFixed(2));
     order.vatRate = (order.isVatExempt || order.isComplimentary) ? 0 : 0.12;
-    order.total = Number((totalGross - totalDiscount).toFixed(2));
+    order.total = Number((totalGross - totalDiscount + totalVat).toFixed(2));
+    // --- END MATH ENGINE ---
+    // --- END PRESERVED MATH ENGINE ---
 
     const validation = validateOrderMath(order);
     if (!validation.valid) {
@@ -730,6 +843,8 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       let totalCogs = 0; 
 
       for (const item of order.items) {
+    // FIX: Safely check for undefined instead of truthiness, so $0.00 items don't crash
+    if (item.price === undefined || item.quantity === undefined) return { valid: false, error: "Line item missing price or quantity." };
         // Pass session
         let product = null;
         if (item.productId) {
@@ -763,6 +878,9 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
             //   return res.status(400).json({ success: false, error: `Insufficient stock for ${invItem.itemName}` });
             // }
 
+            if (invItem.stockQty - deductQty < 0) {
+              throw new Error(`INSUFFICIENT STOCK: Cannot fulfill order. ${invItem.itemName} would drop below zero.`);
+            }
             invItem.stockQty -= deductQty;
             await invItem.save({ session }); // Save within session
             
@@ -827,6 +945,16 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 
       console.log(`[ERP LEDGER] Single AUTO Entry ${reference} created.`);
       io.emit('erpUpdated');
+    }
+
+    // --- TIER 1: AUDIT LOGGING FOR FRAUD PREVENTION ---
+    if (status && status !== previousStatus) {
+      await AuditLog.create([{
+        userId: req.user ? req.user.name : 'System',
+        action: `ORDER_${status.toUpperCase()}`,
+        targetReference: order.orderNumber,
+        details: { previousStatus, newStatus: status, total: order.total, method: paymentMethod }
+      }], { session });
     }
 
     await order.save({ session }); // Save within session
@@ -1236,9 +1364,10 @@ function scheduleMidnightArchive() {
 }
 
 // --- 🛡️ STRICT ORDER VALIDATION ENGINE (VAT-INCLUSIVE) 🛡️ ---
+// ---   STRICT ORDER VALIDATION ENGINE (VAT-EXCLUSIVE)   ---
 const validateOrderMath = (order) => {
   const TOLERANCE = 0.05; 
-  
+
   if (order.subtotal === undefined || order.total === undefined || order.vatAmount === undefined) {
     return { valid: false, error: "Missing critical financial fields (Subtotal, Total, or VAT)." };
   }
@@ -1248,35 +1377,32 @@ const validateOrderMath = (order) => {
   let expectedVat = 0;
 
   for (const item of order.items) {
-    if (!item.price || !item.quantity) return { valid: false, error: "Line item missing price or quantity." };
-
+    if (item.price === undefined || item.quantity === undefined) return { valid: false, error: "Line item missing price or quantity." };
+    
     const itemBase = item.price * item.quantity;
     expectedGross += itemBase;
     const getsDiscount = item.hasDiscount !== false;
 
     if (order.isComplimentary) {
-      expectedDiscount += itemBase;
+      expectedDiscount += itemBase; 
     } else if (getsDiscount && order.discountPercent > 0) {
       if (order.isVatExempt || order.discountType === 'SC/PWD') {
-        const vatExemptBase = itemBase / 1.12;
-        const scDisc = vatExemptBase * (order.discountPercent / 100);
-        expectedDiscount += (itemBase - (vatExemptBase - scDisc)); 
+        expectedDiscount += itemBase * (order.discountPercent / 100);
       } else {
         const itemDisc = itemBase * (order.discountPercent / 100);
         expectedDiscount += itemDisc;
-        const itemNet = itemBase - itemDisc;
-        if (!order.isVatExempt) expectedVat += (itemNet - (itemNet / 1.12));
+        if (!order.isVatExempt) expectedVat += (itemBase - itemDisc) * 0.12;
       }
     } else {
-      if (!order.isVatExempt) expectedVat += (itemBase - (itemBase / 1.12));
+      if (!order.isVatExempt) expectedVat += (itemBase * 0.12);
     }
   }
 
-  if (Math.abs(expectedGross - order.subtotal) > TOLERANCE) return { valid: false, error: "Gross mismatch." };
-  if (Math.abs(expectedVat - order.vatAmount) > TOLERANCE) return { valid: false, error: "VAT computation invalid." };
+  if (Math.abs(expectedGross - order.subtotal) > TOLERANCE) return { valid: false, error: `Gross mismatch. Expected P${expectedGross.toFixed(2)}, got P${order.subtotal}` };
+  if (Math.abs(expectedVat - order.vatAmount) > TOLERANCE) return { valid: false, error: `VAT invalid. Expected P${expectedVat.toFixed(2)}, got P${order.vatAmount}` };
   
-  const expectedTotal = expectedGross - expectedDiscount;
-  if (Math.abs(expectedTotal - order.total) > TOLERANCE) return { valid: false, error: "Total computation invalid." };
+  const expectedTotal = expectedGross - expectedDiscount + expectedVat;
+  if (Math.abs(expectedTotal - order.total) > TOLERANCE) return { valid: false, error: `Total invalid. Expected P${expectedTotal.toFixed(2)}, got P${order.total}` };
 
   return { valid: true };
 };
@@ -1289,21 +1415,22 @@ app.post('/api/users/login', async (req, res) => {
   const { name, password } = req.body;
   const user = await User.findOne({ name });
   if (!user) return res.status(401).json({ success: false, message: 'Invalid name or password' });
-  
   const isMatch = await bcrypt.compare(password, user.password);
+  
   if (isMatch) {
-    // 🔑 Generate JWT
+    // Generate JWT
     const token = jwt.sign(
-      { _id: user._id, name: user.name, userCode: user.userCode },
+      // THE FIX: Add user.role to the token payload
+      { _id: user._id, name: user.name, userCode: user.userCode, role: user.role }, 
       process.env.JWT_SECRET,
       { expiresIn: '12h' } // Token expires in 12 hours
     );
-
     res.json({ 
-      success: true, 
-      token, // Send token to frontend
-      user: { _id: user._id, name: user.name, userCode: user.userCode } 
-    });
+       success: true, 
+       token, 
+       // THE FIX: Also return the role to the frontend immediately
+       user: { _id: user._id, name: user.name, userCode: user.userCode, role: user.role } 
+     });
   } else {
     res.status(401).json({ success: false, message: 'Invalid name or password' });
   }
@@ -1317,13 +1444,16 @@ app.post('/api/users', verifyToken, async (req, res) => {
   try {
     const existing = await User.findOne({ name: { $regex: new RegExp(`^${req.body.name.trim()}$`, 'i') } });
     if (existing) return res.status(400).json({ success: false, error: 'User already exists' });
-
+    
     // Hash the password
     const hashedPassword = await bcrypt.hash(req.body.password, 10);
     const userCode = await generateNextSequence(User, 'ADN', 'userCode');
     
-    const newUser = await User.create({ name: req.body.name, password: hashedPassword, userCode });
-    res.json({ success: true, user: { _id: newUser._id, name: newUser.name, userCode: newUser.userCode } });
+    // THE FIX: Add the role from the request body!
+    const role = req.body.role || 'cashier'; // Default to cashier if none provided
+    
+    const newUser = await User.create({ name: req.body.name, password: hashedPassword, userCode, role });
+    res.json({ success: true, user: { _id: newUser._id, name: newUser.name, userCode: newUser.userCode, role: newUser.role } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
