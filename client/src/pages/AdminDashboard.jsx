@@ -1443,19 +1443,15 @@ const submitPhysicalCounts = async () => {
 
       {/* --- ACTIVE ORDERS TAB (Kitchen & Bar View) --- */}
       {activeTab === 'orders' && (() => {
-        // --- 🍳 KITCHEN & BAR ROUTING LOGIC ---
+        // ---   KITCHEN & BAR ROUTING LOGIC ---
         const displayOrders = filteredOrders.filter(order => {
           if (departmentFilter === 'Kitchen') {
-            return order.items.some(item => {
-              const prod = products.find(p => p._id === item.productId);
-              return prod && (prod.category === 'Mains' || prod.category === 'Sides');
-            });
+            // Show orders containing items smartly tagged for Kitchen
+            return order.items.some(item => (item.department || 'Kitchen') === 'Kitchen');
           }
           if (departmentFilter === 'Bar') {
-            return order.items.some(item => {
-              const prod = products.find(p => p._id === item.productId);
-              return prod && prod.category === 'Drinks';
-            });
+            // Show orders containing items smartly tagged for Bar
+            return order.items.some(item => item.department === 'Bar');
           }
           return true; // Show 'All'
         });
