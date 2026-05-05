@@ -5,8 +5,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 //const API_URL ='http://192.168.254.116:5002';
 //const API_URL = 'http://192.168.68.127:5002';
-//const API_URL = 'https://local-based-menu.onrender.com';
-const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+const API_URL = 'https://local-based-menu.onrender.com';
+//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 //const API_URL = 'http://10.201.1.204:5002';
 //const API_URL='http://172.20.10.6:5002';
 //const API_URL='http://192.168.30.131:5002';
