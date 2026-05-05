@@ -742,7 +742,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ success: false });
     }
 
-    // FIX: Freeze previousStatus to prevent the 500 Internal Server Crash
+    // Freeze previousStatus to prevent the 500 Internal Server Crash
     const previousStatus = order.status;
     const wasNotCompleted = previousStatus !== 'Completed';
     
@@ -750,14 +750,17 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     if (paymentMethod) order.paymentMethod = paymentMethod;
     if (cashier) order.cashier = cashier; 
 
-    // NEW: Allow the Kitchen/Bar to update specific item statuses
+    // Allow the Kitchen/Bar to update specific item statuses safely
     if (items) {
-      order.items = items;
+      items.forEach((incomingItem, index) => {
+        if (order.items[index]) {
+          order.items[index].itemStatus = incomingItem.itemStatus;
+        }
+      });
       order.markModified('items');
     }
 
     if (discountPercent !== undefined) order.discountPercent = discountPercent;
-// ... rest of the math engine stays the same
     if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
     if (discountType !== undefined) order.discountType = discountType;
 
@@ -771,16 +774,15 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       order.items.forEach((item, idx) => {
         item.hasDiscount = discountedIndices.includes(idx);
       });
-      order.markModified('items'); // <-- CRITICAL FIX: Tells MongoDB to save the checkboxes
+      order.markModified('items'); 
     }
 
-    // --- BULLETPROOF MATH RECALCULATION (VAT-EXCLUSIVE / ADD 12% ON TOP) ---
+    // --- BULLETPROOF MATH RECALCULATION ---
     let totalGross = 0;
     let totalDiscount = 0;
     let totalVat = 0;
 
     order.items.forEach(item => {
-      // FIX 2: Safety fallback to prevent 'NaN' crashes if price is missing
       const price = item.price || 0; 
       const qty = item.quantity || 1;
       
@@ -793,17 +795,14 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
         totalDiscount += itemBase;
       } else if (getsDiscount && order.discountPercent > 0) {
         if (order.isVatExempt || order.discountType === 'SC/PWD') {
-          // SC/PWD: Discount applied to base, NO VAT
           const scDisc = itemBase * (order.discountPercent / 100);
           totalDiscount += scDisc;
         } else {
-          // Regular Promo: Discount applied, then VAT added on top
           const itemDisc = itemBase * (order.discountPercent / 100);
           totalDiscount += itemDisc;
           if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0.12;
         }
       } else {
-        // Standard item: Add 12% VAT
         if (!order.isVatExempt) totalVat += (itemBase * 0.12);
       }
     });
@@ -813,8 +812,6 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     order.vatAmount = Number(totalVat.toFixed(2));
     order.vatRate = (order.isVatExempt || order.isComplimentary) ? 0 : 0.12;
     order.total = Number((totalGross - totalDiscount + totalVat).toFixed(2));
-    // --- END MATH ENGINE ---
-    // --- END PRESERVED MATH ENGINE ---
 
     const validation = validateOrderMath(order);
     if (!validation.valid) {
@@ -824,10 +821,9 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, error: `SYSTEM AUDIT REJECTED: ${validation.error}` });
     }
 
-    // --- 🛑 POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
+    // --- POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
     if (status === 'Completed' && wasNotCompleted) {
       const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-      // Pass session
       const currentEOD = await EODRecord.findOne({ dateString: todayStr }).session(session);
       
       if (currentEOD && currentEOD.status === 'LOCKED') {
@@ -837,15 +833,14 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       }
     }
 
-    // --- 🔥 THE STRICT ERP ENGINE (Protected by Transaction) 🔥 ---
+    // --- THE STRICT ERP ENGINE ---
     if (status === 'Completed' && wasNotCompleted) {
       console.log(`\n[ERP ENGINE] Processing Order: ${order.orderNumber}...`);
       let totalCogs = 0; 
 
       for (const item of order.items) {
-    // FIX: Safely check for undefined instead of truthiness, so $0.00 items don't crash
-    if (item.price === undefined || item.quantity === undefined) return { valid: false, error: "Line item missing price or quantity." };
-        // Pass session
+        if (item.price === undefined || item.quantity === undefined) return { valid: false, error: "Line item missing price or quantity." };
+        
         let product = null;
         if (item.productId) {
           product = await Product.findById(item.productId).session(session);
@@ -865,24 +860,20 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 
         for (const ing of recipeToUse) {
           if (!ing.invId) continue;
-          // Pass session
           const invItem = await Inventory.findById(ing.invId).session(session);
+          
           if (invItem) {
             const deductQty = (ing.qty * item.quantity);
             
-            // 🚨 NEGATIVE INVENTORY GUARDRAIL 🚨
-            // If you want to strictly prevent negative stock, uncomment these lines:
-            // if (invItem.stockQty - deductQty < 0) {
-            //   await session.abortTransaction();
-            //   session.endSession();
-            //   return res.status(400).json({ success: false, error: `Insufficient stock for ${invItem.itemName}` });
-            // }
-
+            // FIX: Graceful exit instead of a hard server crash if stock is too low
             if (invItem.stockQty - deductQty < 0) {
-              throw new Error(`INSUFFICIENT STOCK: Cannot fulfill order. ${invItem.itemName} would drop below zero.`);
+              await session.abortTransaction();
+              session.endSession();
+              return res.status(400).json({ success: false, error: `INSUFFICIENT STOCK: Cannot fulfill order. [${invItem.itemName}] would drop below zero. Please receive stock in the Procurement tab first.` });
             }
+            
             invItem.stockQty -= deductQty;
-            await invItem.save({ session }); // Save within session
+            await invItem.save({ session });
             
             await StockCard.create([{
               inventoryId: invItem._id,
@@ -892,14 +883,13 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
               qtyChange: -deductQty, 
               balanceAfter: invItem.stockQty,
               remarks: `Sold via ${item.name}`
-            }], { session }); // Create within session
+            }], { session });
 
             totalCogs += (invItem.unitCost * deductQty); 
           }
         }
       }
 
-      // --- DYNAMIC PAYMENT ROUTING ---
       let debitAccountCode = '1000';
       let debitAccountName = 'Cash on Hand';
       
@@ -911,7 +901,6 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
         debitAccountName = 'Cash in Bank';
       }
 
-      // --- THE COMBINED JOURNAL ENTRY ---
       const reference = `${order.orderNumber.replace('#','')}`;
       const lines = [];
 
@@ -941,25 +930,23 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
         lines, 
         totalDebit, 
         totalCredit 
-      }], { session }); // Create within session
+      }], { session });
 
       console.log(`[ERP LEDGER] Single AUTO Entry ${reference} created.`);
       io.emit('erpUpdated');
     }
 
-    // --- TIER 1: AUDIT LOGGING FOR FRAUD PREVENTION ---
+    // FIX: Removed the array brackets and {session} to prevent Mongoose crash
     if (status && status !== previousStatus) {
-      await AuditLog.create([{
+      await AuditLog.create({
         userId: req.user ? req.user.name : 'System',
         action: `ORDER_${status.toUpperCase()}`,
         targetReference: order.orderNumber,
         details: { previousStatus, newStatus: status, total: order.total, method: paymentMethod }
-      }], { session });
+      });
     }
 
-    await order.save({ session }); // Save within session
-    
-    // Commit the transaction - Everything succeeded!
+    await order.save({ session }); 
     await session.commitTransaction();
     session.endSession();
 
@@ -967,7 +954,6 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     res.json({ success: true, order });
     
   } catch (error) {
-    // If ANY error occurs, roll back ALL database changes in this block
     await session.abortTransaction();
     session.endSession();
     console.error("[ERP CRITICAL ERROR] Failed to process order:", error);

@@ -3,10 +3,8 @@ import { io } from 'socket.io-client';
 import QRCode from '../components/QRCode.jsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-//const API_URL ='http://192.168.254.116:5002';
-//const API_URL = 'http://192.168.68.127:5002';
-const API_URL = 'https://local-based-menu.onrender.com';
-//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+//const API_URL = 'https://local-based-menu.onrender.com';
+const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 //const API_URL = 'http://10.201.1.204:5002';
 //const API_URL='http://172.20.10.6:5002';
 //const API_URL='http://192.168.30.131:5002';
@@ -410,14 +408,30 @@ export default function AdminDashboard() {
     if (newStatus === 'Preparing') {
       payload.paymentMethod = paymentSelections[orderId] || 'Cash'; // Lock payment in early
     }
+    
+    // Optimistic UI update
     setOrders(prev => prev.map(o => o._id === orderId ? { ...o, ...payload } : o));
     socket.emit('updateOrderStatus', { orderId, status: newStatus });
-    await apiFetch(`/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    
+    // Backend Sync
+    try {
+      const res = await apiFetch(`/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      
+      if (!data.success) {
+        alert(data.error); // Show the exact error (e.g., "INSUFFICIENT STOCK")
+        fetchOrders(); // Revert the UI back to normal if the database rejected it
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const updateItemStatus = async (order, itemIndex, newStatus) => {
     const newItems = [...order.items];
-    newItems[itemIndex].itemStatus = newStatus;
+    
+    // FIX: Deep clone the specific item so we don't directly mutate React state
+    newItems[itemIndex] = { ...newItems[itemIndex], itemStatus: newStatus };
     
     // Update UI instantly
     setOrders(prev => prev.map(o => o._id === order._id ? { ...o, items: newItems } : o));
@@ -1655,15 +1669,18 @@ const submitPhysicalCounts = async () => {
                   </div>
 
                   {/* Buttons / Actions */}
+                  {/* Buttons / Actions */}
                   <div className="flex flex-col gap-2 mt-auto">
-                    {order.status === 'Pending' && (
+                    
+                    {/* PENDING: Only Cashier can Pay, Send, or Drop */}
+                    {order.status === 'Pending' && departmentFilter === 'All' && (
                       <div className="flex flex-col w-full gap-2">
                         <select 
-                          value={paymentSelections[order._id] || 'Cash'} 
-                          onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
+                           value={paymentSelections[order._id] || 'Cash'} 
+                           onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
                           className="w-full bg-white text-black border-2 border-transparent rounded-lg p-2.5 text-sm font-bold outline-none focus:border-accent shadow-sm"
                         >
-                          <option value="Cash">💵 Paid via Cash</option>
+                          <option value="Cash">💰 Paid via Cash</option>
                           <option value="E-Wallet">📱 Paid via E-Wallet</option>
                           <option value="Bank Transfer">🏦 Paid via Bank Transfer</option>
                         </select>
@@ -1674,33 +1691,44 @@ const submitPhysicalCounts = async () => {
                       </div>
                     )}
                     
+                    {/* PREPARING: Kitchen/Bar only check off items. Cashier handles Ready and Drop. */}
                     {order.status === 'Preparing' && (
                       <div className="flex gap-2 mt-2">
                         {order.items.every(i => i.itemStatus === 'Finished') ? (
-                          <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
-                            Mark Ready to Serve
-                          </button>
+                          departmentFilter === 'All' ? (
+                            <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
+                              Mark Ready to Serve
+                            </button>
+                          ) : (
+                            <div className="flex-1 flex items-center justify-center bg-green-500/20 text-green-400 border border-green-500/50 rounded-lg text-[10px] font-bold uppercase tracking-widest py-3">
+                              All Items Finished
+                            </div>
+                          )
                         ) : (
-                          <div className="flex-1 flex items-center justify-center bg-dark text-gray-500 border border-gray-700 rounded-lg text-[10px] font-bold uppercase tracking-widest">
+                          <div className="flex-1 flex items-center justify-center bg-dark text-gray-500 border border-gray-700 rounded-lg text-[10px] font-bold uppercase tracking-widest py-3">
                             Waiting on Kitchen/Bar...
                           </div>
                         )}
-                        <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                        
+                        {/* Only All View gets the Drop button */}
+                        {departmentFilter === 'All' && (
+                          <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                        )}
                       </div>
                     )}
 
-                    {order.status === 'Ready' && (
+                    {/* READY: Only Cashier handles Complete and Drop */}
+                    {order.status === 'Ready' && departmentFilter === 'All' && (
                       <div className="flex gap-2">
                         <button onClick={() => updateStatus(order._id, 'Completed')} className="flex-1 bg-green-500 text-white py-3 rounded-lg hover:bg-green-600 font-black uppercase tracking-widest text-xs shadow-md transition">
                           Give to Cust.
                         </button>
-                        {/* Always allow dropping ghost orders */}
-                        <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                        <button onClick={() => updateStatus(order._id, 'Cancelled')} className="flex-1 bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
                       </div>
                     )}
 
-                    {/* SAFE VOID BUTTON FOR COMPLETED ORDERS */}
-                    {order.status === 'Completed' && (
+                    {/* COMPLETED: Only Cashier handles Void */}
+                    {order.status === 'Completed' && departmentFilter === 'All' && (
                       <button onClick={() => handleVoidOrder(order._id)} className="w-full bg-white border border-red-500 text-red-500 py-2.5 rounded-lg hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition">
                         Void / Refund Order
                       </button>
