@@ -2479,7 +2479,7 @@ const submitPhysicalCounts = async () => {
                             className="cursor-pointer hover:bg-white/10 px-2 py-1 rounded inline-flex items-center gap-2 transition group"
                             onClick={() => { setEditPriceId(row.id); setEditPriceVal(row.price); }}
                           >
-                            ₱{Number(row.price).toFixed(2)}
+                            P{Number(row.price).toFixed(2)}
                             <span className="text-[10px] text-gray-500 group-hover:text-accent">✎</span>
                           </div>
                         )}
