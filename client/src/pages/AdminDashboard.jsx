@@ -534,6 +534,7 @@ export default function AdminDashboard() {
           <p class="center mt-0 text-sm">Order: ${order.orderNumber}</p>
           <hr/>
           <p>Table: <b>${order.table}</b><br/>Name: <b>${order.customerName || 'Guest'}</b></p>
+          ${order.isComplimentary ? `<p><b>COMPLIMENTARY:</b><br/>Approved for: ${order.employeeName}</p>` : ''}
           <hr/>
           ${order.items.map(i => `
             <div class="flex">

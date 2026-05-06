@@ -375,6 +375,8 @@ export default function CustomerMenu() {
   //                RENDER VIEWS
   // ==========================================
 
+  // --- ADD THIS BLOCK ---
+  // SHOW THIS WHILE WAITING FOR THE SERVER TO VALIDATE THE QR CODE
   if (isCheckingSession) {
     return (
       <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4">
@@ -384,10 +386,11 @@ export default function CustomerMenu() {
       </div>
     );
   }
+  // --- END NEW BLOCK ---
 
   if (!isAuthorized) {
-    return (
-      <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6 text-center">
+      return (
+        <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4 text-center">
         <div className="bg-surface p-8 rounded-xl border border-red-900/50 shadow-2xl max-w-sm w-full animate-fade-in">
           <h1 className="text-2xl font-black text-white uppercase tracking-widest mb-2">Link Expired</h1>
           <p className="text-gray-400 text-sm">This ordering session is closed. Please ask the staff to generate a new QR code for your table.</p>
