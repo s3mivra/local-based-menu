@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-import QRCode from '../components/QRCode.jsx';
+import { Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Clock, Coffee, Minus } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 const API_URL = 'https://local-based-menu.onrender.com';
@@ -52,7 +52,7 @@ export default function AdminDashboard() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [formData, setFormData] = useState({ 
     name: '', description: '', category: '', basePrice: '', baseSize: '', sizes: [], image: '', 
-    baseRecipe: [] 
+    baseRecipe: [], addOns: []
   });
   const [catForm, setCatForm] = useState({ name: '', department: 'Kitchen' });
   const [editingCategory, setEditingCategory] = useState(null);
@@ -110,7 +110,32 @@ export default function AdminDashboard() {
   const [shiftFilter, setShiftFilter] = useState('All');
   const [users, setUsers] = useState([]); // Stores the employee list
 
+  const [globalAddOns, setGlobalAddOns] = useState([]);
+  const [addOnForm, setAddOnForm] = useState({ name: '', price: '', category: 'Extras' });
   
+
+  // --- FULLSCREEN LOGIC ---
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((err) => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
   // --- JWT API HELPER ---
   // Use this wrapper for ALL fetch requests to the backend API.
   // It automatically attaches the JWT token from memory.
@@ -225,6 +250,40 @@ export default function AdminDashboard() {
     }
   };
 
+  const fetchData = async () => {
+    try {
+      // Fetch Products
+      const pRes = await apiFetch(`/api/products`);
+      if (pRes.ok) setProducts((await pRes.json()).products || []);
+      
+      // Fetch Categories
+      const cRes = await apiFetch(`/api/categories`);
+      if (cRes.ok) setCategories((await cRes.json()).categories || []);
+      
+      // Fetch Discounts
+      const dRes = await apiFetch(`/api/discounts`);
+      if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
+
+      // Fetch Global Add-Ons
+      const aRes = await apiFetch(`/api/addons`);
+      if (aRes.ok) setGlobalAddOns((await aRes.json()).addons || []);
+      
+    } catch (err) { console.error('Failed to fetch menu data', err); }
+  };
+
+  // 3. Add these two handler functions right above your return() statement:
+  const handleSaveAddOn = async (e) => {
+    e.preventDefault();
+    await apiFetch(`/api/addons`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addOnForm) });
+    setAddOnForm({ name: '', price: '', category: 'Extras' });
+    fetchData();
+  };
+  
+  const deleteAddOn = async (id) => {
+    if(window.confirm('Delete this Add-on?')) await apiFetch(`/api/addons/${id}`, { method: 'DELETE' });
+    fetchData();
+  };
+
   const fetchERPData = async () => {
     try {
       const invRes = await apiFetch(`/api/inventory`);
@@ -269,22 +328,6 @@ export default function AdminDashboard() {
     } catch (err) { 
       console.error("Failed to fetch users"); 
     }
-  };
-
-  const fetchData = async () => {
-    try {
-      // Products and Categories are PUBLIC (Customer Menu needs them), so they use regular fetch
-      const pRes = await apiFetch(`/api/products`);
-      if (pRes.ok) setProducts((await pRes.json()).products || []);
-      
-      const cRes = await apiFetch(`/api/categories`);
-      if (cRes.ok) setCategories((await cRes.json()).categories || []);
-      
-      // Discounts are PROTECTED, use apiFetch
-      const dRes = await apiFetch(`/api/discounts`);
-      if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
-      
-    } catch (err) { console.error('Failed to fetch menu data', err); }
   };
 
   const fetchOrders = async () => {
@@ -453,6 +496,33 @@ export default function AdminDashboard() {
       method: 'PUT',
       body: JSON.stringify({ items: newItems })
     });
+  };
+
+  const removeAddOnFromOrder = async (order, itemIndex, addOnIndex) => {
+    if (!window.confirm("Remove this add-on from the customer's order?")) return;
+    
+    const newItems = [...order.items];
+    newItems[itemIndex].selectedAddOns = newItems[itemIndex].selectedAddOns.filter((_, idx) => idx !== addOnIndex);
+    
+    // Optimistic UI
+    setOrders(prev => prev.map(o => o._id === order._id ? { ...o, items: newItems } : o));
+    
+    // Backend Sync (which recalculates the total price)
+    try {
+      const res = await apiFetch(`/api/orders/${order._id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ items: newItems })
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchOrders(); // Refresh to get the accurate new total
+      } else {
+        alert(data.error);
+        fetchOrders(); // Revert on fail
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const applyComplimentary = async (orderId) => {
@@ -1031,6 +1101,9 @@ const submitPhysicalCounts = async () => {
   const addSize = () => setFormData({ ...formData, sizes: [...formData.sizes, { name: '', price: 0 }] });
   const updateSize = (index, field, value) => { const newSizes = [...formData.sizes]; newSizes[index][field] = field === 'price' ? parseFloat(value) || 0 : value; setFormData({ ...formData, sizes: newSizes }); };
   const removeSize = (index) => setFormData({ ...formData, sizes: formData.sizes.filter((_, i) => i !== index) });
+  const addAddOn = () => setFormData({ ...formData, addOns: [...(formData.addOns || []), { name: '', price: 0, recipe: [] }] });
+  const updateAddOn = (index, field, value) => { const newAddOns = [...formData.addOns]; newAddOns[index][field] = field === 'price' ? parseFloat(value) || 0 : value; setFormData({ ...formData, addOns: newAddOns }); };
+  const removeAddOn = (index) => setFormData({ ...formData, addOns: formData.addOns.filter((_, i) => i !== index) });
 
   const addMaterialToRecipe = (invId, sizeIndex = null) => {
     if (!invId) return;
@@ -1205,7 +1278,7 @@ const submitPhysicalCounts = async () => {
           <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Locked</h2>
           <p className="text-gray-400 text-sm mb-6">Enter credentials to access the dashboard.</p>
           <input type="text" placeholder="Admin Name" value={loginForm.name} onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" required autoFocus />
-          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
+          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
           <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest">AUTHENTICATE</button>
         </form>
       </div>
@@ -1264,11 +1337,21 @@ const submitPhysicalCounts = async () => {
         </div>
 
         {/* RIGHT CONTROLS */}
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           <div className="hidden md:flex flex-col items-end mr-4">
             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Auto-Close In</span>
             <span className="text-accent font-black tracking-wider">{countdown}</span>
           </div>
+
+          {/* NEW FULLSCREEN BUTTON */}
+          <button 
+            onClick={(e) => { e.preventDefault(); toggleFullScreen(); }}
+            className="flex items-center justify-center bg-dark border border-gray-700 text-gray-400 p-2.5 rounded-md hover:text-white hover:border-gray-500 transition shadow-sm"
+            title="Toggle Fullscreen"
+          >
+            {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+          </button>
+
           <button 
             onClick={(e) => { e.preventDefault(); handleShowQR(); }} 
             className="flex-1 md:flex-none bg-accent border border-shadowAccent text-white px-4 py-2 rounded-md font-bold hover:border-accent hover:bg-white hover:text-accent transition"
@@ -1284,31 +1367,31 @@ const submitPhysicalCounts = async () => {
         </div>
       </div>
 
-      {/* QR MODAL (Fixed z-index and click issues) */}
+      {/* QR MODAL (Fixed z-index and flex shrinking issues) */}
       {showQR && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-surface p-8 rounded-xl border border-gray-700 shadow-2xl flex flex-col items-center max-w-sm w-full relative">
-            <button onClick={() => setShowQR(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white font-bold text-2xl">✕</button>
-            <h2 className="text-2xl font-bold mb-1 text-white">Customer QR</h2>
-            <div className="bg-dark px-6 py-2 rounded-full border border-gray-700 mb-6 mt-2 flex items-center gap-2">
+          <div className="bg-surface p-6 md:p-8 rounded-xl border border-gray-700 shadow-2xl flex flex-col items-center max-w-sm w-full relative max-h-[95vh] overflow-y-auto custom-scrollbar">
+            <button onClick={() => setShowQR(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white font-bold text-2xl shrink-0">✕</button>
+            <h2 className="text-2xl font-bold mb-1 text-white shrink-0">Customer QR</h2>
+            <div className="bg-dark px-6 py-2 rounded-full border border-gray-700 mb-6 mt-2 flex items-center gap-2 shrink-0">
               <span className="text-gray-400 text-sm font-bold uppercase tracking-wider">Session ID:</span>
               <span className="text-accent font-black text-lg">{autoTableId}</span>
             </div>
             
-            <div className="bg-white rounded-xl shadow-inner w-full flex justify-center items-center overflow-hidden">
-              {/* Note: The QRCode component handles its own internal padding and styling */}
-              <QRCode url={`${FRONTEND_URL}/?session=${qrSessionId}&table=${autoTableId}`} size={220} />
+            {/* FIX: Added shrink-0, p-4, and removed overflow-hidden so the QR never gets squished! */}
+            <div className="bg-white rounded-xl shadow-inner w-full flex justify-center items-center p-4 shrink-0 min-h-[250px]">
+              <QRCode url={`${FRONTEND_URL}/?session=${qrSessionId}&table=${autoTableId}`} size={200} />
             </div>
             
             <button 
               onClick={(e) => { e.preventDefault(); handleShowQR(); }} 
-              className="mt-6 w-full bg-surface border border-accent text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition uppercase tracking-widest text-sm"
+              className="mt-6 w-full bg-surface border border-accent text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition uppercase tracking-widest text-sm shrink-0"
             >
               Generate Next QR
             </button>
             <button 
               onClick={() => setShowQR(false)} 
-              className="mt-3 w-full bg-dark border border-gray-600 text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition text-sm"
+              className="mt-3 w-full bg-dark border border-gray-600 text-accent font-bold py-3 rounded-md hover:bg-accent hover:text-dark transition text-sm shrink-0"
             >
               Close
             </button>
@@ -1379,7 +1462,6 @@ const submitPhysicalCounts = async () => {
                 })}
               </div>
             </div>
-
             {/* Inventory Alerts & Velocity */}
             <div className="grid grid-cols-1 gap-4">
               {/* --- UPGRADED: High Velocity & Forecasting --- */}
@@ -1555,36 +1637,60 @@ const submitPhysicalCounts = async () => {
                             const isSelected = currentSelection ? currentSelection.includes(item.originalIdx) : true;
                             
                             return (
-                              <div key={item.originalIdx} className="flex justify-between items-center text-sm mb-2">
-                                <div className="flex items-center gap-2">
-                                  {order.status === 'Pending' && (
-                                    <input
-                                      type="checkbox"
-                                      checked={isSelected}
-                                      onChange={() => toggleItemDiscount(order._id, item.originalIdx)}
-                                      className="w-3 h-3 cursor-pointer rounded"
-                                    />
+                              <div key={item.originalIdx} className="mb-2">
+                                <div className="flex justify-between items-center text-sm">
+                                  <div className="flex items-center gap-2">
+                                    {order.status === 'Pending' && (
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={() => toggleItemDiscount(order._id, item.originalIdx)}
+                                        className="w-3 h-3 cursor-pointer rounded"
+                                      />
+                                    )}
+                                    <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
+                                      {item.quantity}x {item.name}
+                                    </span>
+                                  </div>
+                                  
+                                  {/* ITEM STATUS CONTROLS */}
+                                  {(order.status === 'Preparing' || order.status === 'Ready') ? (
+                                    <div className="flex items-center gap-1">
+                                      {item.itemStatus === 'Received' && (
+                                        <button onClick={() => updateItemStatus(order, item.originalIdx, 'Preparing')} className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 hover:bg-yellow-500 hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Prep</button>
+                                      )}
+                                      {item.itemStatus === 'Preparing' && (
+                                        <button onClick={() => updateItemStatus(order, item.originalIdx, 'Finished')} className="bg-accent/20 text-accent border border-accent/50 hover:bg-accent hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Finish</button>
+                                      )}
+                                      {item.itemStatus === 'Finished' && (
+                                        <span className="text-green-500 text-[10px] font-black uppercase tracking-wider px-1">✔ Done</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-white font-mono font-bold">P{(item.price * item.quantity).toFixed(2)}</span>
                                   )}
-                                  <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
-                                    {item.quantity}x {item.name}
-                                  </span>
                                 </div>
                                 
-                                {/* ITEM STATUS CONTROLS */}
-                                {(order.status === 'Preparing' || order.status === 'Ready') ? (
-                                  <div className="flex items-center gap-1">
-                                    {item.itemStatus === 'Received' && (
-                                      <button onClick={() => updateItemStatus(order, item.originalIdx, 'Preparing')} className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 hover:bg-yellow-500 hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Prep</button>
-                                    )}
-                                    {item.itemStatus === 'Preparing' && (
-                                      <button onClick={() => updateItemStatus(order, item.originalIdx, 'Finished')} className="bg-accent/20 text-accent border border-accent/50 hover:bg-accent hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Finish</button>
-                                    )}
-                                    {item.itemStatus === 'Finished' && (
-                                      <span className="text-green-500 text-[10px] font-black uppercase tracking-wider px-1">✔ Done</span>
-                                    )}
+                                {/* --- RENDER ADD-ONS UNDERNEATH THE ITEM --- */}
+                                {item.selectedAddOns && item.selectedAddOns.length > 0 && (
+                                  <div className="pl-6 mt-1 space-y-1">
+                                    {item.selectedAddOns.map((addon, aIdx) => (
+                                      <div key={aIdx} className="flex justify-between items-center text-[11px] text-gray-400 bg-black/20 px-2 py-1 rounded border border-white/5">
+                                        <span className="flex items-center gap-1">
+                                          <span className="text-accent text-[8px]">▶</span> {addon.name} <span className="text-[9px]">(+P{addon.price})</span>
+                                        </span>
+                                        {/* Show X Button ONLY if order is still Pending */}
+                                        {order.status === 'Pending' && (
+                                          <button 
+                                            onClick={() => removeAddOnFromOrder(order, item.originalIdx, aIdx)}
+                                            className="text-gray-500 hover:text-red-400 transition bg-dark p-1 rounded"
+                                          >
+                                            <X size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
                                   </div>
-                                ) : (
-                                  <span className="text-white font-mono font-bold">P{(item.price * item.quantity).toFixed(2)}</span>
                                 )}
                               </div>
                             );
@@ -1768,7 +1874,7 @@ const submitPhysicalCounts = async () => {
               <h3 className="text-dark font-black tracking-widest uppercase text-sm flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-dark animate-pulse"></span> Active Register
               </h3>
-              <select className="bg-dark text-white p-2 rounded text-xs font-bold outline-none border border-gray-700 shadow-sm" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
+              <select className="bg-dark text-black p-2 rounded text-xs font-bold outline-none border border-gray-700 shadow-sm" value={shiftFilter} onChange={e => setShiftFilter(e.target.value)}>
                 <option value="All">All Shifts (Store Total)</option>
                 {users.map(u => <option key={u._id} value={u.name}>{u.name}'s Shift</option>)}
               </select>
@@ -1959,7 +2065,7 @@ const submitPhysicalCounts = async () => {
                   {/* --- INTELLIGENT EOD HEADER --- */}
                   <div className={`flex justify-between items-center p-4 rounded-lg border mb-4 shadow-inner ${isLocked ? 'bg-green-900/10 border-green-900/30' : 'bg-dark border-accent'}`}>
                     <div>
-                      <h4 className="text-accent font-black uppercase tracking-wider text-sm flex items-center gap-2">
+                      <h4 className="text-black font-black uppercase tracking-wider text-sm flex items-center gap-2">
                         {isLocked ? (
                           <>EOD Locked</>
                         ) : (
@@ -1982,7 +2088,7 @@ const submitPhysicalCounts = async () => {
                             fetchEODData(); // Refresh the tab
                           }
                         }}
-                        className="bg-dark border border-gray-600 text-gray-300 hover:text-white hover:border-red-500 px-4 py-2 rounded text-xs font-bold uppercase transition"
+                        className="bg-dark border border-gray-600 text-accent hover:text-white hover:border-red-500 px-4 py-2 rounded text-xs font-bold uppercase transition"
                       >
                         Reopen Register
                       </button>
@@ -2085,7 +2191,7 @@ const submitPhysicalCounts = async () => {
                         <div className="border-l border-gray-800 pl-6">
                           <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mb-1">Net Variance</p>
                           <p className="text-sm font-black text-gray-300">
-                            {netVarianceQty > 0 ? '+' : ''}{netVarianceQty} Items
+                            {`${netVarianceQty > 0 ? '+' : ''}${netVarianceQty} Items`}
                           </p>
                         </div>
                         <div className="border-l border-gray-800 pl-6">
@@ -2446,36 +2552,34 @@ const submitPhysicalCounts = async () => {
       {activeTab === 'products' && (
         <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-180px)]">
           
-          {/* LEFT COLUMN: Add 'overflow-y-auto custom-scrollbar' */}
-          <div className="flex-1 bg-accent border border-accentShadow rounded-lg p-6 overflow-y-auto custom-scrollbar">
-            <h3 className="text-xl font-bold mb-4 text-dark border-b border-dark pb-2">Menu Items</h3>
+          {/* LEFT COLUMN: Menu Items, Categories, and Add-Ons */}
+          <div className="flex-1 bg-white border border-gray-200 shadow-md rounded-xl p-6 overflow-y-auto custom-scrollbar">
+            
+            {/* 1. Menu Items List */}
+            <h3 className="text-xl font-bold mb-4 text-gray-900 border-b border-gray-200 pb-2">Menu Items</h3>
             <div className="space-y-3">
               {products.map(p => (
-                <div key={p._id} className="flex gap-4 p-4 border border-gray-800 rounded bg-dark items-center">
+                <div key={p._id} className="flex gap-4 p-4 border border-gray-200 rounded-xl bg-gray-50 items-center shadow-sm">
                   {p.image ? (
-                    <img src={p.image} alt={p.name} className="w-16 h-16 object-cover rounded shadow-md border border-gray-700" />
+                    <img src={p.image} alt={p.name} className="w-16 h-16 object-cover rounded-lg shadow-sm border border-gray-200" />
                   ) : (
-                    <div className="w-16 h-16 bg-gray-800 rounded border border-gray-700 flex items-center justify-center text-xs text-gray-500">No Img</div>
+                    <div className="w-16 h-16 bg-gray-200 rounded-lg border border-gray-300 flex items-center justify-center text-xs text-gray-500 font-bold">No Img</div>
                   )}
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-black">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
-                      
-                      {/* --- ESTIMATED STOCK BADGE --- */}
+                      <h4 className="font-bold text-gray-900">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
                       {(() => {
                         const est = getEstimatedStock(p.baseRecipe);
                         if (est === null) return null;
                         return (
-                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-black text-red-400' : est <= 5 ? 'bg-black text-yellow-500' : 'bg-black text-green-400'}`}>
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-red-100 text-red-600' : est <= 5 ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>
                             {est <= 0 ? 'Out of Stock' : `Est: ${est} left`}
                           </span>
                         );
                       })()}
-                      {/* ----------------------------- */}
-                      
                     </div>
                     {p.description && <p className="text-xs text-gray-500 mt-1 line-clamp-1">{p.description}</p>}
-                    <p className="text-sm text-gray-400 mt-1">P{Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-600">({p.baseSize})</span>} {p.sizes?.length > 0 && `(+ ${p.sizes.length} sizes)`}</p>
+                    <p className="text-sm text-gray-700 font-bold mt-1">P{Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-500 font-normal">({p.baseSize})</span>} {p.sizes?.length > 0 && <span className="text-accent text-xs ml-1">(+ {p.sizes.length} sizes)</span>}</p>
                   </div>
                   <div className="flex flex-col gap-2">
                     <button 
@@ -2484,43 +2588,43 @@ const submitPhysicalCounts = async () => {
                         setFormData({ 
                           name: p.name || '', category: p.category || '', description: p.description || '', 
                           basePrice: Number(p.basePrice || p.price || 0), baseSize: p.baseSize || '', 
-                          sizes: p.sizes || [], image: p.image || '', baseRecipe: p.baseRecipe || []
+                          sizes: p.sizes || [], image: p.image || '', baseRecipe: p.baseRecipe || [], addOns: p.addOns || []
                         }); 
                       }} 
-                      className="px-3 py-1 bg-gray-800 rounded text-sm hover:bg-gray-700"
+                      className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg text-sm font-bold hover:bg-gray-300 transition flex items-center gap-2"
                     >
-                      Edit
+                      <Edit size={14} /> Edit
                     </button>
                   </div>
                 </div>
               ))}
             </div>
             
-            <div className="mt-8 border-t border-dark pt-6">
-              <h3 className="text-xl font-bold mb-4 text-dark border-b border-dark pb-2">Manage Categories & Routing</h3>
-              
+            {/* 2. Manage Categories */}
+            <div className="mt-8 border-t border-gray-200 pt-6">
+              <h3 className="text-xl font-bold mb-4 text-gray-900 border-b border-gray-200 pb-2">Manage Categories & Routing</h3>
               <form onSubmit={handleSaveCategory} className="flex gap-3 mb-6">
                 <input 
                   type="text" 
                   value={catForm.name} 
                   onChange={e => setCatForm({...catForm, name: e.target.value})} 
                   placeholder="Category Name" 
-                  className="flex-1 bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" 
+                  className="flex-1 bg-gray-50 border border-gray-300 rounded-lg p-3 text-gray-900 outline-none focus:border-accent font-semibold" 
                   required 
                 />
                 <select 
                   value={catForm.department} 
                   onChange={e => setCatForm({...catForm, department: e.target.value})} 
-                  className="w-32 bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent font-bold"
+                  className="w-32 bg-gray-50 border border-gray-300 rounded-lg p-3 text-gray-900 outline-none focus:border-accent font-bold"
                 >
                   <option value="Kitchen">Kitchen</option>
                   <option value="Bar">Bar</option>
                 </select>
-                <button type="submit" className="bg-accent text-dark font-bold px-6 py-2 rounded border hover:text-accent hover:bg-dark transition">
+                <button type="submit" className="bg-accent text-white font-bold px-6 py-2 rounded-lg hover:bg-opacity-90 transition shadow-md">
                   {editingCategory ? 'Update' : 'Add'}
                 </button>
                 {editingCategory && (
-                  <button type="button" onClick={() => { setEditingCategory(null); setCatForm({ name: '', department: 'Kitchen' }); }} className="bg-gray-500 text-white font-bold px-4 py-2 rounded hover:bg-gray-600 transition">
+                  <button type="button" onClick={() => { setEditingCategory(null); setCatForm({ name: '', department: 'Kitchen' }); }} className="bg-gray-200 text-gray-700 font-bold px-4 py-2 rounded-lg hover:bg-gray-300 transition">
                     Cancel
                   </button>
                 )}
@@ -2528,57 +2632,107 @@ const submitPhysicalCounts = async () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {categories.map(c => (
-                  <div key={c._id} className="flex justify-between items-center p-3 border border-gray-800 rounded bg-dark">
+                  <div key={c._id} className="flex justify-between items-center p-3 border border-gray-200 rounded-xl bg-gray-50 shadow-sm">
                     <div>
-                      <span className="font-bold text-sm text-black block">{c.name}</span>
+                      <span className="font-bold text-sm text-gray-900 block">{c.name}</span>
                       <span className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Routes to: {c.department || 'Kitchen'}</span>
                     </div>
-                    <div className="flex gap-3">
-                      <button onClick={() => { setEditingCategory(c); setCatForm({ name: c.name, department: c.department || 'Kitchen' }); }} className="text-accent hover:text-yellow-600 text-xs font-semibold">Edit</button>
-                      <button onClick={() => deleteCategory(c._id)} className="text-red-500 hover:text-red-400 text-xs font-semibold">Del</button>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setEditingCategory(c); setCatForm({ name: c.name, department: c.department || 'Kitchen' }); }} className="text-gray-500 hover:text-accent p-1.5 rounded"><Edit size={16} /></button>
+                      <button onClick={() => deleteCategory(c._id)} className="text-red-500 hover:text-red-600 p-1.5 rounded"><Trash2 size={16} /></button>
                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 3. MANAGE GLOBAL ADD-ONS */}
+            <div className="mt-8 border-t border-gray-200 pt-6">
+              <h3 className="text-xl font-bold mb-4 text-gray-900 border-b border-gray-200 pb-2">Manage Global Add-Ons (Sinkers, Shots)</h3>
+              <form onSubmit={handleSaveAddOn} className="flex gap-3 mb-6">
+                <input 
+                  type="text" 
+                  placeholder="Name (e.g. Popping Boba)" 
+                  value={addOnForm.name} 
+                  onChange={e => setAddOnForm({...addOnForm, name: e.target.value})} 
+                  className="flex-1 bg-gray-50 border border-gray-300 rounded-lg p-3 text-gray-900 outline-none focus:border-accent font-semibold" 
+                  required 
+                />
+                <input 
+                  type="number" 
+                  placeholder="Price" 
+                  value={addOnForm.price} 
+                  onChange={e => setAddOnForm({...addOnForm, price: e.target.value})} 
+                  className="w-24 bg-gray-50 border border-gray-300 rounded-lg p-3 text-gray-900 outline-none focus:border-accent font-bold" 
+                  required 
+                />
+                <select 
+                  value={addOnForm.category} 
+                  onChange={e => setAddOnForm({...addOnForm, category: e.target.value})} 
+                  className="w-32 bg-gray-50 border border-gray-300 rounded-lg p-3 text-gray-900 outline-none focus:border-accent font-bold"
+                >
+                  <option value="Extras">Extras</option>
+                  <option value="Sinkers">Sinkers</option>
+                  <option value="Milks">Milks</option>
+                </select>
+                <button type="submit" className="bg-accent text-white font-bold px-6 py-2 rounded-lg hover:bg-opacity-90 transition shadow-md">Add</button>
+              </form>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {globalAddOns.map(a => (
+                  <div key={a._id} className="flex justify-between items-center p-3 border border-gray-200 rounded-xl bg-gray-50 shadow-sm">
+                    <div>
+                      <span className="font-bold text-sm text-gray-900 block">{a.name}</span>
+                      <span className="text-[10px] uppercase font-bold text-accent tracking-wider">{a.category} • +P{a.price}</span>
+                    </div>
+                    <button onClick={() => deleteAddOn(a._id)} className="text-red-500 hover:text-red-600 bg-red-50 p-1.5 rounded"><Trash2 size={16} /></button>
                   </div>
                 ))}
               </div>
             </div>
           </div>
 
-          {/* RIGHT COLUMN: Add Product Form (Scroll Fix Applied) */}
-          <div className="w-full lg:w-96 bg-surface border border-gray-800 rounded-lg p-6 flex flex-col h-full overflow-hidden">
-            <h3 className="text-xl font-bold text-accent mb-4 border-b border-gray-800 pb-2 shrink-0">
+          {/* RIGHT COLUMN: Add Product Form */}
+          <div className="w-full lg:w-96 bg-white border border-gray-200 rounded-xl p-6 flex flex-col h-full overflow-hidden shadow-md">
+            <h3 className="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2 shrink-0">
               {editingProduct ? 'Edit Product' : 'Add Product'}
             </h3>
             
-            {/* The scrollable area is now restricted to this inner div */}
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
               <form onSubmit={handleSaveProduct} className="space-y-4">
+                {/* Basic Info */}
                 <div>
-                  <label className="block text-sm text-gray-400 mb-2">Product Image (WebP Auto-Convert)</label>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Product Image</label>
                   <div className="flex items-center gap-4">
                     {formData.image ? (
-                      <img src={formData.image} alt="Preview" className="w-16 h-16 object-cover rounded border border-accent" />
+                      <img src={formData.image} alt="Preview" className="w-16 h-16 object-cover rounded-lg border border-gray-200 shadow-sm" />
                     ) : (
-                      <div className="w-16 h-16 bg-dark border border-gray-700 rounded flex items-center justify-center text-xs text-gray-500">None</div>
+                      <div className="w-16 h-16 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-center text-xs text-gray-400 font-bold">None</div>
                     )}
-                    <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-white hover:file:bg-gray-700 cursor-pointer" />
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-gray-100 file:text-gray-900 hover:file:bg-gray-200 cursor-pointer transition" />
                   </div>
                 </div>
-                <div><label className="block text-sm text-gray-400 mb-1">Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent" /></div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1">Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-gray-50 border border-gray-300 rounded-lg p-2.5 text-gray-900 outline-none focus:border-accent font-semibold" /></div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Category</label>
-                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent">
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Category</label>
+                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-gray-50 border border-gray-300 rounded-lg p-2.5 text-gray-900 outline-none focus:border-accent font-semibold">
                     <option value="" disabled>Select Category...</option>
                     {categories.map(c => <option key={c._id} value={c.name}>{c.name}</option>)}
                   </select>
                 </div>
-                <div><label className="block text-sm text-gray-400 mb-1">Description</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-black outline-none focus:border-accent h-20 placeholder-gray-600" /></div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1">Description</label><textarea value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full bg-gray-50 border border-gray-300 rounded-lg p-2.5 text-gray-900 outline-none focus:border-accent h-20 placeholder-gray-400 font-medium" /></div>
                 
-                <div className="bg-accent p-4 rounded border border-gray-700 mt-6">
-                  <label className="block text-sm font-bold text-dark mb-2 uppercase tracking-wider">Base Size / Standard Recipe</label>
-                  <div className="flex gap-2 mb-1">
-                    <input type="text" placeholder="Size Name (e.g. Regular)" value={formData.baseSize || ''} onChange={e => setFormData({...formData, baseSize: e.target.value})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-black outline-none focus:border-accent" />
-                    <input type="number" step="0.01" placeholder="Selling Price" value={formData.basePrice} onChange={e => setFormData({...formData, basePrice: parseFloat(e.target.value) || 0})} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-black outline-none focus:border-accent" />
+                {/* Base Size & Materials */}
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mt-6 shadow-sm">
+                  <label className="block text-sm font-black text-gray-900 mb-3 uppercase tracking-wider">Base Size / Standard Recipe</label>
+                  <div className="flex gap-2 mb-2">
+                    <input type="text" placeholder="Size Name (e.g. Regular)" value={formData.baseSize || ''} onChange={e => setFormData({...formData, baseSize: e.target.value})} className="w-1/2 bg-white border border-gray-300 rounded-lg p-2.5 text-gray-900 outline-none focus:border-accent font-bold" />
+                    <div className="w-1/2 relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold">₱</span>
+                      <input type="number" step="0.01" placeholder="Selling Price" value={formData.basePrice} onChange={e => setFormData({...formData, basePrice: parseFloat(e.target.value) || 0})} className="w-full bg-white border border-gray-300 rounded-lg p-2.5 pl-8 text-gray-900 outline-none focus:border-accent font-bold" />
+                    </div>
                   </div>
+                  
                   {(() => {
                     const baseCost = calcRecipeCost(formData.baseRecipe);
                     const basePriceVal = parseFloat(formData.basePrice) || 0;
@@ -2586,35 +2740,35 @@ const submitPhysicalCounts = async () => {
                     const baseMargin = basePriceVal > 0 ? (((basePriceVal - baseCost) / basePriceVal) * 100).toFixed(1) : '0.0';
                     return baseCost > 0 ? (
                       <div className="flex justify-between text-[10px] px-1 mb-3">
-                        <span className={parseFloat(baseMargin) >= 30 ? "text-green-400 font-bold" : "text-yellow-500 font-bold"}>Margin: {baseMargin}%</span>
-                        <button type="button" onClick={() => setFormData({...formData, basePrice: parseFloat(suggestedBasePrice)})} className="text-gray-400 hover:text-accent transition">Set 30% Margin (P{suggestedBasePrice})</button>
+                        <span className={parseFloat(baseMargin) >= 30 ? "text-green-600 font-black" : "text-yellow-600 font-black"}>Margin: {baseMargin}%</span>
+                        <button type="button" onClick={() => setFormData({...formData, basePrice: parseFloat(suggestedBasePrice)})} className="text-gray-500 hover:text-accent font-bold transition">Set 30% Margin (₱{suggestedBasePrice})</button>
                       </div>
                     ) : <div className="mb-3"></div>;
                   })()}
                   
-                  <div className="bg-black/30 p-3 rounded mb-2">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-xs text-gray-300 font-bold">Base Materials (BOM)</span>
-                      <span className="text-xs text-black font-bold">Cost: P{calcRecipeCost(formData.baseRecipe).toFixed(2)}</span>
+                  <div className="bg-white p-3 rounded-lg border border-gray-200">
+                    <div className="flex justify-between items-center mb-3">
+                      <span className="text-xs text-gray-600 font-black uppercase tracking-wider">Base Materials</span>
+                      <span className="text-xs text-gray-900 font-black">Cost: ₱{calcRecipeCost(formData.baseRecipe).toFixed(2)}</span>
                     </div>
                     {(formData.baseRecipe || []).map((mat, i) => (
                       <div key={i} className="flex items-center gap-2 mb-2 text-sm">
-                        <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
-                        <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, null)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-black" />
-                        <span className="text-dark w-8">{mat.unit}</span>
-                        <button type="button" onClick={() => removeMaterial(i, null)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
+                        <span className="flex-1 text-gray-700 font-semibold truncate">{mat.name}</span>
+                        <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, null)} className="w-16 bg-gray-50 border border-gray-300 rounded p-1.5 text-center text-gray-900 font-bold" />
+                        <span className="text-gray-500 w-8 text-xs font-bold">{mat.unit}</span>
+                        <button type="button" onClick={() => removeMaterial(i, null)} className="text-red-400 hover:text-red-600 ml-2"><X size={16} /></button>
                       </div>
                     ))}
-                    <div className="mt-3">
-                      <div className="text-[10px] text-gray-400 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
-                      <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                    <div className="mt-4 pt-3 border-t border-gray-100">
+                      <div className="text-[10px] text-accent uppercase font-black mb-2 tracking-widest flex items-center gap-1"><Plus size={12}/> Tap to Add Material</div>
+                      <div className="max-h-32 overflow-y-auto bg-gray-50 border border-gray-200 rounded-lg scrollbar-thin scrollbar-thumb-gray-300 p-1">
                         {inventory.length === 0 ? (
-                          <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
+                          <p className="p-2 text-xs text-gray-500 italic font-medium">No inventory available.</p>
                         ) : (
                           inventory.map(inv => (
-                            <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, null)} className="w-full text-left px-2 py-1.5 text-xs text-black hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
-                              <span className="truncate pr-2">+ {inv.itemName}</span>
-                              <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
+                            <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, null)} className="w-full text-left px-3 py-2 text-xs text-gray-700 font-bold hover:bg-gray-200 transition rounded flex justify-between items-center">
+                              <span className="truncate pr-2">{inv.itemName}</span>
+                              <span className="text-gray-400 shrink-0 font-mono">₱{inv.unitCost.toFixed(2)}/{inv.unit}</span>
                             </button>
                           ))
                         )}
@@ -2623,71 +2777,90 @@ const submitPhysicalCounts = async () => {
                   </div>
                 </div>
 
-                <div className="border-t border-gray-800 pt-4 mt-2">
+                {/* Extra Sizes */}
+                <div className="border-t border-gray-200 pt-5 mt-4">
                   <div className="flex justify-between items-center mb-4">
-                    <label className="text-sm font-bold text-white uppercase tracking-wider">Extra Sizes (Small, Large)</label>
-                    <button type="button" onClick={addSize} className="text-xs bg-dark px-3 py-1.5 rounded font-bold text-accent border border-accent hover:bg-accent hover:text-dark transition">+ Add Size</button>
+                    <label className="text-sm font-black text-gray-900 uppercase tracking-wider">Extra Sizes (Small, Large)</label>
+                    <button type="button" onClick={addSize} className="text-xs bg-gray-100 px-3 py-1.5 rounded-full font-bold text-gray-700 border border-gray-300 hover:bg-gray-200 transition flex items-center gap-1"><Plus size={14}/> Add Size</button>
                   </div>
+                  
                   {(formData.sizes || []).map((size, idx) => (
-                    <div key={idx} className="bg-accent p-4 rounded border border-gray-700 mb-4">
-                      <div className="flex gap-2 mb-1">
-                        <input type="text" placeholder="Size Name" value={size.name} onChange={e => updateSize(idx, 'name', e.target.value)} className="w-1/2 bg-dark border border-gray-600 rounded p-2 text-sm text-black" required />
-                        <input type="number" step="0.01" placeholder="Selling Price" value={size.price} onChange={e => updateSize(idx, 'price', e.target.value)} className="w-1/3 bg-dark border border-gray-600 rounded p-2 text-sm text-black" required />
-                        <button type="button" onClick={() => removeSize(idx)} className="text-white hover:text-red-400 font-bold ml-auto px-2">✕</button>
+                    <div key={idx} className="bg-gray-50 p-4 rounded-xl border border-gray-200 mb-4 shadow-sm">
+                      <div className="flex gap-2 mb-2">
+                        <input type="text" placeholder="Size Name" value={size.name} onChange={e => updateSize(idx, 'name', e.target.value)} className="w-1/2 bg-white border border-gray-300 rounded-lg p-2 text-sm text-gray-900 font-bold" required />
+                        <input type="number" step="0.01" placeholder="Price" value={size.price} onChange={e => updateSize(idx, 'price', e.target.value)} className="w-1/3 bg-white border border-gray-300 rounded-lg p-2 text-sm text-gray-900 font-bold" required />
+                        <button type="button" onClick={() => removeSize(idx)} className="text-gray-400 hover:text-red-500 font-bold ml-auto px-2"><X size={20} /></button>
                       </div>
-                      {(() => {
-                        const sizeCost = calcRecipeCost(size.recipe);
-                        const sizePriceVal = parseFloat(size.price) || 0;
-                        const suggestedSizePrice = sizeCost > 0 ? (sizeCost / 0.7).toFixed(2) : '0.00';
-                        const sizeMargin = sizePriceVal > 0 ? (((sizePriceVal - sizeCost) / sizePriceVal) * 100).toFixed(1) : '0.0';
-                        return sizeCost > 0 ? (
-                          <div className="flex justify-between text-[10px] px-1 mb-3">
-                            <span className={parseFloat(sizeMargin) >= 30 ? "text-green-400 font-bold" : "text-yellow-500 font-bold"}>Margin: {sizeMargin}%</span>
-                            <button type="button" onClick={() => updateSize(idx, 'price', parseFloat(suggestedSizePrice))} className="text-gray-400 hover:text-accent transition">Set 30% Margin (P{suggestedSizePrice})</button>
-                          </div>
-                        ) : <div className="mb-3"></div>;
-                      })()}
-                      <div className="bg-black/30 p-3 rounded">
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-xs text-gray-300 font-bold">{size.name || 'New Size'} Materials</span>
-                          <span className="text-xs text-black font-bold">Cost: P{calcRecipeCost(size.recipe).toFixed(2)}</span>
+                      
+                      <div className="bg-white p-3 rounded-lg border border-gray-200 mt-3">
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-xs text-gray-600 font-black uppercase tracking-wider">{size.name || 'New Size'} Materials</span>
+                          <span className="text-xs text-gray-900 font-black">Cost: ₱{calcRecipeCost(size.recipe).toFixed(2)}</span>
                         </div>
                         {(size.recipe || []).map((mat, i) => (
                           <div key={i} className="flex items-center gap-2 mb-2 text-sm">
-                            <span className="flex-1 text-gray-300 truncate">{mat.name}</span>
-                            <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, idx)} className="w-16 bg-dark border border-gray-600 rounded p-1 text-center text-black" />
-                            <span className="text-dark w-8">{mat.unit}</span>
-                            <button type="button" onClick={() => removeMaterial(i, idx)} className="text-red-500 hover:text-red-400 font-bold ml-2">✕</button>
+                            <span className="flex-1 text-gray-700 font-semibold truncate">{mat.name}</span>
+                            <input type="number" value={mat.qty} onChange={e => updateMaterialQty(e.target.value, i, idx)} className="w-16 bg-gray-50 border border-gray-300 rounded p-1.5 text-center text-gray-900 font-bold" />
+                            <span className="text-gray-500 w-8 text-xs font-bold">{mat.unit}</span>
+                            <button type="button" onClick={() => removeMaterial(i, idx)} className="text-red-400 hover:text-red-600 ml-2"><X size={16} /></button>
                           </div>
                         ))}
-                        <div className="mt-3">
-                          <div className="text-[10px] text-gray-400 uppercase font-bold mb-1 px-1 tracking-wider">Tap to Add Material</div>
-                          <div className="max-h-28 overflow-y-auto bg-dark border border-gray-600 rounded scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-                            {inventory.length === 0 ? (
-                              <p className="p-2 text-xs text-gray-500 italic">No inventory available.</p>
-                            ) : (
-                              inventory.map(inv => (
-                                <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, idx)} className="w-full text-left px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition border-b border-gray-700/50 last:border-0 flex justify-between items-center">
-                                  <span className="truncate pr-2 text-black">+ {inv.itemName}</span>
-                                  <span className="text-gray-500 shrink-0">P{inv.unitCost.toFixed(4)}/{inv.unit}</span>
-                                </button>
-                              ))
-                            )}
+                        <div className="mt-4 pt-3 border-t border-gray-100">
+                          <div className="text-[10px] text-accent uppercase font-black mb-2 tracking-widest flex items-center gap-1"><Plus size={12}/> Tap to Add Material</div>
+                          <div className="max-h-28 overflow-y-auto bg-gray-50 border border-gray-200 rounded-lg scrollbar-thin scrollbar-thumb-gray-300 p-1">
+                            {inventory.map(inv => (
+                              <button type="button" key={inv._id} onClick={() => addMaterialToRecipe(inv._id, idx)} className="w-full text-left px-3 py-2 text-xs text-gray-700 font-bold hover:bg-gray-200 transition rounded flex justify-between items-center">
+                                <span className="truncate pr-2">{inv.itemName}</span>
+                                <span className="text-gray-400 shrink-0 font-mono">₱{inv.unitCost.toFixed(2)}/{inv.unit}</span>
+                              </button>
+                            ))}
                           </div>
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="flex gap-2 mt-6">
-                  <button type="submit" className="flex-1 bg-accent text-dark font-black py-4 rounded-lg hover:bg-dark hover:text-accent shadow-lg shadow-accent/20 transition uppercase tracking-wider">
-                    {editingProduct ? 'Update Product' : 'Save Product'}
-                  </button>
+
+                {/* --- OPTIONAL ADD-ONS CHECKBOXES --- */}
+                <div className="border-t border-gray-200 pt-5 mt-4 mb-4">
+                  <label className="text-sm font-black text-gray-900 uppercase tracking-wider mb-3 block">Attach Add-Ons</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {globalAddOns.map(addon => {
+                      const isAttached = (formData.addOns || []).some(a => a.name === addon.name);
+                      return (
+                        <label key={addon._id} className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer border-2 transition ${isAttached ? 'border-accent bg-accent/10 shadow-sm' : 'border-gray-200 bg-gray-50 hover:bg-gray-100 hover:border-gray-300'}`}>
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 accent-accent cursor-pointer"
+                            checked={isAttached}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setFormData({ ...formData, addOns: [...(formData.addOns || []), { name: addon.name, price: addon.price, recipe: [] }] });
+                              } else {
+                                setFormData({ ...formData, addOns: (formData.addOns || []).filter(a => a.name !== addon.name) });
+                              }
+                            }}
+                          />
+                          <div className="flex flex-col">
+                             <span className="text-sm font-bold text-gray-900 leading-tight">{addon.name}</span>
+                             <span className="text-[10px] text-accent font-black uppercase tracking-widest">+₱{addon.price}</span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Save Buttons */}
+                <div className="flex gap-3 mt-6 pt-4 border-t border-gray-200">
                   {editingProduct && (
-                    <button type="button" onClick={() => deleteProduct(editingProduct._id)} className="bg-red-900/20 border border-red-900 text-red-500 font-black py-4 px-6 rounded-lg hover:bg-red-900 hover:text-white transition uppercase tracking-wider">
-                      Delete
+                    <button type="button" onClick={() => deleteProduct(editingProduct._id)} className="bg-red-50 text-red-600 font-bold py-3 px-4 rounded-xl hover:bg-red-100 transition flex items-center justify-center border border-red-200">
+                      <Trash2 size={20} />
                     </button>
                   )}
+                  <button type="submit" className="flex-1 bg-accent text-white font-black py-4 rounded-xl hover:bg-opacity-90 shadow-lg shadow-accent/20 transition uppercase tracking-wider text-sm">
+                    {editingProduct ? 'Update Product' : 'Save Product'}
+                  </button>
                 </div>
               </form>
             </div>

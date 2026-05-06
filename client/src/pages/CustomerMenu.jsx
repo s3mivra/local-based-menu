@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { Coffee, ShoppingCart, Plus, Minus, X, Clock, CheckCircle, Package, AlertCircle, Users, Lock, RefreshCw } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5002';
 const socket = io(API_URL, { transports: ['websocket'], upgrade: false });
@@ -25,7 +26,8 @@ const playCustomerDing = () => {
 export default function CustomerMenu() {
   // --- UI FLOW STATE MACHINE ---
   const [flowState, setFlowState] = useState('landing'); // 'landing' -> 'name_input' -> 'menu' -> 'status'
-  
+  const [selectedAddOns, setSelectedAddOns] = useState([]);
+
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]); // <-- THE FIX: Add this state
   const [cart, setCart] = useState([]);
@@ -269,39 +271,66 @@ export default function CustomerMenu() {
   };
 
   const handleProductClick = (product) => {
-    if (product.sizes && product.sizes.length > 0) {
+    setSelectedAddOns([]); // Reset add-ons on new product click
+    if ((product.sizes && product.sizes.length > 0) || (product.addOns && product.addOns.length > 0)) {
       setSelectedProduct(product);
       setSelectedSize({ name: product.baseSize || 'Regular', price: Number(product.basePrice || 0) });
     } else {
-      addToCart(product, null);
+      addToCart(product, null, []);
     }
   };
 
-  const addToCart = (product, size) => {
+  const toggleAddOn = (addOn) => {
+    setSelectedAddOns(prev => 
+      prev.some(a => a.name === addOn.name) ? prev.filter(a => a.name !== addOn.name) : [...prev, addOn]
+    );
+  };
+
+  const addToCart = (product, size, addOns) => {
     const price = size ? size.price : (product.basePrice || 0);
     const sizeName = size ? size.name : 'Regular';
-    const cartItemId = `${product._id}-${sizeName}`;
+    // Create a unique ID so items with different add-ons don't stack into the same cart row
+    const addOnNames = addOns.map(a => a.name).sort().join(',');
+    const cartItemId = `${product._id}-${sizeName}-${addOnNames}`;
     
-    // --- SMART ROUTING ---
-    // Look up the category and assign the department. Default to Kitchen if missing.
     const categoryObject = categories.find(c => c.name === product.category);
     const dept = categoryObject ? (categoryObject.department || 'Kitchen') : 'Kitchen'; 
 
     setCart(prev => {
       const existing = prev.find(item => item.cartItemId === cartItemId);
       if (existing) return prev.map(item => item.cartItemId === cartItemId ? { ...item, quantity: item.quantity + 1 } : item);
-      
-      // Inject department and itemStatus into the cart payload
-      return [...prev, { cartItemId, productId: product._id, name: size ? `${product.name} (${sizeName})` : product.name, price, quantity: 1, department: dept, itemStatus: 'Received' }];
+      return [...prev, { cartItemId, productId: product._id, name: size ? `${product.name} (${sizeName})` : product.name, price, quantity: 1, department: dept, itemStatus: 'Received', selectedAddOns: addOns }];
     });
-    setSelectedProduct(null); setSelectedSize(null);
+    setSelectedProduct(null); setSelectedSize(null); setSelectedAddOns([]);
   };
 
-  const updateQuantity = (cartItemId, delta) => {
-    setCart(prev => prev.map(item => item.cartItemId === cartItemId ? { ...item, quantity: Math.max(0, item.quantity + delta) } : item).filter(item => item.quantity > 0));
+  // --- MISSING CART FUNCTIONS ---
+  // --- CART MATH & LOGIC ---
+  const updateQuantity = (cartItemId, change) => {
+    setCart(prev => {
+      // First, update the math
+      const updatedCart = prev.map(item => {
+        if (item.cartItemId === cartItemId) {
+          return { ...item, quantity: item.quantity + change };
+        }
+        return item;
+      });
+      
+      // Then, filter out any items that dropped to 0 (This makes the Minus button remove the item)
+      return updatedCart.filter(item => item.quantity > 0);
+    });
   };
 
-  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const removeFromCart = (cartItemId) => {
+    if (window.confirm("Remove this item from your cart?")) {
+      setCart(prev => prev.filter(item => item.cartItemId !== cartItemId));
+    }
+  };
+  // UPDATE TOTAL CALCULATION
+  const total = cart.reduce((sum, item) => {
+    const addOnTotal = (item.selectedAddOns || []).reduce((s, a) => s + a.price, 0);
+    return sum + ((item.price + addOnTotal) * item.quantity);
+  }, 0);
 
   const requestNotificationPermission = async () => {
     if (!('Notification' in window)) return;
@@ -447,7 +476,7 @@ export default function CustomerMenu() {
                 <p className="text-green-100 font-bold mb-8">Please proceed to the counter to collect your items.</p>
                 <button 
                   onClick={handleReceived} 
-                  className="w-full bg-dark text-white font-black py-4 rounded-xl hover:bg-black transition shadow-xl active:scale-95 uppercase tracking-widest"
+                  className="w-full bg-dark text-black font-black py-4 rounded-xl hover:bg-black transition shadow-xl active:scale-95 uppercase tracking-widest"
                 >
                   I Got My Order
                 </button>
@@ -472,7 +501,7 @@ export default function CustomerMenu() {
           <div className="w-24 h-24 bg-accent rounded-full mx-auto mb-6 shadow-[0_0_30px_rgba(255,193,7,0.3)] flex items-center justify-center">
              <span className="text-4xl">☕</span>
           </div>
-          <h1 className="text-4xl font-black text-white tracking-tight mb-2">INFU COFFEE</h1>
+          <h1 className="text-4xl font-black text-black tracking-tight mb-2">KASA LOKAL</h1>
           <p className="text-gray-400 font-bold uppercase tracking-widest text-sm mb-12">Table {tableNum}</p>
           
           <button 
@@ -498,7 +527,7 @@ export default function CustomerMenu() {
             placeholder="Enter your nickname"
             value={customerName}
             onChange={(e) => setCustomerName(e.target.value)}
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-4 rounded-xl outline-none mb-6 font-bold text-lg transition"
+            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-black py-4 rounded-xl outline-none mb-6 font-bold text-lg transition"
             autoFocus
             onKeyDown={(e) => {
               if (e.key === 'Enter' && customerName.trim().length > 0) setFlowState('menu');
@@ -517,9 +546,9 @@ export default function CustomerMenu() {
     );
   }
 
-  // --- 7. ORIGINAL MENU DESIGN RESTORED ---
+ // --- 7. ORIGINAL MENU DESIGN RESTORED ---
   return (
-    <div className="min-h-screen bg-dark text-white pb-48 animate-fade-in">
+    <div className="min-h-screen bg-accent text-white pb-[350px] animate-fade-in">
       
       {successMessage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
@@ -532,10 +561,10 @@ export default function CustomerMenu() {
 
       {/* ORIGINAL HEADER PRESERVED */}
       <header className="bg-surface pt-6 px-4 pb-4 sticky top-0 z-30 border-b border-gray-800 text-center shadow-lg">
-        <h1 className="text-2xl font-black tracking-widest text-accent uppercase mb-4">Digital Menu</h1>
+        <h1 className="text-2xl font-black tracking-widest text-accent uppercase mb-4">KASA LOKAL Menu</h1>
         <div className="flex gap-3 overflow-x-auto scrollbar-none pb-2 max-w-5xl mx-auto">
           {allCategories.map(cat => (
-            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-full whitespace-nowrap text-sm font-bold transition ${activeCategory === cat ? 'bg-accent text-dark shadow-md shadow-accent/20' : 'bg-dark border border-gray-700 text-gray-400 hover:text-white'}`}>{cat}</button>
+            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-full whitespace-nowrap text-sm font-bold transition ${activeCategory === cat ? 'bg-accent text-dark shadow-md shadow-accent/20' : 'bg-dark border border-gray-700 text-gray-400 hover:text-accent'}`}>{cat}</button>
           ))}
         </div>
       </header>
@@ -567,7 +596,7 @@ export default function CustomerMenu() {
                         {p.description && <p className="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-3">{p.description}</p>}
                         <div className="flex justify-between items-center mt-auto pt-4 border-t border-gray-800/50">
                           <p className="text-accent font-bold text-xl">P{(p.basePrice || 0).toFixed(2)}{p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}</p>
-                          <span className="bg-dark text-white px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">{p.sizes?.length > 0 ? 'Select' : 'Add'}</span>
+                          <span className="bg-dark text-accent px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">{p.sizes?.length > 0 ? 'Select' : 'Add'}</span>
                         </div>
                       </div>
                     </div>
@@ -592,7 +621,7 @@ export default function CustomerMenu() {
                   <h4 className="text-red-400 font-bold text-sm uppercase tracking-wider mb-2 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400"></span> Hot Options</h4>
                   <div className="space-y-2">
                     {groupedSizes.Hot.map((size, idx) => (
-                      <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                      <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-gray-700'}`}>
                         <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
                         <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
                       </label>
@@ -605,7 +634,7 @@ export default function CustomerMenu() {
                   <h4 className="text-blue-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Iced Options</h4>
                   <div className="space-y-2">
                     {groupedSizes.Iced.map((size, idx) => (
-                      <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
+                      <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-gray-700'}`}>
                         <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
                         <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
                       </label>
@@ -626,10 +655,27 @@ export default function CustomerMenu() {
                   </div>
                 </div>
               )}
+              
+            {selectedProduct.addOns && selectedProduct.addOns.length > 0 && (
+                <div className="border-t border-gray-200 pt-4 mt-4">
+                  <h4 className="text-gray-300 font-bold text-sm uppercase tracking-wider mb-3">Optional Add-Ons</h4>
+                  <div className="space-y-2">
+                    {selectedProduct.addOns.map((addOn, idx) => (
+                      <label key={`addon-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedAddOns.some(a => a.name === addOn.name) ? 'border-accent bg-accent/10' : 'border-gray-300 hover:border-gray-400 bg-gray-50'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="checkbox" className="accent-accent w-4 h-4 rounded" checked={selectedAddOns.some(a => a.name === addOn.name)} onChange={() => toggleAddOn(addOn)} />
+                          <span className="font-bold text-accent">{addOn.name}</span>
+                        </div>
+                        <span className="text-accent font-bold">+P{addOn.price.toFixed(2)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-dark text-white border border-gray-700 py-3 rounded-md font-semibold hover:bg-gray-800 transition">Cancel</button>
-              <button onClick={() => addToCart(selectedProduct, selectedSize)} className="flex-1 bg-accent text-dark py-3 rounded-md font-bold hover:bg-yellow-500 transition shadow-lg shadow-accent/20">Add to Cart</button>
+              <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-gray-100 text-gray-900 border border-gray-300 py-3 rounded-md font-semibold hover:bg-gray-200 transition">Cancel</button>
+              <button onClick={() => addToCart(selectedProduct, selectedSize, selectedAddOns)} className="flex-1 bg-accent text-white py-3 rounded-md font-bold hover:bg-opacity-90 transition shadow-lg shadow-accent/20">Add to Cart</button>
             </div>
           </div>
         </div>
@@ -640,16 +686,53 @@ export default function CustomerMenu() {
         <div className="fixed bottom-0 left-0 right-0 bg-surface border-t border-gray-800 p-4 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] z-40">
           <div className="max-w-4xl mx-auto">
             <div className="mb-4 max-h-40 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-              {cart.map(item => (
-                <div key={item.cartItemId} className="flex justify-between items-center py-3 border-b border-gray-800/50">
-                  <div className="flex-1"><span className="text-sm font-bold text-white block">{item.name}</span><span className="text-xs text-accent font-semibold">P{item.price.toFixed(2)}</span></div>
-                  <div className="flex items-center gap-3">
-                    <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">-</button>
-                    <span className="text-sm w-4 text-center font-bold">{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-8 h-8 rounded bg-dark border border-gray-700 text-white font-bold hover:bg-gray-800 flex items-center justify-center">+</button>
+              {/* --- CART ITEMS LIST --- */}
+              {cart.map((item) => {
+                // Calculate total for this specific item row (Base Price + AddOns) * Qty
+                const itemAddOnTotal = (item.selectedAddOns || []).reduce((s, a) => s + (Number(a.price) || 0), 0);
+                const rowTotal = ((item.price || 0) + itemAddOnTotal) * item.quantity;
+
+                return (
+                  <div key={item.cartItemId} className="flex justify-between items-start border-b border-gray-200 py-4 last:border-0">
+                    <div className="flex-1">
+                      
+                      {/* Name and Remove (X) Button */}
+                      <div className="flex justify-between mb-1">
+                        <h4 className="font-bold text-white text-sm leading-tight pr-4">{item.name}</h4>
+                        <button onClick={() => removeFromCart(item.cartItemId)} className="text-gray-400 hover:text-white transition p-1 shrink-0">
+                          <X size={18} />
+                        </button>
+                      </div>
+                      
+                      {/* Show Add-Ons List if they exist */}
+                      {item.selectedAddOns && item.selectedAddOns.length > 0 && (
+                        <div className="text-xs text-accent mb-3 space-y-0.5">
+                          {item.selectedAddOns.map((addon, idx) => (
+                            <div key={idx} className="flex items-center gap-1.5">
+                              <span className="text-accent text-[8px]">▶</span> {addon.name} <span className="font-mono text-[10px] tracking-wider text-white">(+₱{Number(addon.price).toFixed(2)})</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* Plus/Minus Controls & Total Price */}
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="flex items-center gap-3 bg-gray-100 rounded-lg p-1 border border-gray-200">
+                          <button onClick={() => updateQuantity(item.cartItemId, -1)} className="p-1.5 text-gray-600 hover:text-red-500 bg-white rounded shadow-sm transition">
+                            <Minus size={14} />
+                          </button>
+                          <span className="font-bold text-gray-900 w-4 text-center text-sm">{item.quantity}</span>
+                          <button onClick={() => updateQuantity(item.cartItemId, 1)} className="p-1.5 text-gray-600 hover:text-accent bg-white rounded shadow-sm transition">
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                        <span className="font-black text-accent text-base">₱{rowTotal.toFixed(2)}</span>
+                      </div>
+                      
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">

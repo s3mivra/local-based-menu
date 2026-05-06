@@ -112,7 +112,31 @@ const CategorySchema = new mongoose.Schema({
   department: { type: String, enum: ['Kitchen', 'Bar'], default: 'Kitchen' }
 });
 const Category = mongoose.model('Category', CategorySchema);
+// --- ADD-ONS SCHEMA & ROUTES ---
+const AddOnSchema = new mongoose.Schema({
+  name: String,
+  price: Number,
+  category: { type: String, default: 'Extras' }, // e.g., 'Sinkers', 'Extras', 'Milks'
+  recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }]
+});
+const AddOn = mongoose.model('AddOn', AddOnSchema);
 
+app.get('/api/addons', async (req, res) => {
+  const addons = await AddOn.find();
+  res.json({ success: true, addons });
+});
+
+app.post('/api/addons', verifyToken, async (req, res) => {
+  const newAddOn = await AddOn.create(req.body);
+  io.emit('menuUpdated');
+  res.json({ success: true, addon: newAddOn });
+});
+
+app.delete('/api/addons/:id', verifyToken, async (req, res) => {
+  await AddOn.findByIdAndDelete(req.params.id);
+  io.emit('menuUpdated');
+  res.json({ success: true });
+});
 // 1. UPDATE THE PRODUCT SCHEMA (Add Recipes)
 const ProductSchema = new mongoose.Schema({
   productCode: String,
@@ -128,6 +152,7 @@ const ProductSchema = new mongoose.Schema({
     price: Number, 
     recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }] 
   }],
+  addOns: [{ name: String, price: Number, recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }] }],
   image: String
 });
 const Product = mongoose.model('Product', ProductSchema);
@@ -145,6 +170,7 @@ items: [{
     name: String, 
     price: Number, 
     quantity: Number,
+    selectedAddOns: [{ name: String, price: Number }],
     hasDiscount: { type: Boolean, default: true },
     department: { type: String, default: 'Kitchen' }, // <-- NEW: Routes to Kitchen or Bar
     itemStatus: { type: String, default: 'Received' } // <-- NEW: Item-level progress
@@ -684,7 +710,9 @@ app.post('/api/orders', async (req, res) => {
 
     const validatedItems = items.map(item => {
       item.hasDiscount = true; 
-      const itemBase = item.price * item.quantity;
+      // Calculate Add-Ons Total
+      const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
+      const itemBase = ((item.price || 0) + addOnTotal) * (item.quantity || 1);
       totalGross += itemBase;
       
       if (isComplimentary) {
@@ -756,7 +784,8 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     if (items) {
       items.forEach((incomingItem, index) => {
         if (order.items[index]) {
-          order.items[index].itemStatus = incomingItem.itemStatus;
+          if (incomingItem.itemStatus !== undefined) order.items[index].itemStatus = incomingItem.itemStatus;
+          if (incomingItem.selectedAddOns !== undefined) order.items[index].selectedAddOns = incomingItem.selectedAddOns; // <-- ALLOW REMOVING ADDONS
         }
       });
       order.markModified('items');
@@ -783,12 +812,13 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     let totalGross = 0;
     let totalDiscount = 0;
     let totalVat = 0;
-
     order.items.forEach(item => {
       const price = item.price || 0; 
       const qty = item.quantity || 1;
       
-      const itemBase = price * qty;
+      const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
+      const itemBase = (price + addOnTotal) * qty;
+      
       totalGross += itemBase;
       
       const getsDiscount = item.hasDiscount !== false;
@@ -888,6 +918,33 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
             }], { session });
 
             totalCogs += (invItem.unitCost * deductQty); 
+          }
+        }
+        // 👇 PASTE THIS RIGHT BELOW THE RECIPE LOOP
+        // DEDUCT ADD-ONS INVENTORY
+        for (const selectedAddOn of (item.selectedAddOns || [])) {
+          const productAddOn = product.addOns?.find(a => a.name === selectedAddOn.name);
+          if (productAddOn && productAddOn.recipe) {
+            for (const ing of productAddOn.recipe) {
+              if (!ing.invId) continue;
+              const invItem = await Inventory.findById(ing.invId).session(session);
+              if (invItem) {
+                const deductQty = (ing.qty * item.quantity);
+                if (invItem.stockQty - deductQty < 0) {
+                  await session.abortTransaction();
+                  session.endSession();
+                  return res.status(400).json({ success: false, error: `INSUFFICIENT STOCK: Add-on [${invItem.itemName}] drops below zero.` });
+                }
+                invItem.stockQty -= deductQty;
+                await invItem.save({ session });
+                await StockCard.create([{
+                  inventoryId: invItem._id, itemName: invItem.itemName, type: 'Sale', 
+                  reference: order.orderNumber, qtyChange: -deductQty, balanceAfter: invItem.stockQty, 
+                  remarks: `Sold via Add-on (${selectedAddOn.name})`
+                }], { session });
+                totalCogs += (invItem.unitCost * deductQty);
+              }
+            }
           }
         }
       }
@@ -1354,7 +1411,7 @@ function scheduleMidnightArchive() {
 // --- 🛡️ STRICT ORDER VALIDATION ENGINE (VAT-INCLUSIVE) 🛡️ ---
 // ---   STRICT ORDER VALIDATION ENGINE (VAT-EXCLUSIVE)   ---
 const validateOrderMath = (order) => {
-  const TOLERANCE = 0.05; 
+  const TOLERANCE = 0.05;
 
   if (order.subtotal === undefined || order.total === undefined || order.vatAmount === undefined) {
     return { valid: false, error: "Missing critical financial fields (Subtotal, Total, or VAT)." };
@@ -1367,10 +1424,13 @@ const validateOrderMath = (order) => {
   for (const item of order.items) {
     if (item.price === undefined || item.quantity === undefined) return { valid: false, error: "Line item missing price or quantity." };
     
-    const itemBase = item.price * item.quantity;
+    // --- THIS IS THE FIX: Include Add-On Prices in the Security Audit ---
+    const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
+    const itemBase = (item.price + addOnTotal) * item.quantity;
+    
     expectedGross += itemBase;
-    const getsDiscount = item.hasDiscount !== false;
 
+    const getsDiscount = item.hasDiscount !== false;
     if (order.isComplimentary) {
       expectedDiscount += itemBase; 
     } else if (getsDiscount && order.discountPercent > 0) {
@@ -1388,10 +1448,9 @@ const validateOrderMath = (order) => {
 
   if (Math.abs(expectedGross - order.subtotal) > TOLERANCE) return { valid: false, error: `Gross mismatch. Expected P${expectedGross.toFixed(2)}, got P${order.subtotal}` };
   if (Math.abs(expectedVat - order.vatAmount) > TOLERANCE) return { valid: false, error: `VAT invalid. Expected P${expectedVat.toFixed(2)}, got P${order.vatAmount}` };
-  
   const expectedTotal = expectedGross - expectedDiscount + expectedVat;
   if (Math.abs(expectedTotal - order.total) > TOLERANCE) return { valid: false, error: `Total invalid. Expected P${expectedTotal.toFixed(2)}, got P${order.total}` };
-
+  
   return { valid: true };
 };
 // Start the timer when the server boots up
