@@ -133,7 +133,7 @@ export default function SuperAdminPanel() {
           <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Config</h2>
           <p className="text-gray-400 text-sm mb-6">Enter master credentials.</p>
           <input type="text" placeholder="Admin Name" value={loginForm.name} onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" required autoFocus />
-          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
+          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-surface  border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
           <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest mb-4">AUTHENTICATE</button>
           <button type="button" onClick={() => navigate('/admin')} className="text-gray-500 text-xs hover:text-white uppercase tracking-widest transition font-bold">Return to POS</button>
         </form>
