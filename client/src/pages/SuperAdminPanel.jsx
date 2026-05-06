@@ -165,15 +165,15 @@ export default function SuperAdminPanel() {
              <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Register User</h3>
              <form onSubmit={handleAddUser} className="space-y-4">
                <div>
-                 <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Employee Name</label>
+                 <label className="text-[10px] text-black font-bold uppercase tracking-wider mb-1 block">Employee Name</label>
                  <input type="text" value={newUserForm.name} onChange={e => setNewUserForm({...newUserForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
                </div>
                <div>
-                 <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Account PIN / Password</label>
+                 <label className="text-[10px] text-black font-bold uppercase tracking-wider mb-1 block">Account PIN / Password</label>
                  <input type="password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
                </div>
                <div>
-                 <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Access Level</label>
+                 <label className="text-[10px] text-black font-bold uppercase tracking-wider mb-1 block">Access Level</label>
                  <select value={newUserForm.role} onChange={e => setNewUserForm({...newUserForm, role: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent font-bold">
                    <option value="cashier">Cashier (Standard)</option>
                    <option value="admin">Manager (Admin)</option>
@@ -198,7 +198,7 @@ export default function SuperAdminPanel() {
                           {user.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-bold text-white text-md">{user.name}</p>
+                          <p className="font-bold text-black text-md">{user.name}</p>
                           <div className="flex gap-2 items-center mt-1">
                              <span className="text-[10px] bg-black text-gray-400 px-2 py-0.5 rounded font-mono border border-gray-800">{user.userCode}</span>
                              <span className={`text-[9px] uppercase tracking-widest font-black ${user.role === 'admin' ? 'text-accent' : 'text-gray-500'}`}>{user.role}</span>
