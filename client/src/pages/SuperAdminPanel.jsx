@@ -153,7 +153,7 @@ export default function SuperAdminPanel() {
              <p className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em]">Super Admin Control Panel</p>
            </div>
            <div className="flex gap-4">
-              <button onClick={() => navigate('/admin')} className="border border-gray-700 text-gray-300 px-4 py-2 rounded font-bold hover:bg-gray-800 hover:text-white transition uppercase text-xs tracking-wider">POS Dashboard</button>
+              <button onClick={() => navigate('/admin')} className="border border-gray-700 text-black px-4 py-2 rounded font-bold hover:bg-gray-800 hover:text-white transition uppercase text-xs tracking-wider">POS Dashboard</button>
               <button onClick={handleLogout} className="bg-red-900/30 text-red-500 border border-red-900 px-4 py-2 rounded font-bold hover:bg-red-600 hover:text-white transition uppercase text-xs tracking-wider">Lock Panel</button>
            </div>
         </div>
