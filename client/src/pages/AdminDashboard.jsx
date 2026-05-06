@@ -1937,7 +1937,7 @@ const submitPhysicalCounts = async () => {
                               <span>{expandedOrderLists[date] ? 'Hide Orders' : 'View All Orders'}</span>
                               <span>{expandedOrderLists[date] ? '▲' : '▼'}</span>
                             </button>
-                            <button onClick={() => exportDayToPDF(date, data.orders)} className="text-[10px] bg-dark border border-gray-600 text-gray-300 px-2 py-1 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
+                            <button onClick={() => exportDayToPDF(date, data.orders)} className="text-[10px] bg-dark border border-gray-600 text-black px-2 py-1 rounded hover:bg-gray-800 hover:text-white transition font-bold uppercase tracking-wider">
                               Export Day
                             </button>
                           </div>
