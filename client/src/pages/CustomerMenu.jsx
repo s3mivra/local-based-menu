@@ -118,7 +118,7 @@ export default function CustomerMenu() {
     validateSessionAndCheckMemory();
   }, []);
 
-  // --- 10-MINUTE INACTIVITY TRACKER ---
+// --- DYNAMIC INACTIVITY TRACKER (20 mins / Infinite / 15 mins) ---
   useEffect(() => {
     if (!isAuthorized || !sessionToken) return;
 
@@ -127,22 +127,33 @@ export default function CustomerMenu() {
 
     const resetInactivity = () => {
       clearTimeout(inactivityTimer);
-      // Auto-expire frontend after 10 mins of zero touches
-      inactivityTimer = setTimeout(() => {
+
+      // RULE 1: If there is an active order (Pending, Preparing, Ready), NEVER expire the link.
+      if (lockedOrder && ['Pending', 'Preparing', 'Ready'].includes(lockedOrder.status)) {
+         return; // Skip setting the expiration timer entirely. Let them wait forever.
+      }
+
+      // RULE 2: If they already finished an order, give them 15 mins to order dessert.
+      // RULE 3: If they are just browsing initially, give them 20 mins.
+      const timeoutMinutes = isFinished ? 15 : 20;
+
+      inactivityTimer = setTimeout(async () => {
+        // Time is up! Destroy the link securely in the backend.
+        await fetch(`${API_URL}/api/sessions/${sessionToken}/close`, { method: 'POST' });
         setIsAuthorized(false);
-      }, 10 * 60 * 1000); 
+      }, timeoutMinutes * 60 * 1000);
     };
 
-    // Send a silent heartbeat to the server every 2 minutes while active
+    // Send a silent heartbeat to the server every 2 minutes so the backend knows they are still online
     heartbeatInterval = setInterval(async () => {
       await fetch(`${API_URL}/api/sessions/${sessionToken}/heartbeat`, { method: 'POST' });
     }, 2 * 60 * 1000);
 
-    // Listen to user movements to keep session alive
+    // Listen to user touches/scrolls to reset the timer
     window.addEventListener('touchstart', resetInactivity);
     window.addEventListener('click', resetInactivity);
     window.addEventListener('scroll', resetInactivity);
-    resetInactivity();
+    resetInactivity(); // Start timer immediately
 
     return () => {
       clearTimeout(inactivityTimer);
@@ -151,7 +162,7 @@ export default function CustomerMenu() {
       window.removeEventListener('click', resetInactivity);
       window.removeEventListener('scroll', resetInactivity);
     };
-  }, [isAuthorized, sessionToken]);
+  }, [isAuthorized, sessionToken, lockedOrder, isFinished]);
 
   // --- 2. WEBSOCKET LISTENERS ---
   useEffect(() => {
