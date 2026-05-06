@@ -2423,72 +2423,77 @@ const submitPhysicalCounts = async () => {
 
       {/* --- PRICING & DISCOUNTS TAB --- */}
       {activeTab === 'pricing' && (
-        <div className="flex flex-col xl:flex-row gap-8 h-[calc(100vh-180px)]">
+        <div className="flex flex-col lg:flex-row gap-6 h-auto lg:h-[calc(100vh-180px)]">
           
           {/* LEFT COLUMN: Read-Only Pricing Table */}
-          <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6 overflow-y-auto custom-scrollbar h-full">
+          <div className="flex-1 bg-surface border border-gray-800 rounded-xl p-6 overflow-y-auto custom-scrollbar min-h-[400px] lg:min-h-0 lg:h-full">
             <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Product Pricing Masterlist</h3>
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-dark border-b border-gray-800">
-                  <th className="pb-3">Product Name</th>
-                  <th className="pb-3">Category</th>
-                  <th className="pb-3 text-right">Size / Option</th>
-                  <th className="pb-3 text-right">Selling Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.length === 0 ? (
-                  <tr><td colSpan="4" className="py-4 text-center text-gray-500">No products found.</td></tr>
-                ) : products.flatMap(p => {
-                  // We now track the exact productId and sizeIndex so the backend knows what to update
-                  const rows = [{ id: `${p._id}-base`, productId: p._id, sizeIndex: null, name: p.name, cat: p.category, size: p.baseSize || 'Regular', price: p.basePrice || p.price || 0 }];
-                  if (p.sizes) {
-                    p.sizes.forEach((s, idx) => {
-                      rows.push({ id: `${p._id}-size-${idx}`, productId: p._id, sizeIndex: idx, name: '', cat: '', size: s.name, price: s.price });
-                    });
-                  }
-                  return rows;
-                }).map((row) => (
-                  <tr key={row.id} className={`border-gray-800/50 hover:bg-dark/30 transition ${row.name !== '' ? 'border-t' : ''}`}>
-                    <td className={`py-2 font-bold ${row.name !== '' ? 'text-gray-200 pt-4' : ''}`}>{row.name}</td>
-                    <td className={`py-2 text-xs text-gray-500 ${row.name !== '' ? 'pt-4' : ''}`}>{row.cat}</td>
-                    <td className={`py-2 text-right text-gray-400 ${row.name !== '' ? 'pt-4' : ''}`}>{row.size}</td>
-                    
-                    {/* --- INLINE EDITING UI --- */}
-                    <td className={`py-2 text-right font-mono font-bold text-accent ${row.name !== '' ? 'pt-4' : ''}`}>
-                      {editPriceId === row.id ? (
-                        <div className="flex justify-end items-center gap-2">
-                          <input 
-                            type="number" 
-                            step="0.01" 
-                            className="w-20 bg-dark border border-accent rounded px-2 py-1 text-white outline-none text-right"
-                            value={editPriceVal}
-                            onChange={(e) => setEditPriceVal(e.target.value)}
-                            autoFocus
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleInlinePriceUpdate(row.productId, row.sizeIndex); }}
-                          />
-                          <button onClick={() => handleInlinePriceUpdate(row.productId, row.sizeIndex)} className="text-green-400 hover:text-green-300">✓</button>
-                          <button onClick={() => setEditPriceId(null)} className="text-red-400 hover:text-red-300">✕</button>
-                        </div>
-                      ) : (
-                        <div 
-                          className="cursor-pointer hover:bg-white/10 px-2 py-1 rounded inline-flex items-center gap-2 transition group"
-                          onClick={() => { setEditPriceId(row.id); setEditPriceVal(row.price); }}
-                        >
-                          P{Number(row.price).toFixed(2)}
-                          <span className="text-[10px] text-gray-500 group-hover:text-accent">✎</span>
-                        </div>
-                      )}
-                    </td>
+            
+            {/* Added overflow-x wrapper so it scrolls sideways on small screens instead of breaking the layout */}
+            <div className="overflow-x-auto pr-2">
+              <table className="w-full text-left text-sm min-w-[500px]">
+                <thead>
+                  <tr className="text-gray-400 border-b border-gray-800">
+                    <th className="pb-3 uppercase tracking-wider text-xs">Product Name</th>
+                    <th className="pb-3 uppercase tracking-wider text-xs">Category</th>
+                    <th className="pb-3 text-right uppercase tracking-wider text-xs">Size / Option</th>
+                    <th className="pb-3 text-right uppercase tracking-wider text-xs">Selling Price</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {products.length === 0 ? (
+                    <tr><td colSpan="4" className="py-4 text-center text-gray-500">No products found.</td></tr>
+                  ) : products.flatMap(p => {
+                    // We now track the exact productId and sizeIndex so the backend knows what to update
+                    const rows = [{ id: `${p._id}-base`, productId: p._id, sizeIndex: null, name: p.name, cat: p.category, size: p.baseSize || 'Regular', price: p.basePrice || p.price || 0 }];
+                    if (p.sizes) {
+                      p.sizes.forEach((s, idx) => {
+                        rows.push({ id: `${p._id}-size-${idx}`, productId: p._id, sizeIndex: idx, name: '', cat: '', size: s.name, price: s.price });
+                      });
+                    }
+                    return rows;
+                  }).map((row) => (
+                    <tr key={row.id} className={`border-gray-800/50 hover:bg-dark/30 transition ${row.name !== '' ? 'border-t' : ''}`}>
+                      <td className={`py-2 font-bold ${row.name !== '' ? 'text-gray-200 pt-4' : ''}`}>{row.name}</td>
+                      <td className={`py-2 text-xs text-gray-500 ${row.name !== '' ? 'pt-4' : ''}`}>{row.cat}</td>
+                      <td className={`py-2 text-right text-gray-400 ${row.name !== '' ? 'pt-4' : ''}`}>{row.size}</td>
+                      
+                      {/* --- INLINE EDITING UI --- */}
+                      <td className={`py-2 text-right font-mono font-bold text-accent ${row.name !== '' ? 'pt-4' : ''}`}>
+                        {editPriceId === row.id ? (
+                          <div className="flex justify-end items-center gap-2">
+                            <input 
+                              type="number" 
+                              step="0.01" 
+                              className="w-20 bg-dark border border-accent rounded px-2 py-1 text-white outline-none text-right"
+                              value={editPriceVal}
+                              onChange={(e) => setEditPriceVal(e.target.value)}
+                              autoFocus
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleInlinePriceUpdate(row.productId, row.sizeIndex); }}
+                            />
+                            <button onClick={() => handleInlinePriceUpdate(row.productId, row.sizeIndex)} className="text-green-400 hover:text-green-300">✔</button>
+                            <button onClick={() => setEditPriceId(null)} className="text-red-400 hover:text-red-300">✕</button>
+                          </div>
+                        ) : (
+                          <div 
+                            className="cursor-pointer hover:bg-white/10 px-2 py-1 rounded inline-flex items-center gap-2 transition group"
+                            onClick={() => { setEditPriceId(row.id); setEditPriceVal(row.price); }}
+                          >
+                            ₱{Number(row.price).toFixed(2)}
+                            <span className="text-[10px] text-gray-500 group-hover:text-accent">✎</span>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* RIGHT COLUMN: Discount CRUD */}
-          <div className="w-full xl:w-96 bg-surface border border-gray-800 rounded-xl p-6 h-full overflow-y-auto custom-scrollbar flex flex-col">
+          {/* Changed width breaks to lg:w-80 so it perfectly fits beside the table on tablets */}
+          <div className="w-full lg:w-80 xl:w-96 bg-surface border border-gray-800 rounded-xl p-6 min-h-[400px] lg:min-h-0 lg:h-full overflow-y-auto custom-scrollbar flex flex-col">
             <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Discount Rules</h3>
             
             <div className="flex-1 overflow-y-auto mb-6 pr-2 scrollbar-thin scrollbar-thumb-gray-700">
@@ -2498,8 +2503,9 @@ const submitPhysicalCounts = async () => {
                 ) : discounts.map(d => (
                   <div key={d._id} className="bg-dark p-3 rounded-lg border border-gray-700 flex justify-between items-center">
                     <div>
-                      <p className="font-bold text-black text-sm">{d.name}</p>
-                      <p className="text-xs text-black font-mono">{d.percentage}% OFF</p>
+                      {/* Fixed black text bug here! */}
+                      <p className="font-bold text-white text-sm">{d.name}</p>
+                      <p className="text-xs text-gray-400 font-mono">{d.percentage}% OFF</p>
                     </div>
                     <button 
                       onClick={async () => {
@@ -2508,7 +2514,7 @@ const submitPhysicalCounts = async () => {
                           fetchData(); // Refresh the list
                         }
                       }} 
-                      className="text-red-500 hover:text-red-400 font-bold px-2 py-1 bg-red-900/20 rounded"
+                      className="text-red-500 hover:text-red-400 font-bold px-2 py-1 bg-red-900/20 rounded transition"
                     >
                       Del
                     </button>
@@ -2517,7 +2523,7 @@ const submitPhysicalCounts = async () => {
               </div>
             </div>
 
-            <div className="border-t border-gray-800 pt-4 mt-auto">
+            <div className="border-t border-gray-800 pt-4 mt-auto shrink-0">
               <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-3">Add New Discount</h4>
               <form 
                 onSubmit={async (e) => {
@@ -2534,13 +2540,13 @@ const submitPhysicalCounts = async () => {
               >
                 <div>
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Discount Name</label>
-                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
+                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Percentage (%)</label>
-                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
+                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
                 </div>
-                <button type="submit" className="w-full bg-accent text-dark font-black py-3 rounded hover:bg-dark shadow-lg hover:text-accent shadow-accent/20 transition uppercase tracking-wider text-xs">
+                <button type="submit" className="w-full bg-accent text-dark font-black py-3 rounded hover:bg-white transition shadow-lg shadow-accent/20 uppercase tracking-wider text-xs">
                   Save Rule
                 </button>
               </form>
