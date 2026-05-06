@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Clock, Coffee, Minus } from 'lucide-react';
 import jsPDF from 'jspdf';
+import QRCode from 'react-qr-code';
 import autoTable from 'jspdf-autotable';
 const API_URL = 'https://local-based-menu.onrender.com';
 //const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
@@ -1380,7 +1381,7 @@ const submitPhysicalCounts = async () => {
             
             {/* FIX: Added shrink-0, p-4, and removed overflow-hidden so the QR never gets squished! */}
             <div className="bg-white rounded-xl shadow-inner w-full flex justify-center items-center p-4 shrink-0 min-h-[250px]">
-              <QRCode url={`${FRONTEND_URL}/?session=${qrSessionId}&table=${autoTableId}`} size={200} />
+              <QRCode value={`${FRONTEND_URL}/?session=${qrSessionId}&table=${autoTableId}`} size={200} />
             </div>
             
             <button 
@@ -1619,9 +1620,8 @@ const submitPhysicalCounts = async () => {
                       </span>
                     </div>
                   </div>
-
                   {/* --- NEW: DEPARTMENT ROUTING UI --- */}
-                  <div className="space-y-3 mb-4">
+                  <div className="space-y-3 mb-4 max-h-60 overflow-y-auto custom-scrollbar pr-2">
                     {['Kitchen', 'Bar'].map(dept => {
                       // Filter items for this specific department
                       const deptItems = order.items.map((item, idx) => ({ ...item, originalIdx: idx })).filter(i => (i.department || 'Kitchen') === dept);
