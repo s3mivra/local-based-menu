@@ -5,9 +5,6 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 const API_URL = 'https://local-based-menu.onrender.com';
 //const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
-//const API_URL = 'http://10.201.1.204:5002';
-//const API_URL='http://172.20.10.6:5002';
-//const API_URL='http://192.168.30.131:5002';
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
 const socket = io(API_URL, {
@@ -260,6 +257,20 @@ export default function AdminDashboard() {
     } catch (err) { console.error("Failed to fetch discounts"); }
   };
 
+  const fetchUsers = async () => {
+    try {
+      const res = await apiFetch(`/api/users`);
+      if (res.ok) {
+        const data = await res.json();
+        // THE FIX: Filter out the Super Admin so they don't appear in the dropdown!
+        const employeesOnly = data.users.filter(u => u.name !== 'Super Admin');
+        setUsers(employeesOnly);
+      }
+    } catch (err) { 
+      console.error("Failed to fetch users"); 
+    }
+  };
+
   const fetchData = async () => {
     try {
       // Products and Categories are PUBLIC (Customer Menu needs them), so they use regular fetch
@@ -390,7 +401,8 @@ export default function AdminDashboard() {
     if (!isAuthenticated) return;
     fetchOrders();
     fetchData();
-    fetchERPData(); 
+    fetchERPData();
+    fetchUsers(); // <-- THE FIX: Load the employees!
 
     socket.on('newOrder', (order) => { setOrders(prev => [order, ...prev]); playKitchenDing(); });
     socket.on('orderUpdated', (updated) => setOrders(prev => prev.map(o => o._id === updated._id ? updated : o)));

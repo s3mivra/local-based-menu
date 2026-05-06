@@ -377,8 +377,10 @@ export default function CustomerMenu() {
 
   if (isCheckingSession) {
     return (
-      <div className="min-h-screen bg-dark flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
+      <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4">
+        <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mb-6 shadow-lg shadow-accent/20"></div>
+        <h2 className="text-white font-black tracking-[0.2em] uppercase text-lg mb-2">Kasa Lokal</h2>
+        <p className="text-accent text-xs font-bold tracking-widest uppercase animate-pulse">Securing Table Session...</p>
       </div>
     );
   }

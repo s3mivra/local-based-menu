@@ -162,7 +162,7 @@ items: [{
   discountPercent: { type: Number, default: 0 },
   discount: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
-  isVatExempt: { type: Boolean, default: false },
+  isVatExempt: { type: Boolean, default: true },
   isArchived: { type: Boolean, default: false },
   // --- NEW ENTERPRISE FIELDS ---
   cashier: { type: String, default: 'System' },
@@ -647,9 +647,11 @@ app.post('/api/orders', async (req, res) => {
       if (existingOrder) return res.status(200).json({ success: true, order: existingOrder, message: "Duplicate prevented." });
     }
 
-    // Extract variables safely
-    let { items, discountPercent = 0, isVatExempt = false, table, customerName, sessionId, isComplimentary = false, employeeName = '', cashier = 'System' } = req.body;
+    // Extract variables safely (We removed isVatExempt from here)
+    let { items, discountPercent = 0, table, customerName, sessionId, isComplimentary = false, employeeName = '', cashier = 'System' } = req.body;
 
+    // THE FIX: Completely ignore the frontend and FORCE VAT OFF (0%) for all new orders
+    let isVatExempt = true;
     // FIX 1: Safely default to Takeout if the table is null or empty
     if (!table) table = 'Takeout';
 
