@@ -2465,7 +2465,7 @@ const submitPhysicalCounts = async () => {
                             <input 
                               type="number" 
                               step="0.01" 
-                              className="w-20 bg-dark border border-accent rounded px-2 py-1 text-white outline-none text-right"
+                              className="w-20 bg-dark border border-accent rounded px-2 py-1 text-black outline-none text-right"
                               value={editPriceVal}
                               onChange={(e) => setEditPriceVal(e.target.value)}
                               autoFocus
@@ -2504,7 +2504,7 @@ const submitPhysicalCounts = async () => {
                   <div key={d._id} className="bg-dark p-3 rounded-lg border border-gray-700 flex justify-between items-center">
                     <div>
                       {/* Fixed black text bug here! */}
-                      <p className="font-bold text-white text-sm">{d.name}</p>
+                      <p className="font-bold text-accent text-sm">{d.name}</p>
                       <p className="text-xs text-gray-400 font-mono">{d.percentage}% OFF</p>
                     </div>
                     <button 
@@ -2540,11 +2540,11 @@ const submitPhysicalCounts = async () => {
               >
                 <div>
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Discount Name</label>
-                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+                  <input type="text" placeholder="e.g., PWD, Senior Citizen" value={discountForm.name} onChange={(e) => setDiscountForm({...discountForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Percentage (%)</label>
-                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-white outline-none focus:border-accent" required />
+                  <input type="number" placeholder="e.g., 20" max="100" min="1" value={discountForm.percentage} onChange={(e) => setDiscountForm({...discountForm, percentage: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
                 </div>
                 <button type="submit" className="w-full bg-accent text-dark font-black py-3 rounded hover:bg-white transition shadow-lg shadow-accent/20 uppercase tracking-wider text-xs">
                   Save Rule
