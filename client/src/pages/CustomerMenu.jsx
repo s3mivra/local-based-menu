@@ -84,28 +84,35 @@ export default function CustomerMenu() {
 
     const validateSessionAndCheckMemory = async () => {
       try {
-        // 1. Verify with the backend that this link hasn't expired (10 min rule)
+        // --- FIX: CHECK LOCAL MEMORY FIRST ---
+        // If the customer has an active order cooking, ALWAYS let them in to see it,
+        // even if the session link technically expired in the background.
+        const savedOrderId = localStorage.getItem('semivra_active_order');
+        if (savedOrderId) {
+          const orderRes = await fetch(`${API_URL}/api/orders/${savedOrderId}`);
+          if (orderRes.ok) {
+            const orderData = await orderRes.json();
+            
+            if (orderData.status !== 'Cancelled' && orderData.status !== 'Voided' && !localStorage.getItem(`received_${savedOrderId}`)) {
+              setLockedOrder(orderData);
+              setTableNum(orderData.table); // Restore the table number for WebSockets
+              setFlowState('status');
+              setIsAuthorized(true); // Bypass the link expiration check!
+              setIsCheckingSession(false);
+              return; // Stop here, do not check the heartbeat.
+            } else {
+              localStorage.removeItem('semivra_active_order');
+            }
+          }
+        }
+
+        // --- IF NO ACTIVE ORDER, CHECK THE SESSION NORMALLY ---
         const heartbeatRes = await fetch(`${API_URL}/api/sessions/${session}/heartbeat`, { method: 'POST' });
         const heartbeatData = await heartbeatRes.json();
 
         if (heartbeatData.success) {
           setIsAuthorized(true);
           setTableNum(heartbeatData.table);
-          
-          // 2. If valid, check if they already have an active order on their screen
-          const savedOrderId = localStorage.getItem('semivra_active_order');
-          if (savedOrderId) {
-            const orderRes = await fetch(`${API_URL}/api/orders/${savedOrderId}`);
-            if (orderRes.ok) {
-              const orderData = await orderRes.json();
-              if (orderData.status !== 'Cancelled' && orderData.status !== 'Voided' && !localStorage.getItem(`received_${savedOrderId}`)) {
-                setLockedOrder(orderData);
-                setFlowState('status');
-              } else {
-                localStorage.removeItem('semivra_active_order');
-              }
-            }
-          }
         } else {
           setIsAuthorized(false); 
         }
