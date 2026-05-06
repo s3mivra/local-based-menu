@@ -1631,7 +1631,7 @@ const submitPhysicalCounts = async () => {
 
                       return (
                         <div key={dept} className="bg-dark/30 rounded-lg p-2 border border-white/10">
-                          <h4 className="text-[10px] uppercase text-gray-400 font-bold mb-2 pb-1 border-b border-gray-700 tracking-widest">{dept} Station</h4>
+                          <h4 className="text-[10px] uppercase text-white font-bold mb-2 pb-1 border-b border-gray-700 tracking-widest">{dept} Station</h4>
                           {deptItems.map(item => {
                             const currentSelection = discountedItems[order._id];
                             const isSelected = currentSelection ? currentSelection.includes(item.originalIdx) : true;
@@ -1675,7 +1675,7 @@ const submitPhysicalCounts = async () => {
                                 {item.selectedAddOns && item.selectedAddOns.length > 0 && (
                                   <div className="pl-6 mt-1 space-y-1">
                                     {item.selectedAddOns.map((addon, aIdx) => (
-                                      <div key={aIdx} className="flex justify-between items-center text-[11px] text-gray-400 bg-black/20 px-2 py-1 rounded border border-white/5">
+                                      <div key={aIdx} className="flex justify-between items-center text-[11px] text-black bg-black/20 px-2 py-1 rounded border border-white/5">
                                         <span className="flex items-center gap-1">
                                           <span className="text-accent text-[8px]">▶</span> {addon.name} <span className="text-[9px]">(+P{addon.price})</span>
                                         </span>
