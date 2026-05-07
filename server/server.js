@@ -173,7 +173,8 @@ items: [{
     selectedAddOns: [{ name: String, price: Number }],
     hasDiscount: { type: Boolean, default: true },
     department: { type: String, default: 'Kitchen' }, // <-- NEW: Routes to Kitchen or Bar
-    itemStatus: { type: String, default: 'Received' } // <-- NEW: Item-level progress
+    itemStatus: { type: String, default: 'Received' }, // <-- NEW: Item-level progress
+    discountPercent: { type: Number, default: 0 }
   }],
   
   // Strict Accounting Fields
@@ -263,9 +264,26 @@ const UserSchema = new mongoose.Schema({
   userCode: String,
   name: String,
   password: String,
-  role: { type: String, enum: ['cashier', 'admin'], default: 'cashier' } // Added RBAC Role
+  role: { type: String, default: 'Staff' } // Added RBAC Role
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
+
+// --- NEW: CUSTOM ROLES SCHEMA & ROUTES ---
+const RoleSchema = new mongoose.Schema({ name: String });
+const Role = mongoose.model('Role', RoleSchema);
+
+app.get('/api/roles', verifyToken, async (req, res) => {
+  const roles = await Role.find();
+  res.json({ success: true, roles });
+});
+app.post('/api/roles', verifyToken, async (req, res) => {
+  const newRole = await Role.create(req.body);
+  res.json({ success: true, role: newRole });
+});
+app.delete('/api/roles/:id', verifyToken, async (req, res) => {
+  await Role.findByIdAndDelete(req.params.id);
+  res.json({ success: true });
+});
 
 // 1. Minimal Audit Log Schema (New)
 const AuditLogSchema = new mongoose.Schema({
@@ -682,7 +700,7 @@ app.post('/api/orders', async (req, res) => {
     if (!table) table = 'Takeout';
 
     // SESSION VALIDATION (Only for dine-in tables)
-    if (table !== 'Takeout') {
+    if (!['Takeout', 'Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(table)) {
       if (!sessionId) throw new Error("Unauthorized: QR Session required.");
 // ... rest of the function remains exactly the same
       const activeSession = await QRSession.findOne({ sessionId, table, isActive: true });
@@ -781,11 +799,14 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     if (cashier) order.cashier = cashier; 
 
     // Allow the Kitchen/Bar to update specific item statuses safely
+    // Allow the Kitchen/Bar to update specific item statuses safely
     if (items) {
       items.forEach((incomingItem, index) => {
         if (order.items[index]) {
           if (incomingItem.itemStatus !== undefined) order.items[index].itemStatus = incomingItem.itemStatus;
-          if (incomingItem.selectedAddOns !== undefined) order.items[index].selectedAddOns = incomingItem.selectedAddOns; // <-- ALLOW REMOVING ADDONS
+          if (incomingItem.selectedAddOns !== undefined) order.items[index].selectedAddOns = incomingItem.selectedAddOns; 
+          // NEW: Listen for the isolated discount from the frontend!
+          if (incomingItem.discountPercent !== undefined) order.items[index].discountPercent = incomingItem.discountPercent; 
         }
       });
       order.markModified('items');
@@ -812,20 +833,26 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     let totalGross = 0;
     let totalDiscount = 0;
     let totalVat = 0;
+    
     order.items.forEach(item => {
       const price = item.price || 0; 
       const qty = item.quantity || 1;
-      
       const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
       const itemBase = (price + addOnTotal) * qty;
       
       totalGross += itemBase;
-      
       const getsDiscount = item.hasDiscount !== false;
+      const isolatedItemDiscount = item.discountPercent || 0; // The new item-level tag
 
       if (order.isComplimentary) {
         totalDiscount += itemBase;
+      } else if (isolatedItemDiscount > 0) {
+        // OVERRIDE: If this item has an isolated discount (e.g. 20% PWD), apply ONLY this discount!
+        const itemDisc = itemBase * (isolatedItemDiscount / 100);
+        totalDiscount += itemDisc;
+        if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0.12;
       } else if (getsDiscount && order.discountPercent > 0) {
+        // GLOBAL DISCOUNT: Apply only if the item doesn't have an isolated one
         if (order.isVatExempt || order.discountType === 'SC/PWD') {
           const scDisc = itemBase * (order.discountPercent / 100);
           totalDiscount += scDisc;
@@ -952,12 +979,17 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       let debitAccountCode = '1000';
       let debitAccountName = 'Cash on Hand';
       
-      if (order.paymentMethod === 'E-Wallet') { 
-        debitAccountCode = '1015';
-        debitAccountName = 'E-Wallet'; 
-      } else if (order.paymentMethod === 'Bank Transfer') {
+      const pm = order.paymentMethod;
+      if (pm === 'Bank Transfer') {
         debitAccountCode = '1010';
         debitAccountName = 'Cash in Bank';
+      } else if (['E-Wallet', 'GCash', 'Maya', 'Maribank', 'Other E-Wallet'].includes(pm)) { 
+        debitAccountCode = '1015';
+        debitAccountName = 'E-Wallet'; 
+      } else if (['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(pm)) {
+        // Delivery partners don't pay you immediately. This is Accounts Receivable!
+        debitAccountCode = '1200';
+        debitAccountName = 'Accounts Receivable';
       }
 
       const reference = `${order.orderNumber.replace('#','')}`;
@@ -1042,8 +1074,10 @@ app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
     }
 
     let cashAccount = '1000';
-    if (order.paymentMethod === 'E-Wallet') cashAccount = '1015';
-    if (order.paymentMethod === 'Bank Transfer') cashAccount = '1010';
+    const pm = order.paymentMethod;
+    if (pm === 'Bank Transfer') cashAccount = '1010';
+    if (['E-Wallet', 'GCash', 'Maya', 'Maribank', 'Other E-Wallet'].includes(pm)) cashAccount = '1015';
+    if (['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(pm)) cashAccount = '1200';
 
     const lines = [];
     const grossSalesAmount = order.total + (order.discount || 0) - order.vatAmount;
@@ -1424,16 +1458,22 @@ const validateOrderMath = (order) => {
   for (const item of order.items) {
     if (item.price === undefined || item.quantity === undefined) return { valid: false, error: "Line item missing price or quantity." };
     
-    // --- THIS IS THE FIX: Include Add-On Prices in the Security Audit ---
     const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
     const itemBase = (item.price + addOnTotal) * item.quantity;
-    
     expectedGross += itemBase;
 
     const getsDiscount = item.hasDiscount !== false;
+    const isolatedItemDiscount = item.discountPercent || 0; // The new item-level tag
+
     if (order.isComplimentary) {
       expectedDiscount += itemBase; 
+    } else if (isolatedItemDiscount > 0) {
+      // OVERRIDE: If this item has an isolated discount (e.g. 20% PWD), apply ONLY this discount!
+      const itemDisc = itemBase * (isolatedItemDiscount / 100);
+      expectedDiscount += itemDisc;
+      if (!order.isVatExempt) expectedVat += (itemBase - itemDisc) * 0.12;
     } else if (getsDiscount && order.discountPercent > 0) {
+      // GLOBAL DISCOUNT: Apply only if the item doesn't have an isolated one
       if (order.isVatExempt || order.discountType === 'SC/PWD') {
         expectedDiscount += itemBase * (order.discountPercent / 100);
       } else {
@@ -1497,7 +1537,7 @@ app.post('/api/users', verifyToken, async (req, res) => {
     const userCode = await generateNextSequence(User, 'ADN', 'userCode');
     
     // THE FIX: Add the role from the request body!
-    const role = req.body.role || 'cashier'; // Default to cashier if none provided
+    const role = req.body.role || 'Staff'; // Default to cashier if none provided
     
     const newUser = await User.create({ name: req.body.name, password: hashedPassword, userCode, role });
     res.json({ success: true, user: { _id: newUser._id, name: newUser.name, userCode: newUser.userCode, role: newUser.role } });

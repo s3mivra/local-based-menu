@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-import { Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Clock, Coffee, Minus } from 'lucide-react';
+import { Menu, Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Clock, Coffee, Minus } from 'lucide-react';
 import jsPDF from 'jspdf';
 import QRCode from 'react-qr-code';
 import autoTable from 'jspdf-autotable';
@@ -113,10 +113,42 @@ export default function AdminDashboard() {
 
   const [globalAddOns, setGlobalAddOns] = useState([]);
   const [addOnForm, setAddOnForm] = useState({ name: '', price: '', category: 'Extras' });
-  
+
+  // --- MANUAL POS STATES ---
+  const [isPosOpen, setIsPosOpen] = useState(false);
+  const [posCart, setPosCart] = useState([]);
+  const [posCategory, setPosCategory] = useState('All');
+  const [posCustomerName, setPosCustomerName] = useState('');
+  const [posTable, setPosTable] = useState('Takeout'); // Takeout, Grab Delivery, Foodpanda
+  const [posPayment, setPosPayment] = useState('Cash');
+  const [posSelectedProduct, setPosSelectedProduct] = useState(null);
+  const [posActiveSize, setPosActiveSize] = useState(null);
+  const [posActiveAddOns, setPosActiveAddOns] = useState([]);
 
   // --- FULLSCREEN LOGIC ---
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const [isStatusMenuOpen, setIsStatusMenuOpen] = useState(false);
+
+  // --- PAGINATION STATE ---
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 8; // You can change this number! 12 fits nicely on a tablet screen.
+
+  // NEW: Inventory Pagination
+  const [invPage, setInvPage] = useState(1);
+  const invItemsPerPage = 12; // List items are small, we can fit 15
+
+  // NEW: Orders Pagination
+  const [ordersPage, setOrdersPage] = useState(1);
+  const ordersItemsPerPage = 8; // Order cards are tall, 8 is perfect
+
+  // NEW: Accounting Pagination
+  const [accountingPage, setAccountingPage] = useState(1);
+  const accountingItemsPerPage = 8; // Journal entries are tall, 10 is good
+
+  // NEW: Pricing Pagination
+  const [pricingPage, setPricingPage] = useState(1);
+  const pricingItemsPerPage = 12; // Table rows are small, 15 fits perfectly
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -395,7 +427,7 @@ export default function AdminDashboard() {
     { accountCode: '4150', accountName: 'Sales Returns', type: 'Revenue' },
     { accountCode: '5000', accountName: 'Cost of Goods Sold', type: 'Expense' },
     { accountCode: '6000', accountName: 'Operating Expenses', type: 'Expense' },
-    { accountCode: '6100', accountName: 'Complimentary Expense', type: 'Expense' } // NEW!
+    { accountCode: '6100', accountName: 'Complimentary Expense', type: 'Expense' }
   ];
 
   useEffect(() => {
@@ -459,10 +491,84 @@ export default function AdminDashboard() {
     };
   }, [isAuthenticated]);
 
-  const updateStatus = async (orderId, newStatus) => {
+  // --- MANUAL POS LOGIC ---
+  const openProductModal = (product) => {
+    setPosSelectedProduct(product);
+    setPosActiveSize(null); // Defaults to base size
+    setPosActiveAddOns([]);
+  };
+
+  const confirmPosItem = () => {
+    if (!posSelectedProduct) return;
+    
+    let finalPrice = posSelectedProduct.basePrice || posSelectedProduct.price || 0;
+    let finalName = posSelectedProduct.name;
+    
+    if (posActiveSize !== null) {
+      const sizeObj = posSelectedProduct.sizes[posActiveSize];
+      finalPrice = sizeObj.price;
+      finalName = `${posSelectedProduct.name} (${sizeObj.name})`;
+    }
+    
+    const newItem = {
+      productId: posSelectedProduct._id,
+      name: finalName,
+      price: finalPrice,
+      quantity: 1,
+      selectedAddOns: [...posActiveAddOns]
+    };
+
+    setPosCart([...posCart, newItem]);
+    setPosSelectedProduct(null);
+  };
+
+  const submitManualOrder = async () => {
+    if (posCart.length === 0) return alert("Cart is empty!");
+    if (!posCustomerName) return alert("Please enter Customer / Driver Name");
+
+    const payload = {
+      items: posCart,
+      table: posTable, 
+      customerName: posCustomerName,
+      // FIX: If it's a delivery, auto-set the payment method. Otherwise, default to Cash!
+      paymentMethod: ['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(posTable) ? posTable : 'Cash',
+      cashier: activeAdmin ? activeAdmin.name : 'System',
+      discountPercent: 0,
+      isComplimentary: false,
+      sessionId: null 
+    };
+
+    try {
+      const res = await apiFetch(`/api/orders`, {
+        method: 'POST', body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsPosOpen(false);
+        setPosCart([]);
+        setPosCustomerName('');
+        fetchOrders(); // Refresh the grid!
+      } else {
+        alert(data.error);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+const updateStatus = async (orderId, newStatus) => {
+    // 1. Grab the order so we can check if it's a delivery
+    const order = orders.find(o => o._id === orderId);
+    
     const payload = { status: newStatus, cashier: activeAdmin ? activeAdmin.name : 'System' };
+    
     if (newStatus === 'Preparing') {
-      payload.paymentMethod = paymentSelections[orderId] || 'Cash'; // Lock payment in early
+      // 2. BULLETPROOF OVERRIDE: If it's a delivery, force it! Otherwise, use dropdown/existing.
+      if (order && ['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(order.table)) {
+        payload.paymentMethod = order.table;
+      } else {
+        payload.paymentMethod = paymentSelections[orderId] || (order ? order.paymentMethod : 'Cash') || 'Cash';
+      }
     }
     
     // Optimistic UI update
@@ -471,7 +577,11 @@ export default function AdminDashboard() {
     
     // Backend Sync
     try {
-      const res = await apiFetch(`/api/orders/${orderId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const res = await apiFetch(`/api/orders/${orderId}`, { 
+        method: 'PUT', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(payload) 
+      });
       const data = await res.json();
       
       if (!data.success) {
@@ -566,6 +676,28 @@ export default function AdminDashboard() {
       }) 
     });
     if (isRemoving) setDiscountInputs(prev => ({ ...prev, [orderId]: '' }));
+  };
+
+  const applyItemDiscount = async (orderId, itemIndex, discountPercent) => {
+    try {
+      // We send this to your existing order update route, specifically targeting the items array
+      const order = orders.find(o => o._id === orderId);
+      if (!order) return;
+
+      const updatedItems = [...order.items];
+      updatedItems[itemIndex].discountPercent = Number(discountPercent);
+
+      const res = await apiFetch(`/api/orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: updatedItems })
+      });
+      
+      const data = await res.json();
+      if (data.success) fetchOrders();
+    } catch (err) {
+      console.error(err);
+    }
   };
   const archiveDay = async () => {
     if (!window.confirm("Are you sure you want to close the day? This will archive everything.")) return;
@@ -877,16 +1009,21 @@ const submitPhysicalCounts = async () => {
       
       grouped[date].orders.forEach(order => {
         const time = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const isCash = order.paymentMethod === 'Cash' || !order.paymentMethod;
-        const isBank = order.paymentMethod === 'Bank Transfer';
-        const isEwallet = order.paymentMethod === 'E-Wallet';
+        // --- NEW PAYMENT CLASSIFICATION LOGIC ---
+        const pm = order.paymentMethod || 'Cash';
+        const isCash = pm === 'Cash';
+        const isBank = pm === 'Bank Transfer';
+        const isEwallet = ['E-Wallet', 'GCash', 'Maya', 'Maribank', 'Other E-Wallet'].includes(pm);
+        const isDelivery = ['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(pm);
         const isCompleted = order.status === 'Completed';
 
-        // Add to daily totals ONLY if completed
+        // Protect Daily Totals from Voided/Cancelled Orders
         if (isCompleted) {
+          if (dayTotals.delivery === undefined) dayTotals.delivery = 0; // Ensure delivery exists
           dayTotals.cash += isCash ? order.total : 0;
           dayTotals.bank += isBank ? order.total : 0;
           dayTotals.ewallet += isEwallet ? order.total : 0;
+          dayTotals.delivery += isDelivery ? order.total : 0;
           dayTotals.grand += order.total;
         }
 
@@ -894,6 +1031,7 @@ const submitPhysicalCounts = async () => {
         if (order.discountPercent > 0) discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
         if (order.isComplimentary) discType = 'COMPLIMENTARY';
 
+        // Update the array pushing logic to include Delivery
         order.items.forEach((item, index) => {
           const isLastItem = index === order.items.length - 1;
           dayRows.push([
@@ -905,17 +1043,19 @@ const submitPhysicalCounts = async () => {
             isLastItem && isCash && isCompleted ? formatMoney(order.total) : '-',
             isLastItem && isBank && isCompleted ? formatMoney(order.total) : '-',
             isLastItem && isEwallet && isCompleted ? formatMoney(order.total) : '-',
-            isLastItem ? (isCompleted ? formatMoney(order.total) : 'VOID') : '-' // Flags Voided/Cancelled
+            isLastItem && isDelivery && isCompleted ? formatMoney(order.total) : '-', // <-- NEW DELIVERY COLUMN
+            isLastItem ? (isCompleted ? formatMoney(order.total) : 'VOID') : '-'
           ]);
         });
       });
 
       // Daily Footer
-      dayRows.push(['', '', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
+      dayRows.push(['', '', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.delivery), formatMoney(dayTotals.grand)]);
       autoTable(doc, {
-        startY: currentY + 5,
-        head: [['Time', 'Order #', 'Status', 'Item', 'Gross', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
-        body: dayRows, theme: 'striped', styles: { fontSize: 7.5 }, columnStyles: { 3: { cellWidth: 50 } },
+        startY: currentY + 5, // Use 28 for exportDayToPDF
+        // ADDED 'Delivery' to the Headers!
+        head: [['Time', 'Order #', 'Status', 'Item', 'Gross', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Delivery', 'Total']],
+        body: dayRows, theme: 'striped', styles: { fontSize: 7 }, columnStyles: { 3: { cellWidth: 40 } },
         willDrawCell: function(data) {
           if (data.row.index === dayRows.length - 1) { doc.setFont(undefined, 'bold'); doc.setTextColor(204, 163, 0); }
         }
@@ -938,16 +1078,21 @@ const submitPhysicalCounts = async () => {
     
     dayOrders.forEach(order => {
       const time = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const isCash = order.paymentMethod === 'Cash' || !order.paymentMethod;
-      const isBank = order.paymentMethod === 'Bank Transfer';
-      const isEwallet = order.paymentMethod === 'E-Wallet';
+      // --- NEW PAYMENT CLASSIFICATION LOGIC ---
+      const pm = order.paymentMethod || 'Cash';
+      const isCash = pm === 'Cash';
+      const isBank = pm === 'Bank Transfer';
+      const isEwallet = ['E-Wallet', 'GCash', 'Maya', 'Maribank', 'Other E-Wallet'].includes(pm);
+      const isDelivery = ['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(pm);
       const isCompleted = order.status === 'Completed';
 
       // Protect Daily Totals from Voided/Cancelled Orders
       if (isCompleted) {
+        if (dayTotals.delivery === undefined) dayTotals.delivery = 0; // Ensure delivery exists
         dayTotals.cash += isCash ? order.total : 0;
         dayTotals.bank += isBank ? order.total : 0;
         dayTotals.ewallet += isEwallet ? order.total : 0;
+        dayTotals.delivery += isDelivery ? order.total : 0;
         dayTotals.grand += order.total;
       }
 
@@ -955,31 +1100,35 @@ const submitPhysicalCounts = async () => {
       if (order.discountPercent > 0) discType = order.isVatExempt ? `SC/PWD (${order.discountPercent}%)` : `Promo (${order.discountPercent}%)`;
       if (order.isComplimentary) discType = 'COMPLIMENTARY';
 
-      order.items.forEach((item, index) => {
-        const isLastItem = index === order.items.length - 1;
-        dayRows.push([
-          time, order.orderNumber, order.status, `${item.quantity}x ${item.name}`,
-          formatMoney(item.price * item.quantity),
-          isLastItem && isCompleted ? formatMoney(order.vatAmount) : '-',
-          isLastItem && isCompleted ? formatMoney(order.discount) : '-', 
-          isLastItem ? discType : '-',
-          isLastItem && isCash && isCompleted ? formatMoney(order.total) : '-',
-          isLastItem && isBank && isCompleted ? formatMoney(order.total) : '-',
-          isLastItem && isEwallet && isCompleted ? formatMoney(order.total) : '-',
-          isLastItem ? (isCompleted ? formatMoney(order.total) : 'VOID') : '-'
-        ]);
+      // Update the array pushing logic to include Delivery
+        order.items.forEach((item, index) => {
+          const isLastItem = index === order.items.length - 1;
+          dayRows.push([
+            time, order.orderNumber, order.status, `${item.quantity}x ${item.name}`,
+            formatMoney(item.price * item.quantity),
+            isLastItem && isCompleted ? formatMoney(order.vatAmount) : '-',
+            isLastItem && isCompleted ? formatMoney(order.discount) : '-', 
+            isLastItem ? discType : '-',
+            isLastItem && isCash && isCompleted ? formatMoney(order.total) : '-',
+            isLastItem && isBank && isCompleted ? formatMoney(order.total) : '-',
+            isLastItem && isEwallet && isCompleted ? formatMoney(order.total) : '-',
+            isLastItem && isDelivery && isCompleted ? formatMoney(order.total) : '-', // <-- NEW DELIVERY COLUMN
+            isLastItem ? (isCompleted ? formatMoney(order.total) : 'VOID') : '-'
+          ]);
+        });
       });
-    });
 
-    dayRows.push(['', '', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.grand)]);
-    autoTable(doc, {
-      startY: 28,
-      head: [['Time', 'Order #', 'Status', 'Item', 'Gross', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Total']],
-      body: dayRows, theme: 'striped', styles: { fontSize: 7.5 }, columnStyles: { 3: { cellWidth: 50 } },
-      willDrawCell: function(data) {
-        if (data.row.index === dayRows.length - 1) { doc.setFont(undefined, 'bold'); doc.setTextColor(204, 163, 0); }
-      }
-    });
+      // Daily Footer
+      dayRows.push(['', '', '', '', '', '', '', 'DAILY TOTAL:', formatMoney(dayTotals.cash), formatMoney(dayTotals.bank), formatMoney(dayTotals.ewallet), formatMoney(dayTotals.delivery), formatMoney(dayTotals.grand)]);
+      autoTable(doc, {
+        startY: 28,
+        // ADDED 'Delivery' to the Headers!
+        head: [['Time', 'Order #', 'Status', 'Item', 'Gross', 'VAT', 'Discount', 'Type', 'Cash', 'Bank', 'E-Wallet', 'Delivery', 'Total']],
+        body: dayRows, theme: 'striped', styles: { fontSize: 7 }, columnStyles: { 3: { cellWidth: 40 } },
+        willDrawCell: function(data) {
+          if (data.row.index === dayRows.length - 1) { doc.setFont(undefined, 'bold'); doc.setTextColor(204, 163, 0); }
+        }
+      });
     doc.save(`Sales_${dateString.replace(/,/g, '').replace(/ /g, '_')}.pdf`);
   };
 
@@ -1286,6 +1435,40 @@ const submitPhysicalCounts = async () => {
     );
   }
   
+  // --- PAGINATION MATH ---
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  
+  // Only grab the 12 items for the current page
+  const currentProducts = products.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(products.length / itemsPerPage);
+
+  // --- INVENTORY PAGINATION MATH ---
+  const indexOfLastInv = invPage * invItemsPerPage;
+  const indexOfFirstInv = indexOfLastInv - invItemsPerPage;
+  const currentInventory = inventory.slice(indexOfFirstInv, indexOfLastInv);
+  const totalInvPages = Math.ceil(inventory.length / invItemsPerPage);
+
+  // --- ORDERS PAGINATION MATH ---
+  const indexOfLastOrder = ordersPage * ordersItemsPerPage;
+  const indexOfFirstOrder = indexOfLastOrder - ordersItemsPerPage;
+  // If you filter your orders first (like Kitchen View), make sure to slice the filtered array!
+  const currentOrders = orders.slice(indexOfFirstOrder, indexOfLastOrder);
+  const totalOrdersPages = Math.ceil(orders.length / ordersItemsPerPage);
+
+  // --- ACCOUNTING PAGINATION MATH ---
+  const indexOfLastEntry = accountingPage * accountingItemsPerPage;
+  const indexOfFirstEntry = indexOfLastEntry - accountingItemsPerPage;
+
+  const currentEntries = journalEntries.slice(indexOfFirstEntry, indexOfLastEntry);
+  const totalAccountingPages = Math.ceil(journalEntries.length / accountingItemsPerPage);
+
+  // --- PRICING PAGINATION MATH ---
+  const indexOfLastPricing = pricingPage * pricingItemsPerPage;
+  const indexOfFirstPricing = indexOfLastPricing - pricingItemsPerPage;
+  const currentPricingProducts = products.slice(indexOfFirstPricing, indexOfLastPricing);
+  const totalPricingPages = Math.ceil(products.length / pricingItemsPerPage);
+
   return (
     <div className="min-h-screen bg-dark text-white p-6 lg:p-8">
       
@@ -1552,310 +1735,548 @@ const submitPhysicalCounts = async () => {
       )}
 
       {/* --- ACTIVE ORDERS TAB (Kitchen & Bar View) --- */}
+      {/* --- ACTIVE ORDERS TAB (Kitchen & Bar View) --- */}
       {activeTab === 'orders' && (() => {
         // ---   KITCHEN & BAR ROUTING LOGIC ---
         const displayOrders = filteredOrders.filter(order => {
           if (departmentFilter === 'Kitchen') {
-            // Show orders containing items smartly tagged for Kitchen
             return order.items.some(item => (item.department || 'Kitchen') === 'Kitchen');
           }
           if (departmentFilter === 'Bar') {
-            // Show orders containing items smartly tagged for Bar
             return order.items.some(item => item.department === 'Bar');
           }
-          return true; // Show 'All'
+          return true;
         });
 
         return (
           <div className="w-full">
-            {/* TOP BAR: Department Splitter (Fixed White/Green Styling) */}
-            <div className="flex justify-between items-center mb-6 bg-white p-3 rounded-xl border-2 border-accent flex-wrap gap-4 shadow-sm">
-              <div className="flex gap-2 overflow-x-auto">
-                {['All', 'Kitchen', 'Bar'].map(dept => (
-                  <button 
-                    key={dept} 
-                    onClick={() => setDepartmentFilter(dept)} 
-                    className={`px-6 py-2 rounded-lg text-sm font-black uppercase tracking-widest transition whitespace-nowrap ${departmentFilter === dept ? 'bg-accent text-white shadow-md' : 'bg-transparent text-gray-500 hover:text-accent'}`}
-                  >
-                    {dept} View
-                  </button>
-                ))}
-              </div>
-              
-              {/* Status Filters */}
-              <div className="flex gap-2 overflow-x-auto pr-2">
-                {['All', 'Pending', 'Preparing', 'Completed', 'Cancelled'].map(filter => (
-                  <button key={filter} onClick={() => setOrderFilter(filter)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap ${orderFilter === filter ? 'bg-accent text-white' : 'bg-transparent border border-gray-300 text-gray-500 hover:border-accent'}`}>
-                    {filter}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {displayOrders.length === 0 ? (
-                <div className="col-span-full text-center py-12 text-gray-500 font-bold uppercase tracking-widest">No orders in {departmentFilter} queue.</div>
-              ) : displayOrders.map(order => (
-                <div key={order._id} className={`bg-accent rounded-xl p-5 border flex flex-col shadow-lg transition-all ${order.status === 'Completed' ? 'border-green-600 shadow-green-600/20' : order.status === 'Cancelled' || order.status === 'Voided' ? 'border-red-500 opacity-75' : 'border-accentShadow'}`}>
-                  
-                  {/* Order Header */}
-                  <div className="flex justify-between items-center mb-4 border-b border-white/30 pb-3">
-                    <h2 className="text-lg font-black flex items-center gap-2 flex-wrap text-white">
-                      <span>{order.orderNumber}</span>
-                      {order.customerName && (
-                        <span className="text-sm bg-black text-white px-2 py-0.5 rounded shadow-sm">
-                          {order.customerName}
-                        </span>
-                      )}
-                      {order.table && <span className="text-sm font-bold text-white/90 uppercase tracking-wider">({order.table})</span>}
+            {isPosOpen ? (
+              /* ========================================== */
+              /* 🛒 INLINE MANUAL CASHIER POS 🛒            */
+              /* ========================================== */
+              <div className="flex flex-col lg:flex-row gap-6 h-auto lg:h-[calc(100vh-180px)] w-full animate-fade-in">
+                
+                {/* LEFT: Product Grid */}
+                <div className="flex-1 flex flex-col min-h-[500px] lg:min-h-0 bg-surface border border-gray-800 rounded-xl overflow-hidden shadow-lg">
+                  <div className="p-4 border-b border-gray-800 bg-dark shadow-sm shrink-0 flex justify-between items-center">
+                    <h2 className="text-xl font-black text-accent tracking-widest uppercase flex items-center">
+                      <ShoppingCart size={20} className="mr-2 text-accent" /> POS Register
                     </h2>
-                    
-                    {/* Action Icons (Print) */}
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => printOrderSlip(order)} className="p-1.5 bg-white text-accent rounded hover:bg-gray-100 transition shadow-sm" title="Print Slip">
-                        🖨️
+                    <button onClick={() => setIsPosOpen(false)} className="text-red-500 hover:text-white font-bold px-4 py-2 bg-red-900/20 hover:bg-red-600 rounded uppercase text-xs tracking-wider transition">
+                      ← Back to Orders
+                    </button>
+                  </div>
+                  
+                  <div className="p-3 border-b border-gray-800 bg-dark/50 flex gap-2 overflow-x-auto custom-scrollbar shrink-0">
+                    <button onClick={() => setPosCategory('All')} className={`px-4 py-2 rounded font-bold whitespace-nowrap text-xs uppercase tracking-wider transition ${posCategory === 'All' ? 'bg-accent text-dark' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>All</button>
+                    {categories.map(c => (
+                      <button key={c._id} onClick={() => setPosCategory(c.name)} className={`px-4 py-2 rounded font-bold whitespace-nowrap text-xs uppercase tracking-wider transition ${posCategory === c.name ? 'bg-accent text-dark' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>{c.name}</button>
+                    ))}
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4 content-start custom-scrollbar">
+                    {products.filter(p => posCategory === 'All' || p.category === posCategory).map(p => (
+                      <button 
+                        key={p._id} 
+                        onClick={() => openProductModal(p)}
+                        className="bg-dark border border-gray-700 rounded-xl p-3 flex flex-col items-center text-center hover:border-accent hover:bg-white/5 transition shadow-sm group"
+                      >
+                        {p.image ? (
+                          <img src={p.image} className="w-16 h-16 object-cover rounded-lg mb-2 group-hover:scale-105 transition-transform" />
+                        ) : (
+                          <div className="w-16 h-16 bg-gray-800 rounded-lg mb-2 flex items-center justify-center text-xs text-gray-500">No Img</div>
+                        )}
+                        <span className="font-bold text-sm text-black line-clamp-2 leading-tight w-full">{p.name}</span>
+                        <span className="text-accent font-black mt-auto pt-1 text-sm">₱{Number(p.basePrice || p.price || 0).toFixed(2)}</span>
                       </button>
-                      <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-wider text-white ${order.status === 'Pending' ? 'bg-red-500 animate-pulse' : order.status === 'Preparing' ? 'bg-yellow-500 text-black' : order.status === 'Completed' ? 'bg-green-600' : 'bg-gray-800'}`}>
-                        {order.status}
-                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* RIGHT: Cart & Checkout */}
+                <div className="w-full lg:w-96 flex flex-col shrink-0 h-[500px] lg:h-full bg-surface border border-gray-800 rounded-xl overflow-hidden shadow-lg min-h-0">
+                  <div className="p-4 border-b border-gray-800 bg-dark shrink-0">
+                    <input type="text" placeholder="Customer / Driver Name" value={posCustomerName} onChange={e => setPosCustomerName(e.target.value)} className="w-full bg-dark border border-gray-700 p-2.5 rounded-lg text-black font-bold mb-3 outline-none focus:border-accent text-sm" />
+                    <div className="flex gap-2">
+                      {/* FIX: Removed the Payment Dropdown. Now it just takes the Table/Delivery type! */}
+                      <select value={posTable} onChange={e => setPosTable(e.target.value)} className="w-full bg-dark border border-gray-700 p-2 rounded-lg text-xs font-bold text-black outline-none">
+                        <option value="Takeout">🚶 Takeout</option>
+                        <option value="Grab Delivery">🛵 Grab Delivery</option>
+                        <option value="Foodpanda">🐼 Foodpanda</option>
+                        <option value="Manual Delivery">📦 Manual/Direct</option>
+                      </select>
                     </div>
                   </div>
-                  {/* --- NEW: DEPARTMENT ROUTING UI --- */}
-                  <div className="space-y-3 mb-4 max-h-60 overflow-y-auto custom-scrollbar pr-2">
-                    {['Kitchen', 'Bar'].map(dept => {
-                      // Filter items for this specific department
-                      const deptItems = order.items.map((item, idx) => ({ ...item, originalIdx: idx })).filter(i => (i.department || 'Kitchen') === dept);
-                      
-                      if (deptItems.length === 0) return null;
-                      if (departmentFilter !== 'All' && departmentFilter !== dept) return null;
 
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar bg-dark/30">
+                    {posCart.length === 0 ? (
+                      <div className="h-full flex items-center justify-center">
+                        <p className="text-white font-bold uppercase tracking-widest text-xs">Cart is Empty</p>
+                      </div>
+                    ) : posCart.map((item, idx) => {
+                      const addOnTotal = item.selectedAddOns.reduce((s, a) => s + Number(a.price), 0);
+                      const lineTotal = (item.price + addOnTotal) * item.quantity;
                       return (
-                        <div key={dept} className="bg-dark/30 rounded-lg p-2 border border-white/10">
-                          <h4 className="text-[10px] uppercase text-white font-bold mb-2 pb-1 border-b border-gray-700 tracking-widest">{dept} Station</h4>
-                          {deptItems.map(item => {
-                            const currentSelection = discountedItems[order._id];
-                            const isSelected = currentSelection ? currentSelection.includes(item.originalIdx) : true;
-                            
-                            return (
-                              <div key={item.originalIdx} className="mb-2">
-                                <div className="flex justify-between items-center text-sm">
-                                  <div className="flex items-center gap-2">
-                                    {order.status === 'Pending' && (
-                                      <input
-                                        type="checkbox"
-                                        checked={isSelected}
-                                        onChange={() => toggleItemDiscount(order._id, item.originalIdx)}
-                                        className="w-3 h-3 cursor-pointer rounded"
-                                      />
-                                    )}
-                                    <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
-                                      {item.quantity}x {item.name}
-                                    </span>
-                                  </div>
-                                  
-                                  {/* ITEM STATUS CONTROLS */}
-                                  {(order.status === 'Preparing' || order.status === 'Ready') ? (
-                                    <div className="flex items-center gap-1">
-                                      {item.itemStatus === 'Received' && (
-                                        <button onClick={() => updateItemStatus(order, item.originalIdx, 'Preparing')} className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 hover:bg-yellow-500 hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Prep</button>
-                                      )}
-                                      {item.itemStatus === 'Preparing' && (
-                                        <button onClick={() => updateItemStatus(order, item.originalIdx, 'Finished')} className="bg-accent/20 text-accent border border-accent/50 hover:bg-accent hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Finish</button>
-                                      )}
-                                      {item.itemStatus === 'Finished' && (
-                                        <span className="text-green-500 text-[10px] font-black uppercase tracking-wider px-1">✔ Done</span>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span className="text-white font-mono font-bold">P{(item.price * item.quantity).toFixed(2)}</span>
-                                  )}
-                                </div>
-                                
-                                {/* --- RENDER ADD-ONS UNDERNEATH THE ITEM --- */}
-                                {item.selectedAddOns && item.selectedAddOns.length > 0 && (
-                                  <div className="pl-6 mt-1 space-y-1">
-                                    {item.selectedAddOns.map((addon, aIdx) => (
-                                      <div key={aIdx} className="flex justify-between items-center text-[11px] text-black bg-black/20 px-2 py-1 rounded border border-white/5">
-                                        <span className="flex items-center gap-1">
-                                          <span className="text-accent text-[8px]">▶</span> {addon.name} <span className="text-[9px]">(+P{addon.price})</span>
-                                        </span>
-                                        {/* Show X Button ONLY if order is still Pending */}
-                                        {order.status === 'Pending' && (
-                                          <button 
-                                            onClick={() => removeAddOnFromOrder(order, item.originalIdx, aIdx)}
-                                            className="text-gray-500 hover:text-red-400 transition bg-dark p-1 rounded"
-                                          >
-                                            <X size={12} />
-                                          </button>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
+                        <div key={idx} className="bg-surface p-3 rounded-lg border border-gray-800 flex justify-between items-start shadow-sm">
+                          <div className="flex-1 pr-2 min-w-0">
+                            <p className="font-bold text-white text-sm truncate">{item.name}</p>
+                            {item.selectedAddOns.map((a, i) => <p key={i} className="text-[10px] text-gray-400 truncate">+ {a.name} (₱{a.price})</p>)}
+                            <div className="flex items-center gap-2 mt-2">
+                              <button onClick={() => setPosCart(posCart.map((c, i) => i === idx ? {...c, quantity: Math.max(1, c.quantity - 1)} : c))} className="w-6 h-6 bg-gray-800 hover:bg-gray-700 rounded text-white font-bold flex items-center justify-center transition">-</button>
+                              <span className="font-black text-sm w-6 text-center">{item.quantity}</span>
+                              <button onClick={() => setPosCart(posCart.map((c, i) => i === idx ? {...c, quantity: c.quantity + 1} : c))} className="w-6 h-6 bg-gray-800 hover:bg-gray-700 rounded text-white font-bold flex items-center justify-center transition">+</button>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <p className="font-black text-accent text-sm">₱{lineTotal.toFixed(2)}</p>
+                            <button onClick={() => setPosCart(posCart.filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-400 p-1 bg-red-900/10 rounded mt-1"><Trash2 size={14}/></button>
+                          </div>
                         </div>
                       );
                     })}
                   </div>
 
-                  {/* Spacer to push bottom content down */}
-                  <div className="flex-1"></div>
+                  <div className="p-4 border-t border-gray-800 bg-dark shrink-0 z-10">
+                    <div className="flex justify-between items-center mb-3">
+                      <span className="text-gray-400 font-bold uppercase tracking-widest text-xs">Total</span>
+                      <span className="text-2xl font-black text-black">
+                        ₱{posCart.reduce((sum, item) => sum + ((item.price + item.selectedAddOns.reduce((s, a)=>s+Number(a.price), 0)) * item.quantity), 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <button onClick={submitManualOrder} className="w-full py-4 bg-accent text-dark font-black rounded-xl uppercase tracking-widest text-xs hover:bg-black transition shadow-lg shadow-accent/20">
+                      Submit Order
+                    </button>
+                  </div>
+                </div>
 
-                  {/* NEW: Complimentary Employee Select */}
-                  {order.status === 'Pending' ? (
-                    <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
-                      <span className="font-bold uppercase tracking-wider">Complimentary?</span>
-                      <div className="flex gap-1">
-                        <select className="bg-white text-black text-[10px] rounded p-1.5 border-none outline-none font-bold" onChange={(e) => setCompSelections({...compSelections, [order._id]: e.target.value})}>
-                          <option value="">Select Employee...</option>
-                          {users.map(u => <option key={u._id} value={u.name}>{u.name}</option>)}
-                        </select>
-                        <button onClick={() => applyComplimentary(order._id)} className="bg-white hover:bg-gray-200 text-accent px-2 rounded font-black transition">✔</button>
+                {/* OPTIONS MODAL (Still an overlay so it dims the screen) */}
+                {posSelectedProduct && (
+                  <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-surface p-6 rounded-xl border border-gray-700 max-w-sm w-full shadow-2xl flex flex-col max-h-[90vh]">
+                      
+                      <div className="shrink-0 mb-4 border-b border-gray-800 pb-4">
+                        <h3 className="text-2xl font-black text-white leading-tight">{posSelectedProduct.name}</h3>
+                        <p className="text-xs text-gray-400 uppercase tracking-widest mt-1">Configure Options</p>
+                      </div>
+                      
+                      <div className="overflow-y-auto custom-scrollbar flex-1 pr-2 pb-2">
+                        
+                        {/* --- SIZES (Now ALWAYS shows, even if only 1 size exists) --- */}
+                        <div className="mb-6">
+                          <label className="text-xs font-bold text-gray-400 mb-2 block uppercase tracking-wider">Size Selection</label>
+                          <div className="grid grid-cols-2 gap-3">
+                            {/* FIX: Now correctly displays the Base Price instead of +P0 */}
+                            <button onClick={() => setPosActiveSize(null)} className={`py-3 rounded-lg font-bold text-sm border transition ${posActiveSize === null ? 'bg-accent/20 border-accent text-accent' : 'bg-dark border-gray-700 text-black hover:border-gray-500'}`}>
+                              {posSelectedProduct.baseSize || 'Regular'} <span className="block text-xs mt-1 opacity-70">₱{Number(posSelectedProduct.basePrice || posSelectedProduct.price || 0).toFixed(2)}</span>
+                            </button>
+                            {(posSelectedProduct.sizes || []).map((s, idx) => (
+                              <button key={idx} onClick={() => setPosActiveSize(idx)} className={`py-3 rounded-lg font-bold text-sm border transition ${posActiveSize === idx ? 'bg-accent/20 border-accent text-accent' : 'bg-dark border-gray-700 text-black hover:border-gray-500'}`}>
+                                {s.name} <span className="block text-xs mt-1 opacity-70">₱{Number(s.price).toFixed(2)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* --- EXTRAS --- */}
+                        {(posSelectedProduct.addOns?.length > 0) && (
+                          <div>
+                            <label className="text-xs font-bold text-gray-400 mb-2 block uppercase tracking-wider">Add Extras</label>
+                            <div className="space-y-3">
+                              {(posSelectedProduct.addOns || []).map((addon, idx) => {
+                                const isSelected = posActiveAddOns.some(a => a.name === addon.name);
+                                return (
+                                  <label key={idx} className={`flex items-center justify-between p-3 rounded-lg cursor-pointer border transition ${isSelected ? 'bg-accent/10 border-accent/50' : 'bg-dark border-gray-700 hover:bg-gray-800'}`}>
+                                    <div className="flex items-center gap-3">
+                                      <input type="checkbox" checked={isSelected} onChange={(e) => {
+                                        if (e.target.checked) setPosActiveAddOns([...posActiveAddOns, { name: addon.name, price: addon.price }]);
+                                        else setPosActiveAddOns(posActiveAddOns.filter(a => a.name !== addon.name));
+                                      }} className="w-5 h-5 accent-accent rounded" />
+                                      <span className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-black'}`}>{addon.name}</span>
+                                    </div>
+                                    <span className="text-xs text-accent font-black">+₱{addon.price}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex gap-3 mt-4 pt-4 border-t border-gray-800 shrink-0">
+                        <button onClick={() => setPosSelectedProduct(null)} className="flex-1 py-4 bg-dark border border-gray-700 text-black hover:text-accent font-bold rounded-xl uppercase tracking-wider text-xs transition">Cancel</button>
+                        <button onClick={confirmPosItem} className="flex-1 py-4 bg-accent text-dark hover:bg-white font-black rounded-xl uppercase tracking-wider text-xs shadow-lg shadow-accent/20 transition">Add to Cart</button>
                       </div>
                     </div>
-                  ) : order.isComplimentary && (
-                    <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
-                      <span className="font-bold uppercase tracking-wider text-accent">Complimentary Order:</span>
-                      <span className="font-bold text-white bg-black/50 px-2 py-1 rounded">{order.employeeName}</span>
-                    </div>
-                  )}
-
-                  {/* Financials Box */}
-                  <div className="bg-dark p-4 rounded-lg shadow-inner space-y-2 mb-4">
-                    <div className="flex justify-between text-xs text-gray-500 font-bold">
-                      <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* ========================================== */
+              /* 📋 STANDARD ORDERS GRID 📋                 */
+              /* ========================================== */
+              <>
+                <div className="flex justify-between items-center mb-6 bg-white p-3 rounded-xl border-2 border-accent shadow-sm relative flex-wrap gap-4">
+                  <div className="flex gap-2 overflow-x-auto">
+                    {['All', 'Kitchen', 'Bar'].map(dept => (
+                      <button 
+                        key={dept} 
+                        onClick={() => setDepartmentFilter(dept)} 
+                        className={`px-6 py-2 rounded-lg text-sm font-black uppercase tracking-widest transition whitespace-nowrap ${departmentFilter === dept ? 'bg-accent text-white shadow-md' : 'bg-transparent text-gray-500 hover:text-accent'}`}
+                      >
+                        {dept} View
+                      </button>
+                    ))}
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <button 
+                        onClick={() => setIsStatusMenuOpen(!isStatusMenuOpen)}
+                        className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-lg font-bold uppercase tracking-wider text-xs hover:bg-gray-800 transition shadow-md"
+                      >
+                        <Menu size={16} /> {orderFilter}
+                      </button>
+                      
+                      {isStatusMenuOpen && (
+                        <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
+                          {['All', 'Pending', 'Preparing', 'Completed', 'Cancelled'].map(filter => (
+                            <button 
+                              key={filter} 
+                              onClick={() => { setOrderFilter(filter); setIsStatusMenuOpen(false); }} 
+                              className={`px-4 py-3 text-left text-sm font-bold transition hover:bg-gray-100 ${orderFilter === filter ? 'bg-accent/10 text-accent border-l-4 border-accent' : 'text-gray-700 border-l-4 border-transparent'}`}
+                            >
+                              {filter}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     
-                    <div className="flex justify-between items-center text-xs text-gray-500 font-bold">
-                      <div className="flex items-center gap-2">
-                        <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
-                        {order.status === 'Pending' && (
-                          <button 
-                            onClick={() => toggleVat(order._id, order.vatRate)} 
-                            className="bg-accent hover:bg-accentShadow text-white px-2 py-0.5 rounded text-[9px] uppercase font-black transition shadow-sm"
-                          >
-                            {order.vatRate > 0 ? 'Off' : 'On'}
+                    <button 
+                      onClick={() => setIsPosOpen(true)}
+                      className="px-6 py-2 bg-dark text-accent border border-accent rounded-lg text-sm font-black uppercase tracking-widest hover:bg-accent hover:text-dark transition shadow-md whitespace-nowrap flex items-center gap-2"
+                    >
+                      <Plus size={16} /> Manual Order
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {displayOrders.length === 0 ? (
+                    <div className="col-span-full text-center py-12 text-gray-500 font-bold uppercase tracking-widest">No orders in {departmentFilter} queue.</div>
+                  ) : displayOrders.map(order => (
+                    <div key={order._id} className={`bg-accent rounded-xl p-5 border flex flex-col shadow-lg transition-all ${order.status === 'Completed' ? 'border-green-600 shadow-green-600/20' : order.status === 'Cancelled' || order.status === 'Voided' ? 'border-red-500 opacity-75' : 'border-accentShadow'}`}>
+                      
+                      <div className="flex justify-between items-center mb-4 border-b border-white/30 pb-3">
+                        <h2 className="text-lg font-black flex items-center gap-2 flex-wrap text-white">
+                          <span>{order.orderNumber}</span>
+                          {order.customerName && (
+                            <span className="text-sm bg-black text-white px-2 py-0.5 rounded shadow-sm">
+                              {order.customerName}
+                            </span>
+                          )}
+                          {order.table && <span className="text-sm font-bold text-white/90 uppercase tracking-wider">({order.table})</span>}
+                        </h2>
+                        
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => printOrderSlip(order)} className="p-1.5 bg-white text-accent rounded hover:bg-gray-100 transition shadow-sm" title="Print Slip">
+                            🖨️
+                          </button>
+                          <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-wider text-white ${order.status === 'Pending' ? 'bg-red-500 animate-pulse' : order.status === 'Preparing' ? 'bg-yellow-500 text-black' : order.status === 'Completed' ? 'bg-green-600' : 'bg-gray-800'}`}>
+                            {order.status}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-3 mb-4 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                        {['Kitchen', 'Bar'].map(dept => {
+                          const deptItems = order.items.map((item, idx) => ({ ...item, originalIdx: idx })).filter(i => (i.department || 'Kitchen') === dept);
+                          
+                          if (deptItems.length === 0) return null;
+                          if (departmentFilter !== 'All' && departmentFilter !== dept) return null;
+
+                          return (
+                            <div key={dept} className="bg-dark/30 rounded-lg p-2 border border-white/10">
+                              <h4 className="text-[10px] uppercase text-white font-bold mb-2 pb-1 border-b border-gray-700 tracking-widest">{dept} Station</h4>
+                              {deptItems.map(item => {
+                                const currentSelection = discountedItems[order._id];
+                                const isSelected = currentSelection ? currentSelection.includes(item.originalIdx) : true;
+                                
+                                return (
+                                  <div key={item.originalIdx} className="mb-2">
+                                    <div className="flex justify-between items-center text-sm">
+                                      <div className="flex items-center gap-2">
+                                        {order.status === 'Pending' && (
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={() => toggleItemDiscount(order._id, item.originalIdx)}
+                                            className="w-3 h-3 cursor-pointer rounded"
+                                          />
+                                        )}
+                                        <span className={`font-bold ${isSelected ? 'text-white' : 'text-white/50'}`}>
+                                          {item.quantity}x {item.name}
+                                        </span>
+                                      </div>
+                                      
+                                      {(order.status === 'Preparing' || order.status === 'Ready') ? (
+                                        // ... (Keep your existing Prep/Finish buttons here)
+                                        <div className="flex items-center gap-1">
+                                          {item.itemStatus === 'Received' && (
+                                            <button onClick={() => updateItemStatus(order, item.originalIdx, 'Preparing')} className="bg-yellow-500/20 text-yellow-500 border border-yellow-500/50 hover:bg-yellow-500 hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Prep</button>
+                                          )}
+                                          {item.itemStatus === 'Preparing' && (
+                                            <button onClick={() => updateItemStatus(order, item.originalIdx, 'Finished')} className="bg-accent/20 text-accent border border-accent/50 hover:bg-accent hover:text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition shadow-sm">Finish</button>
+                                          )}
+                                          {item.itemStatus === 'Finished' && (
+                                            <span className="text-green-500 text-[10px] font-black uppercase tracking-wider px-1">✔ Done</span>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center gap-2">
+                                          {/* --- NEW: Dynamic Isolated Item Discount Dropdown --- */}
+                                          {order.status === 'Pending' && (
+                                            <select 
+                                              className="bg-dark border border-gray-600 rounded text-[9px] text-black outline-none px-1 py-0.5 h-6 cursor-pointer max-w-[100px] truncate"
+                                              value={item.discountPercent || ''}
+                                              onChange={(e) => applyItemDiscount(order._id, item.originalIdx, e.target.value)}
+                                            >
+                                              <option value="">No Disc.</option>
+                                              {/* FIX: Pulls directly from your custom Discounts database! */}
+                                              {discounts.map(d => (
+                                                <option key={d._id} value={d.percentage}>
+                                                  {d.name} ({d.percentage}%)
+                                                </option>
+                                              ))}
+                                            </select>
+                                          )}
+                                          
+                                          {/* Price Display (Shows Strikethrough if discounted) */}
+                                          <div className="flex flex-col items-end">
+                                            {item.discountPercent > 0 ? (
+                                              <>
+                                                <span className="text-gray-500 line-through text-[10px] font-mono">
+                                                  P{((item.price + (item.selectedAddOns?.reduce((s, a) => s + Number(a.price), 0) || 0)) * item.quantity).toFixed(2)}
+                                                </span>
+                                                <span className="text-accent font-mono font-bold text-sm">
+                                                  P{(((item.price + (item.selectedAddOns?.reduce((s, a) => s + Number(a.price), 0) || 0)) * item.quantity) * (1 - item.discountPercent / 100)).toFixed(2)}
+                                                </span>
+                                              </>
+                                            ) : (
+                                              <span className="text-white font-mono font-bold text-sm">
+                                                P{((item.price + (item.selectedAddOns?.reduce((s, a) => s + Number(a.price), 0) || 0)) * item.quantity).toFixed(2)}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                    
+                                    {item.selectedAddOns && item.selectedAddOns.length > 0 && (
+                                      <div className="pl-6 mt-1 space-y-1">
+                                        {item.selectedAddOns.map((addon, aIdx) => (
+                                          <div key={aIdx} className="flex justify-between items-center text-[11px] text-black bg-black/20 px-2 py-1 rounded border border-white/5">
+                                            <span className="flex items-center gap-1">
+                                              <span className="text-accent text-[8px]">▶</span> {addon.name} <span className="text-[9px]">(+P{addon.price})</span>
+                                            </span>
+                                            {order.status === 'Pending' && (
+                                              <button 
+                                                onClick={() => removeAddOnFromOrder(order, item.originalIdx, aIdx)}
+                                                className="text-gray-500 hover:text-red-400 transition bg-dark p-1 rounded"
+                                              >
+                                                <X size={12} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex-1"></div>
+
+                      {order.status === 'Pending' ? (
+                        <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
+                          <span className="font-bold uppercase tracking-wider">Complimentary?</span>
+                          <div className="flex gap-1">
+                            <select className="bg-white text-black text-[10px] rounded p-1.5 border-none outline-none font-bold" onChange={(e) => setCompSelections({...compSelections, [order._id]: e.target.value})}>
+                              <option value="">Select Employee...</option>
+                              {users.map(u => <option key={u._id} value={u.name}>{u.name}</option>)}
+                            </select>
+                            <button onClick={() => applyComplimentary(order._id)} className="bg-white hover:bg-gray-200 text-accent px-2 rounded font-black transition">✔</button>
+                          </div>
+                        </div>
+                      ) : order.isComplimentary && (
+                        <div className="flex justify-between items-center text-xs text-white border-t border-white/30 pt-3 mb-3">
+                          <span className="font-bold uppercase tracking-wider text-accent">Complimentary Order:</span>
+                          <span className="font-bold text-white bg-black/50 px-2 py-1 rounded">{order.employeeName}</span>
+                        </div>
+                      )}
+
+                      <div className="bg-dark p-4 rounded-lg shadow-inner space-y-2 mb-4">
+                        <div className="flex justify-between text-xs text-gray-500 font-bold">
+                          <span>Gross Sales:</span><span>P{order.subtotal.toFixed(2)}</span>
+                        </div>
+                        
+                        <div className="flex justify-between items-center text-xs text-gray-500 font-bold">
+                          <div className="flex items-center gap-2">
+                            <span>VAT ({order.vatRate > 0 ? (order.vatRate * 100).toFixed(0) : 0}%):</span>
+                            {order.status === 'Pending' && (
+                              <button 
+                                onClick={() => toggleVat(order._id, order.vatRate)} 
+                                className="bg-accent hover:bg-accentShadow text-white px-2 py-0.5 rounded text-[9px] uppercase font-black transition shadow-sm"
+                              >
+                                {order.vatRate > 0 ? 'Off' : 'On'}
+                              </button>
+                            )}
+                          </div>
+                          <span>P{order.vatAmount.toFixed(2)}</span>
+                        </div>
+
+                        <div className="flex justify-between items-center text-xs text-gray-500 font-bold border-b border-gray-200 pb-2">
+                          <div className="flex items-center gap-2 w-full pr-2">
+                            <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
+                            {order.status === 'Pending' && (
+                              <div className="flex gap-1 items-center flex-1 justify-end">
+                                <select 
+                                  className="w-full max-w-[100px] bg-gray-100 border border-gray-300 rounded px-1 text-[10px] text-black outline-none h-6"
+                                  value={discountInputs[order._id] || ''}
+                                  onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
+                                >
+                                  <option value="">Select...</option>
+                                  <option value="custom">Manual %</option>
+                                  {discounts.map(d => <option key={d._id} value={d.percentage}>{d.name} ({d.percentage}%)</option>)}
+                                </select>
+                                
+                                {discountInputs[order._id] === 'custom' && (
+                                  <input 
+                                    type="number" 
+                                    placeholder="%" 
+                                    className="w-10 bg-gray-100 border border-gray-300 rounded px-1 text-center text-black outline-none h-6"
+                                    onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} 
+                                  />
+                                )}
+                                
+                                <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accentShadow text-white px-2 rounded font-black transition h-6">✔</button>
+                                {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-50 text-red-500 px-2 rounded font-black h-6 border border-red-500 shadow-sm">X</button>}
+                              </div>
+                            )}
+                          </div>
+                          <span className="text-red-500 whitespace-nowrap font-mono">-P{(order.discount || 0).toFixed(2)}</span>
+                        </div>
+                        
+                        {order.discountType && order.discountType !== 'None' && (
+                           <div className="flex justify-between text-[9px] text-gray-400 font-black uppercase tracking-widest pt-1">
+                             <span>Type:</span>
+                             <span className={order.discountType === 'SC/PWD' ? 'text-accent' : 'text-gray-500'}>{order.discountType}</span>
+                           </div>
+                        )}
+
+                        <div className="flex justify-between font-black text-lg pt-1 text-black">
+                          <span>Total:</span><span className="text-accent tracking-wider">P{order.total.toFixed(2)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2 mt-auto">
+                        {order.status === 'Pending' && departmentFilter === 'All' && (() => {
+                          const isDelivery = ['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(order.table);
+                          const displayPayment = isDelivery ? order.table : (paymentSelections[order._id] || order.paymentMethod || 'Cash');
+
+                          return (
+                            <div className="flex flex-col w-full gap-2">
+                              {/* FIX: Smart dropdown that auto-locks for delivery orders! */}
+                              <select 
+                                 value={displayPayment} 
+                                 disabled={isDelivery}
+                                 onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
+                                 className={`w-full border-2 rounded-lg p-2.5 text-sm font-bold outline-none shadow-sm transition ${isDelivery ? 'bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed' : 'bg-white text-black border-transparent focus:border-accent'}`}
+                              >
+                                <optgroup label="In-Store Payments">
+                                  <option value="Cash">💰 Cash</option>
+                                  <option value="Bank Transfer">🏦 Bank Transfer</option>
+                                </optgroup>
+                                <optgroup label="E-Wallets">
+                                  <option value="GCash">📱 GCash</option>
+                                  <option value="Maya">📱 Maya</option>
+                                  <option value="Maribank">📱 Maribank / Seabank</option>
+                                  <option value="Other E-Wallet">📱 Other E-Wallet</option>
+                                </optgroup>
+                                <optgroup label="Delivery Partners">
+                                  <option value="Grab Delivery">🛵 GrabFood</option>
+                                  <option value="Foodpanda">🐼 Foodpanda</option>
+                                  <option value="Manual Delivery">📦 Manual/Direct</option>
+                                </optgroup>
+                              </select>
+                              
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={() => {
+                                    // Bulletproof guarantee: Forces the backend to receive the delivery type as the payment method
+                                    if (isDelivery && paymentSelections[order._id] !== order.table) {
+                                      setPaymentSelections(prev => ({ ...prev, [order._id]: order.table }));
+                                    }
+                                    setTimeout(() => updateStatus(order._id, 'Preparing'), 0);
+                                  }} 
+                                  className="flex-1 bg-white text-accent py-3 rounded-lg hover:bg-gray-100 font-black text-xs uppercase tracking-widest transition shadow-md"
+                                >
+                                  Pay & Send
+                                </button>
+                                <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        
+                        {order.status === 'Preparing' && (
+                          <div className="flex gap-2 mt-2">
+                            {order.items.every(i => i.itemStatus === 'Finished') ? (
+                              departmentFilter === 'All' ? (
+                                <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
+                                  Mark Ready to Serve
+                                </button>
+                              ) : (
+                                <div className="flex-1 flex items-center justify-center bg-green-500/20 text-green-400 border border-green-500/50 rounded-lg text-[10px] font-bold uppercase tracking-widest py-3">
+                                  All Items Finished
+                                </div>
+                              )
+                            ) : (
+                              <div className="flex-1 flex items-center justify-center bg-dark text-gray-500 border border-gray-700 rounded-lg text-[10px] font-bold uppercase tracking-widest py-3">
+                                Waiting on Kitchen/Bar...
+                              </div>
+                            )}
+                            
+                            {departmentFilter === 'All' && (
+                              <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                            )}
+                          </div>
+                        )}
+
+                        {order.status === 'Ready' && departmentFilter === 'All' && (
+                          <div className="flex gap-2">
+                            <button onClick={() => updateStatus(order._id, 'Completed')} className="flex-1 bg-green-500 text-white py-3 rounded-lg hover:bg-green-600 font-black uppercase tracking-widest text-xs shadow-md transition">
+                              Give to Cust.
+                            </button>
+                            <button onClick={() => updateStatus(order._id, 'Cancelled')} className="flex-1 bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
+                          </div>
+                        )}
+
+                        {order.status === 'Completed' && departmentFilter === 'All' && (
+                          <button onClick={() => handleVoidOrder(order._id)} className="w-full bg-white border border-red-500 text-red-500 py-2.5 rounded-lg hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition">
+                            Void / Refund Order
                           </button>
                         )}
                       </div>
-                      <span>P{order.vatAmount.toFixed(2)}</span>
                     </div>
-
-                    <div className="flex justify-between items-center text-xs text-gray-500 font-bold border-b border-gray-200 pb-2">
-                      <div className="flex items-center gap-2 w-full pr-2">
-                        <span className="whitespace-nowrap">Discount ({order.discountPercent || 0}%):</span>
-                        {order.status === 'Pending' && (
-                          <div className="flex gap-1 items-center flex-1 justify-end">
-                            <select 
-                              className="w-full max-w-[100px] bg-gray-100 border border-gray-300 rounded px-1 text-[10px] text-black outline-none h-6"
-                              value={discountInputs[order._id] || ''}
-                              onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))}
-                            >
-                              <option value="">Select...</option>
-                              <option value="custom">Manual %</option>
-                              {discounts.map(d => <option key={d._id} value={d.percentage}>{d.name} ({d.percentage}%)</option>)}
-                            </select>
-                            
-                            {discountInputs[order._id] === 'custom' && (
-                              <input 
-                                type="number" 
-                                placeholder="%" 
-                                className="w-10 bg-gray-100 border border-gray-300 rounded px-1 text-center text-black outline-none h-6"
-                                onChange={(e) => setDiscountInputs(prev => ({ ...prev, [order._id]: e.target.value }))} 
-                              />
-                            )}
-                            
-                            <button onClick={() => applyDiscount(order._id)} className="bg-accent hover:bg-accentShadow text-white px-2 rounded font-black transition h-6">✔</button>
-                            {order.discountPercent > 0 && <button onClick={() => applyDiscount(order._id, true)} className="bg-red-500 text-white px-2 rounded font-black h-6 shadow-sm">X</button>}
-                          </div>
-                        )}
-                      </div>
-                      <span className="text-red-500 whitespace-nowrap font-mono">-P{(order.discount || 0).toFixed(2)}</span>
-                    </div>
-                    
-                    {order.discountType && order.discountType !== 'None' && (
-                       <div className="flex justify-between text-[9px] text-gray-400 font-black uppercase tracking-widest pt-1">
-                         <span>Type:</span>
-                         <span className={order.discountType === 'SC/PWD' ? 'text-accent' : 'text-gray-500'}>{order.discountType}</span>
-                       </div>
-                    )}
-
-                    <div className="flex justify-between font-black text-lg pt-1 text-black">
-                      <span>Total:</span><span className="text-accent tracking-wider">P{order.total.toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  {/* Buttons / Actions */}
-                  {/* Buttons / Actions */}
-                  <div className="flex flex-col gap-2 mt-auto">
-                    
-                    {/* PENDING: Only Cashier can Pay, Send, or Drop */}
-                    {order.status === 'Pending' && departmentFilter === 'All' && (
-                      <div className="flex flex-col w-full gap-2">
-                        <select 
-                           value={paymentSelections[order._id] || 'Cash'} 
-                           onChange={(e) => setPaymentSelections(prev => ({ ...prev, [order._id]: e.target.value }))}
-                          className="w-full bg-white text-black border-2 border-transparent rounded-lg p-2.5 text-sm font-bold outline-none focus:border-accent shadow-sm"
-                        >
-                          <option value="Cash">💰 Paid via Cash</option>
-                          <option value="E-Wallet">📱 Paid via E-Wallet</option>
-                          <option value="Bank Transfer">🏦 Paid via Bank Transfer</option>
-                        </select>
-                        <div className="flex gap-2">
-                          <button onClick={() => updateStatus(order._id, 'Preparing')} className="flex-1 bg-white text-accent py-3 rounded-lg hover:bg-gray-100 font-black text-xs uppercase tracking-widest transition shadow-md">Pay & Send</button>
-                          <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* PREPARING: Kitchen/Bar only check off items. Cashier handles Ready and Drop. */}
-                    {order.status === 'Preparing' && (
-                      <div className="flex gap-2 mt-2">
-                        {order.items.every(i => i.itemStatus === 'Finished') ? (
-                          departmentFilter === 'All' ? (
-                            <button onClick={() => updateStatus(order._id, 'Ready')} className="flex-1 bg-yellow-500 text-black py-3 rounded-lg hover:bg-yellow-400 font-black uppercase tracking-widest text-xs shadow-md transition">
-                              Mark Ready to Serve
-                            </button>
-                          ) : (
-                            <div className="flex-1 flex items-center justify-center bg-green-500/20 text-green-400 border border-green-500/50 rounded-lg text-[10px] font-bold uppercase tracking-widest py-3">
-                              All Items Finished
-                            </div>
-                          )
-                        ) : (
-                          <div className="flex-1 flex items-center justify-center bg-dark text-gray-500 border border-gray-700 rounded-lg text-[10px] font-bold uppercase tracking-widest py-3">
-                            Waiting on Kitchen/Bar...
-                          </div>
-                        )}
-                        
-                        {/* Only All View gets the Drop button */}
-                        {departmentFilter === 'All' && (
-                          <button onClick={() => updateStatus(order._id, 'Cancelled')} className="bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
-                        )}
-                      </div>
-                    )}
-
-                    {/* READY: Only Cashier handles Complete and Drop */}
-                    {order.status === 'Ready' && departmentFilter === 'All' && (
-                      <div className="flex gap-2">
-                        <button onClick={() => updateStatus(order._id, 'Completed')} className="flex-1 bg-green-500 text-white py-3 rounded-lg hover:bg-green-600 font-black uppercase tracking-widest text-xs shadow-md transition">
-                          Give to Cust.
-                        </button>
-                        <button onClick={() => updateStatus(order._id, 'Cancelled')} className="flex-1 bg-red-500 text-white py-3 px-4 rounded-lg hover:bg-red-600 font-black text-xs transition uppercase shadow-md">Drop</button>
-                      </div>
-                    )}
-
-                    {/* COMPLETED: Only Cashier handles Void */}
-                    {order.status === 'Completed' && departmentFilter === 'All' && (
-                      <button onClick={() => handleVoidOrder(order._id)} className="w-full bg-white border border-red-500 text-red-500 py-2.5 rounded-lg hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition">
-                        Void / Refund Order
-                      </button>
-                    )}
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </>
+            )}
           </div>
         );
       })()}
@@ -1950,12 +2371,12 @@ const submitPhysicalCounts = async () => {
                                     <span className="font-bold text-sm text-accent">{order.orderNumber}</span>
                                     <div className="flex items-center gap-2">
                                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${order.status === 'Cancelled' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}`}>{order.status}</span>
-                                      <span className="text-xs font-bold text-gray-300">P{order.total.toFixed(2)}</span>
+                                      <span className="text-xs font-bold text-white">P{order.total.toFixed(2)}</span>
                                     </div>
                                   </div>
                                   <div className="space-y-1">
                                     {order.items.map((item, idx) => (
-                                      <div key={idx} className="flex justify-between text-[11px] text-gray-400">
+                                      <div key={idx} className="flex justify-between text-[11px] text-white">
                                         <span>{item.quantity}x {item.name}</span><span>P{(item.price * item.quantity).toFixed(2)}</span>
                                       </div>
                                     ))}
@@ -2031,7 +2452,7 @@ const submitPhysicalCounts = async () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {inventory.map(item => (
+                    {currentInventory.map(item => (
                       <tr key={item._id} className="border-b border-gray-800/50 hover:bg-dark/30 transition">
                         <td className="py-3 font-bold text-dark">{item.itemName}</td>
                         <td className={`py-3 text-right font-bold ${item.stockQty < 10 ? 'text-red-400' : 'text-dark'}`}>{item.stockQty.toLocaleString()}</td>
@@ -2046,6 +2467,28 @@ const submitPhysicalCounts = async () => {
                     ))}
                   </tbody>
                 </table>
+                {/* --- INVENTORY PAGINATION CONTROLS --- */}
+              {totalInvPages > 1 && (
+                <div className="flex justify-between items-center bg-dark p-3 rounded-lg border border-gray-800 mt-4">
+                  <button 
+                    onClick={() => setInvPage(prev => Math.max(prev - 1, 1))}
+                    disabled={invPage === 1}
+                    className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${invPage === 1 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                  >
+                    ◀ Prev
+                  </button>
+                  <span className="text-gray-400 text-xs font-bold tracking-widest">
+                    PAGE <span className="text-accent text-sm">{invPage}</span> OF {totalInvPages}
+                  </span>
+                  <button 
+                    onClick={() => setInvPage(prev => Math.min(prev + 1, totalInvPages))}
+                    disabled={invPage === totalInvPages}
+                    className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${invPage === totalInvPages ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                  >
+                    Next ▶
+                  </button>
+                </div>
+              )}
               </div>
             )}
 
@@ -2106,7 +2549,7 @@ const submitPhysicalCounts = async () => {
                       </tr>
                     </thead>
                     <tbody className={isLocked ? 'opacity-50 pointer-events-none' : ''}>
-                      {inventory.map(item => {
+                      {currentInventory.map(item => {
                         const actualInput = physicalCounts[item._id];
                         const hasInput = actualInput !== undefined && actualInput !== '';
                         const variance = hasInput ? Number(actualInput) - item.stockQty : 0;
@@ -2177,6 +2620,28 @@ const submitPhysicalCounts = async () => {
                       })}
                     </tbody>
                   </table>
+                  {/* --- INVENTORY PAGINATION CONTROLS --- */}
+                  {totalInvPages > 1 && (
+                    <div className="flex justify-between items-center bg-dark p-3 rounded-lg border border-gray-800 mt-4">
+                      <button 
+                        onClick={() => setInvPage(prev => Math.max(prev - 1, 1))}
+                        disabled={invPage === 1}
+                        className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${invPage === 1 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                      >
+                        ◀ Prev
+                      </button>
+                      <span className="text-gray-400 text-xs font-bold tracking-widest">
+                        PAGE <span className="text-accent text-sm">{invPage}</span> OF {totalInvPages}
+                      </span>
+                      <button 
+                        onClick={() => setInvPage(prev => Math.min(prev + 1, totalInvPages))}
+                        disabled={invPage === totalInvPages}
+                        className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${invPage === totalInvPages ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                      >
+                        Next ▶
+                      </button>
+                    </div>
+                  )}
 
                   {/* SUMMARY FOOTER */}
                   {!isLocked && (
@@ -2394,7 +2859,7 @@ const submitPhysicalCounts = async () => {
               </button>
             </div>
             <div className="space-y-4">
-              {journalEntries.map(entry => (
+              {currentEntries.map(entry => (
                 <div key={entry._id} className="bg-dark border border-gray-700 rounded-lg p-4">
                   <div className="flex justify-between items-center mb-3 border-b border-gray-800 pb-2">
                     <span className="text-accent font-bold">{entry.reference}</span>
@@ -2415,6 +2880,28 @@ const submitPhysicalCounts = async () => {
                   </table>
                 </div>
               ))}
+              {/* --- ACCOUNTING PAGINATION CONTROLS --- */}
+              {totalAccountingPages > 1 && (
+                <div className="flex justify-between items-center bg-dark p-3 rounded-lg border border-gray-800 mt-4">
+                  <button 
+                    onClick={() => setAccountingPage(prev => Math.max(prev - 1, 1))}
+                    disabled={accountingPage === 1}
+                    className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${accountingPage === 1 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                  >
+                    ◀ Prev
+                  </button>
+                  <span className="text-gray-400 text-xs font-bold tracking-widest">
+                    PAGE <span className="text-accent text-sm">{accountingPage}</span> OF {totalAccountingPages}
+                  </span>
+                  <button 
+                    onClick={() => setAccountingPage(prev => Math.min(prev + 1, totalAccountingPages))}
+                    disabled={accountingPage === totalAccountingPages}
+                    className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${accountingPage === totalAccountingPages ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                  >
+                    Next ▶
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2443,7 +2930,7 @@ const submitPhysicalCounts = async () => {
                 <tbody>
                   {products.length === 0 ? (
                     <tr><td colSpan="4" className="py-4 text-center text-gray-500">No products found.</td></tr>
-                  ) : products.flatMap(p => {
+                  ) : currentPricingProducts.flatMap(p => {
                     // We now track the exact productId and sizeIndex so the backend knows what to update
                     const rows = [{ id: `${p._id}-base`, productId: p._id, sizeIndex: null, name: p.name, cat: p.category, size: p.baseSize || 'Regular', price: p.basePrice || p.price || 0 }];
                     if (p.sizes) {
@@ -2489,6 +2976,28 @@ const submitPhysicalCounts = async () => {
                 </tbody>
               </table>
             </div>
+            {/* --- PRICING PAGINATION CONTROLS --- */}
+            {totalPricingPages > 1 && (
+              <div className="flex justify-between items-center bg-dark p-3 rounded-lg border border-gray-800 mt-4 shrink-0">
+                <button 
+                  onClick={() => setPricingPage(prev => Math.max(prev - 1, 1))}
+                  disabled={pricingPage === 1}
+                  className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${pricingPage === 1 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                >
+                  ◀ Prev
+                </button>
+                <span className="text-gray-400 text-xs font-bold tracking-widest">
+                  PAGE <span className="text-accent text-sm">{pricingPage}</span> OF {totalPricingPages}
+                </span>
+                <button 
+                  onClick={() => setPricingPage(prev => Math.min(prev + 1, totalPricingPages))}
+                  disabled={pricingPage === totalPricingPages}
+                  className={`px-4 py-1.5 rounded font-bold uppercase tracking-wider text-[10px] transition ${pricingPage === totalPricingPages ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                >
+                  Next ▶
+                </button>
+              </div>
+            )}
           </div>
 
           {/* RIGHT COLUMN: Discount CRUD */}
@@ -2554,40 +3063,48 @@ const submitPhysicalCounts = async () => {
           </div>
         </div>
       )}
-      {/* --- MENU SETUP (PRODUCTS/CATEGORIES) --- */}
+{/* --- MENU SETUP (PRODUCTS/CATEGORIES) --- */}
       {activeTab === 'products' && (
-        <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-180px)]">
+        // FIX 1: Changed h-fixed to h-auto on mobile, and added gap-6
+        <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 h-auto lg:h-[calc(100vh-180px)]">
           
           {/* LEFT COLUMN: Menu Items, Categories, and Add-Ons */}
-          <div className="flex-1 bg-white border border-gray-200 shadow-md rounded-xl p-6 overflow-y-auto custom-scrollbar">
+          {/* FIX 2: Added min-h-[500px] so it doesn't get crushed on mobile */}
+          <div className="flex-1 bg-white border border-gray-200 shadow-md rounded-xl p-4 sm:p-6 overflow-y-auto custom-scrollbar min-h-[500px] lg:min-h-0">
             
             {/* 1. Menu Items List */}
             <h3 className="text-xl font-bold mb-4 text-gray-900 border-b border-gray-200 pb-2">Menu Items</h3>
             <div className="space-y-3">
-              {products.map(p => (
-                <div key={p._id} className="flex gap-4 p-4 border border-gray-200 rounded-xl bg-gray-50 items-center shadow-sm">
-                  {p.image ? (
-                    <img src={p.image} alt={p.name} className="w-16 h-16 object-cover rounded-lg shadow-sm border border-gray-200" />
-                  ) : (
-                    <div className="w-16 h-16 bg-gray-200 rounded-lg border border-gray-300 flex items-center justify-center text-xs text-gray-500 font-bold">No Img</div>
-                  )}
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-gray-900">{p.name} <span className="text-xs text-accent ml-2">({p.category})</span></h4>
-                      {(() => {
-                        const est = getEstimatedStock(p.baseRecipe);
-                        if (est === null) return null;
-                        return (
-                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-red-100 text-red-600' : est <= 5 ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>
-                            {est <= 0 ? 'Out of Stock' : `Est: ${est} left`}
-                          </span>
-                        );
-                      })()}
+              {currentProducts.map(p => (
+                <div key={p._id} className="flex flex-col sm:flex-row gap-4 p-4 border border-gray-200 rounded-xl bg-gray-50 items-start sm:items-center shadow-sm">
+                  
+                  {/* Top section on mobile: Image + Text */}
+                  <div className="flex gap-4 flex-1 w-full">
+                    {p.image ? (
+                      <img src={p.image} alt={p.name} className="w-16 h-16 object-cover rounded-lg shadow-sm border border-gray-200 shrink-0" />
+                    ) : (
+                      <div className="w-16 h-16 bg-gray-200 rounded-lg border border-gray-300 flex items-center justify-center text-xs text-gray-500 font-bold shrink-0">No Img</div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-gray-900 truncate w-full sm:w-auto">{p.name} <span className="text-xs text-accent ml-1">({p.category})</span></h4>
+                        {(() => {
+                          const est = getEstimatedStock(p.baseRecipe);
+                          if (est === null) return null;
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${est <= 0 ? 'bg-red-100 text-red-600' : est <= 5 ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'}`}>
+                              {est <= 0 ? 'Out of Stock' : `Est: ${est} left`}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      {p.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{p.description}</p>}
+                      <p className="text-sm text-gray-700 font-bold mt-1">P{Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-500 font-normal">({p.baseSize})</span>} {p.sizes?.length > 0 && <span className="text-accent text-xs ml-1">(+ {p.sizes.length} sizes)</span>}</p>
                     </div>
-                    {p.description && <p className="text-xs text-gray-500 mt-1 line-clamp-1">{p.description}</p>}
-                    <p className="text-sm text-gray-700 font-bold mt-1">P{Number(p.basePrice || p.price || 0).toFixed(2)} {p.baseSize && <span className="text-xs text-gray-500 font-normal">({p.baseSize})</span>} {p.sizes?.length > 0 && <span className="text-accent text-xs ml-1">(+ {p.sizes.length} sizes)</span>}</p>
                   </div>
-                  <div className="flex flex-col gap-2">
+
+                  {/* Edit button: Full width on mobile, auto width on desktop */}
+                  <div className="w-full sm:w-auto mt-2 sm:mt-0 shrink-0">
                     <button 
                       onClick={() => { 
                         setEditingProduct(p); 
@@ -2597,13 +3114,37 @@ const submitPhysicalCounts = async () => {
                           sizes: p.sizes || [], image: p.image || '', baseRecipe: p.baseRecipe || [], addOns: p.addOns || []
                         }); 
                       }} 
-                      className="px-4 py-2 bg-gray-200 text-gray-900 rounded-lg text-sm font-bold hover:bg-gray-300 transition flex items-center gap-2"
+                      className="w-full sm:w-auto px-4 py-3 sm:py-2 bg-gray-200 text-gray-900 rounded-lg text-sm font-bold hover:bg-gray-300 transition flex items-center justify-center gap-2"
                     >
                       <Edit size={14} /> Edit
                     </button>
                   </div>
                 </div>
               ))}
+              {/* --- PAGINATION CONTROLS --- */}
+            {totalPages > 1 && (
+              <div className="flex justify-between items-center bg-dark p-4 rounded-xl border border-gray-800 mt-6 shrink-0">
+                <button 
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className={`px-6 py-2 rounded-lg font-bold uppercase tracking-wider text-xs transition ${currentPage === 1 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                >
+                  ◀ Previous
+                </button>
+                
+                <span className="text-gray-400 text-sm font-bold tracking-widest">
+                  PAGE <span className="text-accent text-lg">{currentPage}</span> OF {totalPages}
+                </span>
+                
+                <button 
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className={`px-6 py-2 rounded-lg font-bold uppercase tracking-wider text-xs transition ${currentPage === totalPages ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-surface border border-gray-700 text-white hover:border-accent hover:text-accent'}`}
+                >
+                  Next ▶
+                </button>
+              </div>
+            )}
             </div>
             
             {/* 2. Manage Categories */}
@@ -2699,7 +3240,8 @@ const submitPhysicalCounts = async () => {
           </div>
 
           {/* RIGHT COLUMN: Add Product Form */}
-          <div className="w-full lg:w-96 bg-white border border-gray-200 rounded-xl p-6 flex flex-col h-full overflow-hidden shadow-md">
+          {/* FIX 3: Added min-h-[600px] on mobile so the form has room to breathe */}
+          <div className="w-full lg:w-96 bg-white border border-gray-200 rounded-xl p-4 sm:p-6 flex flex-col min-h-[600px] lg:min-h-0 lg:h-full overflow-hidden shadow-md">
             <h3 className="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2 shrink-0">
               {editingProduct ? 'Edit Product' : 'Add Product'}
             </h3>
@@ -2873,6 +3415,7 @@ const submitPhysicalCounts = async () => {
           </div>
         </div>
       )}
+      
       {/* --- STOCK MOVEMENT HISTORY MODAL --- */}
       {historyModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-fade-in">
