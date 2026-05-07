@@ -721,41 +721,147 @@ const updateStatus = async (orderId, newStatus) => {
   // --- 🖨️ THERMAL RECEIPT / ORDER SLIP PRINTER ---
   const printOrderSlip = (order) => {
     const printWindow = window.open('', '_blank', 'width=400,height=600');
-    printWindow.document.write(`
+    if (!printWindow) return alert("Please allow popups to print receipts.");
+
+    // Format the items safely
+    const itemsHtml = order.items.map(item => {
+      const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
+      const lineTotal = (item.price + addOnTotal) * item.quantity;
+      
+      return `
+        <div class="item-row">
+          <div class="item-name">${item.quantity}x ${item.name}</div>
+          <div class="item-price">₱${lineTotal.toFixed(2)}</div>
+        </div>
+        ${(item.selectedAddOns || []).length > 0 ? 
+          item.selectedAddOns.map(addon => `
+            <div class="addon-row">
+              <span class="addon-name">+ ${addon.name}</span>
+              <span class="addon-price">₱${addon.price.toFixed(2)}</span>
+            </div>
+          `).join('') : ''
+        }
+      `;
+    }).join('');
+
+    const html = `
       <html>
         <head>
-          <title>Order Slip - ${order.orderNumber}</title>
+          <title>Receipt - ${order.orderNumber}</title>
           <style>
-            body { font-family: monospace; padding: 10px; color: #000; }
+            /* 🖨️ STRICT THERMAL PRINTER CSS 🖨️ */
+            @page {
+              margin: 0 !important;
+            }
+            body {
+              font-family: 'Courier New', Courier, monospace; 
+              width: 48mm; /* FIX: The actual ink-printable area of 58mm paper */
+              margin: 0 auto;
+              padding: 0;
+              font-size: 11px; /* Slightly smaller to prevent text wrapping */
+              color: #000;
+            }
+            body {
+              font-family: 'Courier New', Courier, monospace; /* Best readability for thermal dots */
+              width: 58mm;
+              margin: 0;
+              padding: 2mm 4mm; /* Tight padding to maximize paper usage */
+              padding-bottom: 15mm; /* Extra space at bottom so the cutter doesn't slice the text */
+              font-size: 12px;
+              color: #000;
+              box-sizing: border-box;
+            }
+            
+            /* --- Utility Classes --- */
             .center { text-align: center; }
             .bold { font-weight: bold; }
-            .flex { display: flex; justify-content: space-between; }
-            hr { border-top: 1px dashed #000; margin: 10px 0; }
+            .divider { border-bottom: 1px dashed #000; margin: 6px 0; }
+            
+            /* --- Header --- */
+            .header h2 { margin: 0; font-size: 16px; font-weight: 900; letter-spacing: 1px; }
+            .header p { margin: 2px 0; font-size: 10px; }
+            
+            /* --- Order Info --- */
+            .order-info { margin: 10px 0; font-size: 11px; }
+            .order-info p { margin: 2px 0; }
+            
+            /* --- Items --- */
+            .item-row { display: flex; justify-content: space-between; margin-top: 6px; align-items: flex-start; }
+            .item-name { width: 70%; text-transform: uppercase; font-weight: bold; line-height: 1.2; }
+            .item-price { width: 30%; text-align: right; }
+            .addon-row { display: flex; justify-content: space-between; font-size: 10px; color: #333; padding-left: 10px; margin-top: 1px; }
+            
+            /* --- Totals --- */
+            .totals { margin-top: 10px; font-size: 11px; }
+            .totals-row { display: flex; justify-content: space-between; margin: 3px 0; }
+            .grand-total { font-size: 15px; font-weight: bold; padding: 6px 0; border-top: 1.5px dashed #000; border-bottom: 1.5px dashed #000; margin-top: 6px; }
+            
+            /* --- Footer --- */
+            .footer { text-align: center; margin-top: 15px; font-size: 10px; }
           </style>
         </head>
         <body>
-          <h2 class="center mb-0">KASA LOKAL</h2>
-          <p class="center mt-0 text-sm">Order: ${order.orderNumber}</p>
-          <hr/>
-          <p>Table: <b>${order.table}</b><br/>Name: <b>${order.customerName || 'Guest'}</b></p>
-          ${order.isComplimentary ? `<p><b>COMPLIMENTARY:</b><br/>Approved for: ${order.employeeName}</p>` : ''}
-          <hr/>
-          ${order.items.map(i => `
-            <div class="flex">
-              <span>${i.quantity}x ${i.name}</span>
-              <span>P${(i.price * i.quantity).toFixed(2)}</span>
+          <div class="header center">
+            <h2>KASA LOKAL</h2>
+            <p>Angeles City, Pampanga</p>
+            <div class="divider"></div>
+          </div>
+          
+          <div class="order-info">
+            <p><span class="bold">Order #:</span> ${order.orderNumber}</p>
+            <p><span class="bold">Date:</span> ${new Date(order.createdAt || Date.now()).toLocaleString('en-US', { timeZone: 'Asia/Manila', dateStyle: 'short', timeStyle: 'short' })}</p>
+            <p><span class="bold">Type:</span> ${order.table}</p>
+            ${order.customerName ? `<p><span class="bold">Customer:</span> ${order.customerName}</p>` : ''}
+            <p><span class="bold">Cashier:</span> ${order.cashier || 'System'}</p>
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div class="items">
+            ${itemsHtml}
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div class="totals">
+            <div class="totals-row">
+              <span>Subtotal:</span>
+              <span>₱${order.subtotal?.toFixed(2) || '0.00'}</span>
             </div>
-          `).join('')}
-          <hr/>
-          <div class="flex bold"><span>Subtotal:</span><span>P${order.subtotal.toFixed(2)}</span></div>
-          <div class="flex bold"><span>VAT:</span><span>P${order.vatAmount.toFixed(2)}</span></div>
-          <div class="flex bold"><span>Discount:</span><span>-P${(order.discount || 0).toFixed(2)}</span></div>
-          <h3 class="flex bold" style="font-size: 18px;"><span>TOTAL:</span><span>P${order.total.toFixed(2)}</span></h3>
-          <p class="center" style="margin-top: 20px;">*** END OF TICKET ***</p>
-          <script>window.onload = function() { window.print(); window.close(); }</script>
+            ${order.discount > 0 ? `
+              <div class="totals-row">
+                <span>Discount (${order.discountType || 'Manual'}):</span>
+                <span>-₱${order.discount.toFixed(2)}</span>
+              </div>
+            ` : ''}
+            <div class="totals-row grand-total">
+              <span>TOTAL:</span>
+              <span>₱${order.total?.toFixed(2) || '0.00'}</span>
+            </div>
+            <div class="totals-row">
+              <span>Payment:</span>
+              <span>${order.paymentMethod || 'Cash'}</span>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <p>Thank you for supporting Kasa Lokal!</p>
+          </div>
+          
+          <script>
+            // Give the browser a split second to apply the 58mm CSS before triggering the print dialogue
+            window.onload = () => {
+              setTimeout(() => {
+                window.print();
+                window.close();
+              }, 250);
+            };
+          </script>
         </body>
       </html>
-    `);
+    `;
+
+    printWindow.document.write(html);
     printWindow.document.close();
   };
 
