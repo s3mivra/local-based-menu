@@ -604,7 +604,7 @@ export default function CustomerMenu() {
                       <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none z-0 rounded-xl"></div>
                       {p.image ? (
                         <div className="w-full h-40 relative z-20 shrink-0 flex items-center justify-center p-2 mt-2">
-                          <img src={p.image} alt={p.name} className="w-full h-full object-contain transition-all duration-500 group-hover:scale-[1.15] group-hover:-translate-y-3 drop-shadow-2xl" />
+                          <img src={p.image} alt={p.name} loading="lazy" className="w-full h-full object-contain transition-all duration-500 group-hover:scale-[1.15] group-hover:-translate-y-3 drop-shadow-2xl" />
                         </div>
                       ) : (
                         <div className="w-full h-40 relative z-10 shrink-0 flex items-center justify-center text-gray-600 text-xs font-bold uppercase tracking-widest mt-2">No Image</div>

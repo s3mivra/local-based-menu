@@ -5,8 +5,8 @@ import jsPDF from 'jspdf';
 import QRCode from 'react-qr-code';
 import autoTable from 'jspdf-autotable';
 //const API_URL = 'https://local-based-menu.onrender.com';
-const API_URL = 'https://local-based-menu-production.up.railway.app';
-//const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
+//const API_URL = 'https://local-based-menu-production.up.railway.app';
+const API_URL = 'http://192.168.100.2:5002'; // Change back to Render URL when deploying!
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
 const socket = io(API_URL, {
@@ -1671,7 +1671,10 @@ const submitPhysicalCounts = async () => {
             
             {/* FIX: Added shrink-0, p-4, and removed overflow-hidden so the QR never gets squished! */}
             <div className="bg-white rounded-xl shadow-inner w-full flex justify-center items-center p-4 shrink-0 min-h-[250px]">
-              <QRCode value={`${FRONTEND_URL}/?session=${qrSessionId}&table=${autoTableId}`} size={200} />
+              <QRCode 
+                value={`${FRONTEND_URL}/menu/${autoTableId}?session=${qrSessionId}`} 
+                size={200} 
+              />
             </div>
             
             <button 

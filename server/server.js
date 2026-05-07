@@ -6,11 +6,14 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import compression from 'compression'; // 1. Add this import
 
 // ... (imports remain the same)
 
 const app = express();
 const server = http.createServer(app);
+
+app.use(compression());
 
 // --- UPDATED CORS CONFIG ---
 const allowedOrigins = [
@@ -519,7 +522,7 @@ app.get('/api/inventory/history', async (req, res) => {
 });
 // Categories
 app.get('/api/categories', async (req, res) => {
-  const categories = await Category.find();
+  const categories = await Category.find().lean();
   res.json({ success: true, categories });
 });
 
@@ -606,7 +609,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
 
 // Products
 app.get('/api/products', async (req, res) => {
-  const products = await Product.find();
+  const products = await Product.find().lean(); // Lightning fast, raw JSON
   res.json({ success: true, products });
 });
 
@@ -663,7 +666,7 @@ app.delete('/api/products/:id', verifyToken, async (req, res) => {
 
 // Orders
 app.get('/api/orders', verifyToken, async (req, res) => {
-  const orders = await Order.find({ isArchived: false }).sort({ createdAt: -1 });
+  const orders = await Order.find({ isArchived: false }).sort({ createdAt: -1 }).lean();
   res.json({ success: true, orders });
 });
 
@@ -1209,7 +1212,7 @@ app.post('/api/orders/archive', verifyToken, async (req, res) => {
 
 // Inventory CRUD
 app.get('/api/inventory', verifyToken, async (req, res) => {
-  const items = await Inventory.find().sort({ itemName: 1 });
+  const items = await Inventory.find().sort({ itemName: 1 }).lean();
   res.json({ success: true, items });
 });
 
