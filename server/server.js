@@ -160,6 +160,7 @@ const Product = mongoose.model('Product', ProductSchema);
 const OrderSchema = new mongoose.Schema({
   orderNumber: String,
   table: String,
+  isArchived: { type: Boolean, default: false, index: true },
   status: { type: String, default: 'Pending' },
   customerName: { type: String, default: 'Guest' },
   paymentMethod: { type: String, default: 'Cash' },
