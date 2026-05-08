@@ -799,9 +799,15 @@ const updateStatus = async (orderId, newStatus) => {
       addText("--------------------------------\n");
       addText("Thank you for supporting Lokal!\n");
       
-      // Feed paper to clear the cutter
-      addBytes(LF); addBytes(LF); addBytes(LF); addBytes(LF);
+      // Feed extra paper to safely clear the physical tear bar/cutter
+      for (let i = 0; i < 8; i++) {
+        addBytes(LF); 
+      }
 
+      // Optional: If your specific printer supports the ESC/POS Auto-Cut command, 
+      // uncommenting these two lines will trigger the mechanical blade:
+      // const GS_V = [0x1d, 0x56, 0x41, 0x00]; 
+      // addBytes(GS_V);
       // 4. Send Bytes to Printer (in chunks of 512 bytes for Bluetooth stability)
       const dataArray = new Uint8Array(receiptData);
       const chunkSize = 512;
