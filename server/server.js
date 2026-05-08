@@ -747,12 +747,12 @@ app.post('/api/orders', async (req, res) => {
         }
       } else {
         // Standard item
-        if (!isVatExempt) totalVat += (itemBase * 0.12);
+        if (!isVatExempt) totalVat += (itemBase * 0); // VAT DISABLED
       }
       return item;
     });
 
-    const vatRate = (isVatExempt || isComplimentary) ? 0 : 0.12;
+    const vatRate = 0; // VAT DISABLED
     const finalTotal = totalGross - totalDiscount + totalVat; // Add VAT on top!
 
     const currentYear = new Date().getFullYear();
@@ -852,7 +852,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
         // OVERRIDE: If this item has an isolated discount (e.g. 20% PWD), apply ONLY this discount!
         const itemDisc = itemBase * (isolatedItemDiscount / 100);
         totalDiscount += itemDisc;
-        if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0.12;
+        if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0; // VAT DISABLED
       } else if (getsDiscount && order.discountPercent > 0) {
         // GLOBAL DISCOUNT: Apply only if the item doesn't have an isolated one
         if (order.isVatExempt || order.discountType === 'SC/PWD') {
@@ -861,17 +861,17 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
         } else {
           const itemDisc = itemBase * (order.discountPercent / 100);
           totalDiscount += itemDisc;
-          if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0.12;
+          if (!order.isVatExempt) totalVat += (itemBase - itemDisc) * 0; // VAT DISABLED
         }
       } else {
-        if (!order.isVatExempt) totalVat += (itemBase * 0.12);
+        if (!order.isVatExempt) totalVat += (itemBase * 0); // VAT DISABLED
       }
     });
 
     order.subtotal = Number(totalGross.toFixed(2));
     order.discount = Number(totalDiscount.toFixed(2));
     order.vatAmount = Number(totalVat.toFixed(2));
-    order.vatRate = (order.isVatExempt || order.isComplimentary) ? 0 : 0.12;
+    order.vatRate = 0;
     order.total = Number((totalGross - totalDiscount + totalVat).toFixed(2));
 
     const validation = validateOrderMath(order);
@@ -1473,7 +1473,7 @@ const validateOrderMath = (order) => {
       // OVERRIDE: If this item has an isolated discount (e.g. 20% PWD), apply ONLY this discount!
       const itemDisc = itemBase * (isolatedItemDiscount / 100);
       expectedDiscount += itemDisc;
-      if (!order.isVatExempt) expectedVat += (itemBase - itemDisc) * 0.12;
+      if (!order.isVatExempt) expectedVat += (itemBase - itemDisc) * 0; // VAT DISABLED
     } else if (getsDiscount && order.discountPercent > 0) {
       // GLOBAL DISCOUNT: Apply only if the item doesn't have an isolated one
       if (order.isVatExempt || order.discountType === 'SC/PWD') {
@@ -1481,10 +1481,10 @@ const validateOrderMath = (order) => {
       } else {
         const itemDisc = itemBase * (order.discountPercent / 100);
         expectedDiscount += itemDisc;
-        if (!order.isVatExempt) expectedVat += (itemBase - itemDisc) * 0.12;
+        if (!order.isVatExempt) expectedVat += (itemBase - itemDisc) * 0; // VAT DISABLED
       }
     } else {
-      if (!order.isVatExempt) expectedVat += (itemBase * 0.12);
+      if (!order.isVatExempt) expectedVat += (itemBase * 0); // VAT DISABLED
     }
   }
 

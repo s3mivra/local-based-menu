@@ -258,7 +258,8 @@ export default function AdminDashboard() {
   };
 
   const handleInlinePriceUpdate = async (productId, sizeIndex) => {
-    const products = await Product.find({ isArchived: false }).select('name basePrice image category');
+    // FIX: Look up the product in your local React state instead of querying the backend database!
+    const product = products.find(p => p._id === productId);
     if (!product) return;
 
     // Create a copy of the product and update the specific price
