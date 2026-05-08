@@ -809,12 +809,25 @@ const updateStatus = async (orderId, newStatus) => {
       // const GS_V = [0x1d, 0x56, 0x41, 0x00]; 
       // addBytes(GS_V);
       // 4. Send Bytes to Printer (in chunks of 512 bytes for Bluetooth stability)
+      // 4. Send Bytes to Printer (Dynamic Spoon-feeding for long orders)
       const dataArray = new Uint8Array(receiptData);
-      const chunkSize = 512;
+      const chunkSize = 256; // Lowered from 512 for better hardware compatibility
+      
+      // Helper function to safely pause the Bluetooth stream
+      const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+      console.log(`Sending ${dataArray.length} bytes to printer...`);
+
       for (let i = 0; i < dataArray.length; i += chunkSize) {
         const chunk = dataArray.slice(i, i + chunkSize);
         await printCharacteristic.writeValue(chunk);
+        
+        // THE MAGIC FIX: Wait 100 milliseconds before sending the next chunk
+        // This gives the printer time to print and clear its tiny memory!
+        await sleep(100); 
       }
+
+      console.log("Print job completely finished!");
 
       // Disconnect cleanly
       server.disconnect();
