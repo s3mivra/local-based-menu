@@ -717,150 +717,106 @@ const updateStatus = async (orderId, newStatus) => {
     }
   };
   // --- 🖨️ THERMAL RECEIPT / ORDER SLIP PRINTER ---
-  const printOrderSlip = (order) => {
-    const printWindow = window.open('', '_blank', 'width=400,height=600');
-    if (!printWindow) return alert("Please allow popups to print receipts.");
+  const printOrderSlip = async (order) => {
+    try {
+      // 1. Request Bluetooth Device (Chrome will pop up a pairing menu)
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'] // Standard 58mm Printer UUIDs
+      });
 
-    // Format the items safely
-    const itemsHtml = order.items.map(item => {
-      const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
-      const lineTotal = (item.price + addOnTotal) * item.quantity;
-      
-      return `
-        <div class="item-row">
-          <div class="item-name">${item.quantity}x ${item.name}</div>
-          <div class="item-price">₱${lineTotal.toFixed(2)}</div>
-        </div>
-        ${(item.selectedAddOns || []).length > 0 ? 
-          item.selectedAddOns.map(addon => `
-            <div class="addon-row">
-              <span class="addon-name">+ ${addon.name}</span>
-              <span class="addon-price">₱${addon.price.toFixed(2)}</span>
-            </div>
-          `).join('') : ''
+      console.log('Connecting to GATT Server...');
+      const server = await device.gatt.connect();
+
+      // 2. Find the Printer Service and Writable Characteristic
+      const services = await server.getPrimaryServices();
+      let printCharacteristic = null;
+
+      for (const service of services) {
+        const characteristics = await service.getCharacteristics();
+        for (const char of characteristics) {
+          if (char.properties.write || char.properties.writeWithoutResponse) {
+            printCharacteristic = char;
+            break;
+          }
         }
-      `;
-    }).join('');
+        if (printCharacteristic) break;
+      }
 
-    const html = `
-      <html>
-        <head>
-          <title>Receipt - ${order.orderNumber}</title>
-          <style>
-            /* 🖨️ STRICT THERMAL PRINTER CSS 🖨️ */
-            @page {
-              margin: 0 !important;
-            }
-            body {
-              font-family: 'Courier New', Courier, monospace; 
-              width: 48mm; /* FIX: The actual ink-printable area of 58mm paper */
-              margin: 0 auto;
-              padding: 0;
-              font-size: 11px; /* Slightly smaller to prevent text wrapping */
-              color: #000;
-            }
-            body {
-              font-family: 'Courier New', Courier, monospace; /* Best readability for thermal dots */
-              width: 58mm;
-              margin: 0;
-              padding: 2mm 4mm; /* Tight padding to maximize paper usage */
-              padding-bottom: 15mm; /* Extra space at bottom so the cutter doesn't slice the text */
-              font-size: 12px;
-              color: #000;
-              box-sizing: border-box;
-            }
-            
-            /* --- Utility Classes --- */
-            .center { text-align: center; }
-            .bold { font-weight: bold; }
-            .divider { border-bottom: 1px dashed #000; margin: 6px 0; }
-            
-            /* --- Header --- */
-            .header h2 { margin: 0; font-size: 16px; font-weight: 900; letter-spacing: 1px; }
-            .header p { margin: 2px 0; font-size: 10px; }
-            
-            /* --- Order Info --- */
-            .order-info { margin: 10px 0; font-size: 11px; }
-            .order-info p { margin: 2px 0; }
-            
-            /* --- Items --- */
-            .item-row { display: flex; justify-content: space-between; margin-top: 6px; align-items: flex-start; }
-            .item-name { width: 70%; text-transform: uppercase; font-weight: bold; line-height: 1.2; }
-            .item-price { width: 30%; text-align: right; }
-            .addon-row { display: flex; justify-content: space-between; font-size: 10px; color: #333; padding-left: 10px; margin-top: 1px; }
-            
-            /* --- Totals --- */
-            .totals { margin-top: 10px; font-size: 11px; }
-            .totals-row { display: flex; justify-content: space-between; margin: 3px 0; }
-            .grand-total { font-size: 15px; font-weight: bold; padding: 6px 0; border-top: 1.5px dashed #000; border-bottom: 1.5px dashed #000; margin-top: 6px; }
-            
-            /* --- Footer --- */
-            .footer { text-align: center; margin-top: 15px; font-size: 10px; }
-          </style>
-        </head>
-        <body>
-          <div class="header center">
-            <h2>KASA LOKAL</h2>
-            <p>Angeles City, Pampanga</p>
-            <div class="divider"></div>
-          </div>
-          
-          <div class="order-info">
-            <p><span class="bold">Order #:</span> ${order.orderNumber}</p>
-            <p><span class="bold">Date:</span> ${new Date(order.createdAt || Date.now()).toLocaleString('en-US', { timeZone: 'Asia/Manila', dateStyle: 'short', timeStyle: 'short' })}</p>
-            <p><span class="bold">Type:</span> ${order.table}</p>
-            ${order.customerName ? `<p><span class="bold">Customer:</span> ${order.customerName}</p>` : ''}
-            <p><span class="bold">Cashier:</span> ${order.cashier || 'System'}</p>
-          </div>
-          
-          <div class="divider"></div>
-          
-          <div class="items">
-            ${itemsHtml}
-          </div>
-          
-          <div class="divider"></div>
-          
-          <div class="totals">
-            <div class="totals-row">
-              <span>Subtotal:</span>
-              <span>₱${order.subtotal?.toFixed(2) || '0.00'}</span>
-            </div>
-            ${order.discount > 0 ? `
-              <div class="totals-row">
-                <span>Discount (${order.discountType || 'Manual'}):</span>
-                <span>-₱${order.discount.toFixed(2)}</span>
-              </div>
-            ` : ''}
-            <div class="totals-row grand-total">
-              <span>TOTAL:</span>
-              <span>₱${order.total?.toFixed(2) || '0.00'}</span>
-            </div>
-            <div class="totals-row">
-              <span>Payment:</span>
-              <span>${order.paymentMethod || 'Cash'}</span>
-            </div>
-          </div>
-          
-          <div class="footer">
-            <p>Thank you for supporting Kasa Lokal!</p>
-          </div>
-          
-          <script>
-            // Give the browser a split second to apply the 58mm CSS before triggering the print dialogue
-            window.onload = () => {
-              setTimeout(() => {
-                window.print();
-                window.close();
-              }, 250);
-            };
-          </script>
-        </body>
-      </html>
-    `;
+      if (!printCharacteristic) throw new Error("Could not find printer write channel");
 
-    printWindow.document.write(html);
-    printWindow.document.close();
+      // 3. The ESC/POS Encoder (Translates text to Printer Hardware Bytes)
+      const encoder = new TextEncoder();
+      let receiptData = [];
+
+      const addBytes = (bytes) => receiptData.push(...bytes);
+      const addText = (text) => addBytes(Array.from(encoder.encode(text)));
+
+      // ESC/POS Commands
+      const ESC_INIT = [0x1b, 0x40]; // Initialize printer
+      const ESC_CENTER = [0x1b, 0x61, 0x01]; // Center align
+      const ESC_LEFT = [0x1b, 0x61, 0x00]; // Left align
+      const ESC_BOLD_ON = [0x1b, 0x45, 0x01]; // Bold text
+      const ESC_BOLD_OFF = [0x1b, 0x45, 0x00]; // Normal text
+      const LF = [0x0a]; // Line feed (Enter)
+
+      // --- BUILD THE RECEIPT ---
+      addBytes(ESC_INIT);
+      addBytes(ESC_CENTER);
+      addBytes(ESC_BOLD_ON);
+      addText("KASA LOKAL\n");
+      addBytes(ESC_BOLD_OFF);
+      addText("Angeles City, Pampanga\n");
+      addText("--------------------------------\n"); // 32 chars wide for 58mm
+      
+      addBytes(ESC_LEFT);
+      addText(`Order #: ${order.orderNumber}\n`);
+      addText(`Type: ${order.table}\n`);
+      addText(`Date: ${new Date(order.createdAt || Date.now()).toLocaleString()}\n`);
+      addText("--------------------------------\n");
+
+      // Items
+      order.items.forEach(item => {
+        const addOnTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + Number(a.price || 0), 0);
+        const lineTotal = (item.price + addOnTotal) * item.quantity;
+        
+        addBytes(ESC_BOLD_ON);
+        addText(`${item.quantity}x ${item.name.substring(0, 15).padEnd(15)} P${lineTotal.toFixed(2).padStart(8)}\n`);
+        addBytes(ESC_BOLD_OFF);
+
+        if (item.selectedAddOns && item.selectedAddOns.length > 0) {
+          item.selectedAddOns.forEach(addon => {
+            addText(`  + ${addon.name.substring(0, 15).padEnd(15)} P${addon.price.toFixed(2).padStart(8)}\n`);
+          });
+        }
+      });
+
+      addBytes(ESC_CENTER);
+      addText("--------------------------------\n");
+      addBytes(ESC_BOLD_ON);
+      addText(`TOTAL: P${(order.total || 0).toFixed(2)}\n`);
+      addBytes(ESC_BOLD_OFF);
+      addText("--------------------------------\n");
+      addText("Thank you for supporting Lokal!\n");
+      
+      // Feed paper to clear the cutter
+      addBytes(LF); addBytes(LF); addBytes(LF); addBytes(LF);
+
+      // 4. Send Bytes to Printer (in chunks of 512 bytes for Bluetooth stability)
+      const dataArray = new Uint8Array(receiptData);
+      const chunkSize = 512;
+      for (let i = 0; i < dataArray.length; i += chunkSize) {
+        const chunk = dataArray.slice(i, i + chunkSize);
+        await printCharacteristic.writeValue(chunk);
+      }
+
+      // Disconnect cleanly
+      server.disconnect();
+
+    } catch (error) {
+      console.error("Bluetooth Print Error:", error);
+      alert("Print failed: " + error.message + "\n\nMake sure Bluetooth is on and the printer is paired!");
+    }
   };
 
   // --- 🚨 SAFE VOID & REFUND SYSTEM ---
