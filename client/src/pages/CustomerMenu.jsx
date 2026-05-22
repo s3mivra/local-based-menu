@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { io } from 'socket.io-client';
-import { Coffee, ShoppingCart, Plus, Minus, X, Clock, CheckCircle, Package, AlertCircle, Users, Lock, RefreshCw } from 'lucide-react';
+import { Coffee, ShoppingCart, Plus, Minus, X, Clock, CheckCircle, Package, AlertCircle, Users, Lock, RefreshCw, ChevronLeft } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5002';
 const socket = io(API_URL, { transports: ['websocket'], upgrade: false });
@@ -13,7 +14,7 @@ const playCustomerDing = () => {
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(600, ctx.currentTime); 
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
     gain.gain.setValueAtTime(0.5, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
     osc.start(ctx.currentTime);
@@ -22,6 +23,38 @@ const playCustomerDing = () => {
     console.log('Audio blocked');
   }
 };
+
+const MenuItemCard = memo(({ product, onAdd }) => (
+  <div
+    onClick={() => onAdd(product)}
+    className="bg-sidebar-bg rounded-2xl overflow-hidden border border-white/5 hover:border-brand/30 cursor-pointer active:scale-[0.97] transition-all duration-150 group"
+  >
+    <div className="aspect-[4/3] relative overflow-hidden bg-black/30 flex items-center justify-center p-2">
+      {product.image
+        ? <img src={product.image} alt={product.name} loading="lazy" className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500 drop-shadow-md" />
+        : <div className="w-full h-full flex items-center justify-center"><Coffee size={32} className="text-white/10" /></div>
+      }
+      <button
+        onClick={e => { e.stopPropagation(); onAdd(product); }}
+        className="absolute bottom-2 right-2 w-9 h-9 bg-brand rounded-xl flex items-center justify-center shadow-lg shadow-brand/40 hover:bg-brand-dark transition active:scale-90"
+        aria-label={`Add ${product.name}`}
+      >
+        <Plus size={18} className="text-white" strokeWidth={2.5} />
+      </button>
+    </div>
+    <div className="p-3">
+      <h3 className="font-bold text-white text-sm leading-tight truncate">{product.name}</h3>
+      {product.description && <p className="text-white/40 text-xs mt-0.5 line-clamp-1">{product.description}</p>}
+      <p className="text-brand font-black text-sm mt-2">
+        ₱{(product.basePrice || 0).toFixed(2)}
+        {product.sizes?.length > 0 && <span className="text-white/30 font-normal text-xs ml-1">& up</span>}
+      </p>
+    </div>
+  </div>
+));
+MenuItemCard.displayName = 'MenuItemCard';
+
+const BIZ_NAME = (import.meta.env.VITE_BUSINESS_NAME || 'Kasa Lokal').toUpperCase();
 
 export default function CustomerMenu() {
   // --- UI FLOW STATE MACHINE ---
@@ -34,7 +67,7 @@ export default function CustomerMenu() {
   const [customerName, setCustomerName] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   const [activeCategory, setActiveCategory] = useState('All');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedSize, setSelectedSize] = useState(null);
@@ -43,14 +76,23 @@ export default function CustomerMenu() {
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [sessionToken, setSessionToken] = useState(null);
   const [tableNum, setTableNum] = useState(null);
-  const [successMessage, setSuccessMessage] = useState(false); 
-  const [lockedOrder, setLockedOrder] = useState(null); 
-  
+  const [successMessage, setSuccessMessage] = useState(false);
+  const [lockedOrder, setLockedOrder] = useState(null);
+
   const [isVibrating, setIsVibrating] = useState(false);
   const vibrationInterval = useRef(null);
   const [isFinished, setIsFinished] = useState(false);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const wakeLockRef = useRef(null);
+
+  // --- CART DRAWER STATE ---
+  const [cartOpen, setCartOpen] = useState(false);
+
+  // Lock body scroll when any overlay is open (prevents Android WebView scroll-behind bug)
+  useEffect(() => {
+    document.body.style.overflow = (selectedProduct || cartOpen) ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [selectedProduct, cartOpen]);
 
   const requestWakeLock = async () =>{
     try{
@@ -69,14 +111,14 @@ export default function CustomerMenu() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const session = params.get('session');
-    
+
     // If there is no secure session token in the URL, block them instantly.
     if (!session) {
       setIsAuthorized(false);
       setIsCheckingSession(false);
       return;
     }
-    
+
     setSessionToken(session);
 
     // PRELOAD MENU DATA SILENTLY SO THERE IS NO LOADING SCREEN
@@ -92,7 +134,7 @@ export default function CustomerMenu() {
           const orderRes = await fetch(`${API_URL}/api/orders/${savedOrderId}`);
           if (orderRes.ok) {
             const orderData = await orderRes.json();
-            
+
             if (orderData.status !== 'Cancelled' && orderData.status !== 'Voided' && !localStorage.getItem(`received_${savedOrderId}`)) {
               setLockedOrder(orderData);
               setTableNum(orderData.table); // Restore the table number for WebSockets
@@ -114,7 +156,7 @@ export default function CustomerMenu() {
           setIsAuthorized(true);
           setTableNum(heartbeatData.table);
         } else {
-          setIsAuthorized(false); 
+          setIsAuthorized(false);
         }
       } catch (err) {
         setIsAuthorized(false);
@@ -217,7 +259,7 @@ export default function CustomerMenu() {
       requestWakeLock();
     } else if (lockedOrder?.status === 'Ready' || lockedOrder?.status === 'Completed') {
       playCustomerDing();
-      
+
       if ('Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
         navigator.serviceWorker.ready.then(function(registration) {
           registration.showNotification('Your Order is Ready! ☕', {
@@ -225,23 +267,23 @@ export default function CustomerMenu() {
             icon: '/logo.png',
             vibrate: [1000, 500, 1000, 500, 2000],
             tag: 'order-ready',
-            requireInteraction: true 
+            requireInteraction: true
           });
         });
       }
 
       if (!isVibrating) {
         setIsVibrating(true);
-        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]); 
+        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]);
         vibrationInterval.current = setInterval(() => {
           if (navigator.vibrate) navigator.vibrate([1000, 500, 1000]);
-          playCustomerDing(); 
+          playCustomerDing();
         }, 3000);
       }
     } else {
       setIsVibrating(false);
       if (vibrationInterval.current) clearInterval(vibrationInterval.current);
-      releaseWakeLock(); 
+      releaseWakeLock();
     }
 
     return () => {
@@ -254,19 +296,19 @@ export default function CustomerMenu() {
   const handleReceived = async () => {
     setIsVibrating(false);
     if (vibrationInterval.current) clearInterval(vibrationInterval.current);
-    releaseWakeLock(); 
-    
+    releaseWakeLock();
+
     if (lockedOrder) {
       localStorage.setItem(`received_${lockedOrder._id}`, 'true');
     }
-    
+
     localStorage.removeItem('semivra_active_order');
     localStorage.removeItem('semivra_order_time');
 
-    // 🔥 PERMANENTLY DESTROY THE LINK
+    // PERMANENTLY DESTROY THE LINK
     await fetch(`${API_URL}/api/sessions/${sessionToken}/close`, { method: 'POST' });
-    
-    setIsFinished(true); 
+
+    setIsFinished(true);
     setLockedOrder(null);
     setCart([]);
   };
@@ -277,14 +319,14 @@ export default function CustomerMenu() {
       const res = await fetch(`${API_URL}/api/products?t=${new Date().getTime()}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.success) setProducts(data.products);
-      
+
       // FIX: Fetch Categories so the dynamic Kitchen/Bar routing knows where to send items!
       const catRes = await fetch(`${API_URL}/api/categories?t=${new Date().getTime()}`, { cache: 'no-store' });
       const catData = await catRes.json();
       if (catData.success) setCategories(catData.categories);
-      
-    } catch (err) { 
-      console.error("Failed to fetch menu data"); 
+
+    } catch (err) {
+      console.error("Failed to fetch menu data");
     }
   };
 
@@ -299,7 +341,7 @@ export default function CustomerMenu() {
   };
 
   const toggleAddOn = (addOn) => {
-    setSelectedAddOns(prev => 
+    setSelectedAddOns(prev =>
       prev.some(a => a.name === addOn.name) ? prev.filter(a => a.name !== addOn.name) : [...prev, addOn]
     );
   };
@@ -310,9 +352,9 @@ export default function CustomerMenu() {
     // Create a unique ID so items with different add-ons don't stack into the same cart row
     const addOnNames = addOns.map(a => a.name).sort().join(',');
     const cartItemId = `${product._id}-${sizeName}-${addOnNames}`;
-    
+
     const categoryObject = categories.find(c => c.name === product.category);
-    const dept = categoryObject ? (categoryObject.department || 'Kitchen') : 'Kitchen'; 
+    const dept = categoryObject ? (categoryObject.department || 'Kitchen') : 'Kitchen';
 
     setCart(prev => {
       const existing = prev.find(item => item.cartItemId === cartItemId);
@@ -322,7 +364,6 @@ export default function CustomerMenu() {
     setSelectedProduct(null); setSelectedSize(null); setSelectedAddOns([]);
   };
 
-  // --- MISSING CART FUNCTIONS ---
   // --- CART MATH & LOGIC ---
   const updateQuantity = (cartItemId, change) => {
     setCart(prev => {
@@ -333,17 +374,16 @@ export default function CustomerMenu() {
         }
         return item;
       });
-      
+
       // Then, filter out any items that dropped to 0 (This makes the Minus button remove the item)
       return updatedCart.filter(item => item.quantity > 0);
     });
   };
 
   const removeFromCart = (cartItemId) => {
-    if (window.confirm("Remove this item from your cart?")) {
-      setCart(prev => prev.filter(item => item.cartItemId !== cartItemId));
-    }
+    setCart(prev => prev.filter(item => item.cartItemId !== cartItemId));
   };
+
   // UPDATE TOTAL CALCULATION
   const total = cart.reduce((sum, item) => {
     const addOnTotal = (item.selectedAddOns || []).reduce((s, a) => s + a.price, 0);
@@ -364,29 +404,29 @@ export default function CustomerMenu() {
   };
 
   const confirmOrder = async () => {
-    if (isSubmitting) return; 
+    if (isSubmitting) return;
     setIsSubmitting(true);
 
     const idempotencyKey = `${sessionToken}-${Date.now()}`;
     try {
       const res = await fetch(`${API_URL}/api/orders`, {
-        method: 'POST', 
-        headers: { 
+        method: 'POST',
+        headers: {
           'Content-Type': 'application/json',
-          'idempotency-key': idempotencyKey // <-- FIX 1: Added header
+          'idempotency-key': idempotencyKey
         },
-        body: JSON.stringify({ 
-          items: cart, 
-          discountPercent: 0, 
-          isVatExempt: false, 
-          table: tableNum, 
+        body: JSON.stringify({
+          items: cart,
+          discountPercent: 0,
+          isVatExempt: false,
+          table: tableNum,
           customerName: customerName.trim(),
-          sessionId: sessionToken // <-- FIX 2: Added session to body
+          sessionId: sessionToken
         })
       });
-      
+
       const data = await res.json();
-      
+
       if (data.success) {
         setCart([]);
         setSuccessMessage(true);
@@ -394,16 +434,19 @@ export default function CustomerMenu() {
 
         localStorage.setItem('semivra_active_order', data.order._id);
         localStorage.setItem('semivra_order_time', Date.now().toString());
-        setLockedOrder(data.order); 
+        setLockedOrder(data.order);
         setFlowState('status');
-        
+
         requestNotificationPermission();
       }
-    } catch (error) { console.error("Order failed", error); }
+    } catch (error) {
+      console.error("Order failed", error);
+      setIsSubmitting(false);
+    }
   };
 
-  const allCategories = ['All', ...new Set(products.map(p => p.category))];
-  const displayedCategories = activeCategory === 'All' ? allCategories.filter(c => c !== 'All') : [activeCategory];
+  const allCategories = useMemo(() => ['All', ...new Set(products.map(p => p.category))], [products]);
+  const displayedCategories = useMemo(() => activeCategory === 'All' ? allCategories.filter(c => c !== 'All') : [activeCategory], [activeCategory, allCategories]);
 
   const modalSizes = selectedProduct ? [{ name: selectedProduct.baseSize || 'Regular', price: Number(selectedProduct.basePrice || 0) }, ...(selectedProduct.sizes || [])] : [];
   const groupedSizes = modalSizes.reduce((acc, size) => {
@@ -413,7 +456,7 @@ export default function CustomerMenu() {
     } else if (lowerName.includes('iced') || lowerName.includes('cold')) {
       if (!acc.Iced) acc.Iced = []; acc.Iced.push({ ...size, displayName: size.name.replace(/(iced|cold)\s*-?\s*/i, '').trim() });
     } else {
-      if (!acc.Standard) acc.Standard = []; acc.Standard.push({ ...size, displayName: size.name }); 
+      if (!acc.Standard) acc.Standard = []; acc.Standard.push({ ...size, displayName: size.name });
     }
     return acc;
   }, {});
@@ -422,25 +465,27 @@ export default function CustomerMenu() {
   //                RENDER VIEWS
   // ==========================================
 
-  // --- ADD THIS BLOCK ---
-  // SHOW THIS WHILE WAITING FOR THE SERVER TO VALIDATE THE QR CODE
   if (isCheckingSession) {
     return (
-      <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4">
-        <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mb-6 shadow-lg shadow-accent/20"></div>
-        <h2 className="text-white font-black tracking-[0.2em] uppercase text-lg mb-2">Kasa Lokal</h2>
-        <p className="text-accent text-xs font-bold tracking-widest uppercase animate-pulse">Securing Table Session...</p>
+      <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center p-4">
+        <div className="w-16 h-16 rounded-2xl bg-brand/20 border border-brand/20 flex items-center justify-center mb-8">
+          <Coffee size={28} className="text-brand" />
+        </div>
+        <div className="w-10 h-10 border-2 border-brand border-t-transparent rounded-full animate-spin mb-6" />
+        <p className="text-brand/60 text-xs font-bold tracking-widest uppercase animate-pulse">Securing Session…</p>
       </div>
     );
   }
-  // --- END NEW BLOCK ---
 
   if (!isAuthorized) {
-      return (
-        <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4 text-center">
-        <div className="bg-surface p-8 rounded-xl border border-red-900/50 shadow-2xl max-w-sm w-full animate-fade-in">
-          <h1 className="text-2xl font-black text-white uppercase tracking-widest mb-2">Link Expired</h1>
-          <p className="text-gray-400 text-sm">This ordering session is closed. Please ask the staff to generate a new QR code for your table.</p>
+    return (
+      <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center p-6 text-center">
+        <div className="bg-sidebar-bg border border-red-500/20 p-10 rounded-3xl max-w-sm w-full animate-fade-in">
+          <div className="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center mx-auto mb-5">
+            <AlertCircle size={28} className="text-red-400" />
+          </div>
+          <h1 className="text-2xl font-black text-white uppercase tracking-widest mb-3">Session Expired</h1>
+          <p className="text-white/40 text-sm leading-relaxed">This ordering link has expired. Please ask staff to generate a new QR code for your table.</p>
         </div>
       </div>
     );
@@ -448,12 +493,15 @@ export default function CustomerMenu() {
 
   if (isFinished) {
     return (
-      <div className="min-h-screen bg-dark flex flex-col items-center justify-center p-6">
-        <div className="bg-surface p-8 rounded-xl border border-gray-800 shadow-2xl text-center max-w-sm w-full animate-fade-in">
-          <h2 className="text-3xl font-black text-accent mb-4 uppercase tracking-widest">Thank You!</h2>
-          <p className="text-gray-300 font-medium mb-8">We hope you enjoy your order.</p>
-          <div className="border-t border-gray-800 pt-6 mt-2">
-            <p className="text-gray-500 text-xs uppercase font-bold tracking-widest">You may now close this page.</p>
+      <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center p-6">
+        <div className="bg-sidebar-bg border border-brand/20 p-10 rounded-3xl max-w-sm w-full text-center animate-fade-in">
+          <div className="w-20 h-20 rounded-full bg-brand/20 flex items-center justify-center mx-auto mb-6">
+            <CheckCircle size={36} className="text-brand" />
+          </div>
+          <h2 className="text-3xl font-black text-white mb-3 uppercase tracking-widest">Thank You!</h2>
+          <p className="text-white/50 font-medium mb-8">We hope you enjoy your order. Come back soon!</p>
+          <div className="border-t border-white/5 pt-6">
+            <p className="text-white/20 text-xs uppercase font-bold tracking-widest">You may now close this page.</p>
           </div>
         </div>
       </div>
@@ -462,48 +510,78 @@ export default function CustomerMenu() {
 
   if (lockedOrder || flowState === 'status') {
     return (
-      <div className={`min-h-[100dvh] flex flex-col items-center justify-center p-6 text-center transition-colors duration-500 ${
-        lockedOrder?.status === 'Ready' || lockedOrder?.status === 'Completed' ? 'bg-green-600' : 'bg-dark'
+      <div className={`min-h-[100dvh] flex flex-col items-center justify-center p-6 text-center transition-colors duration-700 ${
+        lockedOrder?.status === 'Ready' || lockedOrder?.status === 'Completed' ? 'bg-emerald-900' : 'bg-page-bg'
       }`}>
-        <div className="bg-surface p-8 rounded-3xl border border-gray-800 shadow-2xl max-w-sm w-full relative overflow-hidden animate-fade-in">
+        <div className="bg-sidebar-bg p-8 rounded-3xl border border-white/10 shadow-2xl max-w-sm w-full relative overflow-hidden animate-fade-in">
           {(lockedOrder?.status === 'Pending' || lockedOrder?.status === 'Preparing') && (
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-4 border-accent/20 rounded-full animate-ping pointer-events-none"></div>
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-72 h-72 border border-brand/10 rounded-full animate-ping" />
+            </div>
           )}
-
           <div className="relative z-10">
             {lockedOrder?.status === 'Pending' && (
               <>
                 <div className="text-6xl mb-6 animate-pulse">📡</div>
-                <h1 className="text-2xl font-black text-white mb-2 uppercase tracking-widest">Sending to Kitchen...</h1>
-                <p className="text-gray-400 text-sm">Please proceed to the cashier to confirm your payment of <span className="text-accent font-bold">P{lockedOrder.total.toFixed(2)}</span>.</p>
+                <h1 className="text-2xl font-black text-white mb-3 uppercase tracking-widest">Sending Order…</h1>
+                <p className="text-white/50 text-sm leading-relaxed">Please proceed to the cashier to confirm payment of <span className="text-brand font-bold">₱{(lockedOrder.total||0).toFixed(2)}</span>.</p>
               </>
             )}
-
-            {lockedOrder?.status === 'Preparing' && (
-              <>
-                <div className="text-6xl mb-6 animate-spin-slow inline-block">🍳</div>
-                <h1 className="text-2xl font-black text-accent mb-2 uppercase tracking-widest">Now Preparing</h1>
-                <p className="text-gray-400 text-sm">Our team is crafting your order. Hang tight!</p>
-              </>
-            )}
-
+            {lockedOrder?.status === 'Preparing' && (() => {
+              const allItems = lockedOrder.items || [];
+              const deliveredCount = allItems.filter(i => i.itemStatus === 'Delivered').length;
+              const totalCount = allItems.length;
+              const hasPartial = deliveredCount > 0 && deliveredCount < totalCount;
+              const progressPct = totalCount > 0 ? Math.round((deliveredCount / totalCount) * 100) : 0;
+              return (
+                <>
+                  <div className="text-6xl mb-4 inline-block animate-spin" style={{animationDuration:'3s'}}>🍳</div>
+                  <h1 className="text-2xl font-black text-brand mb-2 uppercase tracking-widest">
+                    {hasPartial ? 'Partially Served' : 'Now Preparing'}
+                  </h1>
+                  {totalCount > 0 && (
+                    <div className="mb-4">
+                      <div className="flex justify-between text-[10px] text-white/30 font-bold mb-1.5">
+                        <span>{deliveredCount} of {totalCount} items served</span>
+                        <span>{progressPct}%</span>
+                      </div>
+                      <div className="w-full bg-white/10 rounded-full h-1.5">
+                        <div className="bg-brand h-1.5 rounded-full transition-all duration-700" style={{width:`${progressPct}%`}} />
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-1.5 text-left mt-2 max-h-36 overflow-y-auto pr-1">
+                    {allItems.map((item, i) => {
+                      const done = item.itemStatus === 'Delivered';
+                      return (
+                        <div key={i} className={`flex items-center gap-2 text-xs font-semibold transition-all ${done ? 'text-white/25 line-through' : 'text-white/70'}`}>
+                          <span className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 text-[9px] font-black ${done ? 'bg-green-500/20 text-green-400' : 'bg-white/8 text-white/20'}`}>
+                            {done ? '✓' : '·'}
+                          </span>
+                          {item.quantity}x {item.name}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-white/30 text-xs mt-3">
+                    {hasPartial ? 'More items on the way!' : 'Our team is crafting your order. Hang tight!'}
+                  </p>
+                </>
+              );
+            })()}
             {(lockedOrder?.status === 'Ready' || lockedOrder?.status === 'Completed') && (
               <>
                 <div className="text-7xl mb-6 animate-bounce">✨</div>
-                <h1 className="text-3xl font-black text-white mb-2 uppercase tracking-widest drop-shadow-md">Order is Ready!</h1>
-                <p className="text-green-100 font-bold mb-8">Please proceed to the counter to collect your items.</p>
-                <button 
-                  onClick={handleReceived} 
-                  className="w-full bg-dark text-black font-black py-4 rounded-xl hover:bg-black transition shadow-xl active:scale-95 uppercase tracking-widest"
-                >
-                  I Got My Order
+                <h1 className="text-3xl font-black text-white mb-3 uppercase tracking-widest">Order Ready!</h1>
+                <p className="text-emerald-300 font-bold mb-8">Please collect your items at the counter.</p>
+                <button onClick={handleReceived} className="w-full bg-white text-emerald-900 font-black py-4 rounded-2xl hover:bg-emerald-50 transition shadow-xl active:scale-95 uppercase tracking-widest">
+                  I Got My Order ✓
                 </button>
               </>
             )}
-
-            <div className="mt-8 pt-6 border-t border-gray-800 flex justify-between items-center">
-               <span className="text-gray-500 font-bold text-xs uppercase tracking-widest">Order ID</span>
-               <span className="bg-dark px-3 py-1 rounded text-accent font-mono font-bold text-sm border border-gray-700">{lockedOrder?.orderNumber}</span>
+            <div className="mt-8 pt-5 border-t border-white/5 flex justify-between items-center">
+              <span className="text-white/30 font-bold text-xs uppercase tracking-widest">Order ID</span>
+              <span className="bg-white/5 border border-white/10 px-3 py-1 rounded-lg text-brand font-mono font-bold text-sm">{lockedOrder?.orderNumber}</span>
             </div>
           </div>
         </div>
@@ -513,21 +591,27 @@ export default function CustomerMenu() {
 
   if (flowState === 'landing') {
     return (
-      <div className="min-h-[100dvh] bg-dark flex flex-col items-center justify-center p-6 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-accent/10 to-transparent pointer-events-none"></div>
-        <div className="z-10 text-center w-full max-w-sm">
-          <div className="w-24 h-24 bg-accent rounded-full mx-auto mb-6 shadow-[0_0_30px_rgba(255,193,7,0.3)] flex items-center justify-center">
-             <span className="text-4xl">☕</span>
+      <div className="min-h-[100dvh] bg-page-bg flex flex-col overflow-hidden relative">
+        {/* gradient hero bg */}
+        <div className="absolute inset-0 bg-gradient-to-b from-brand/25 via-transparent to-transparent pointer-events-none" />
+
+        <div className="relative z-10 flex flex-col flex-1 items-center justify-end px-6 pb-20 text-center">
+          <div className="w-28 h-28 rounded-3xl bg-brand flex items-center justify-center mb-8 shadow-2xl shadow-brand/40">
+            <Coffee size={48} className="text-white" />
           </div>
-          <h1 className="text-4xl font-black text-black tracking-tight mb-2">KASA LOKAL</h1>
-          <p className="text-gray-400 font-bold uppercase tracking-widest text-sm mb-12">Table {tableNum}</p>
-          
-          <button 
+          <h1 className="text-5xl font-black text-white tracking-tight leading-none mb-2">{BIZ_NAME}</h1>
+          <div className="flex items-center gap-3 text-white/30 text-sm font-bold uppercase tracking-widest mb-16">
+            <div className="h-px w-8 bg-white/20" />
+            Table {tableNum}
+            <div className="h-px w-8 bg-white/20" />
+          </div>
+          <button
             onClick={() => setFlowState('name_input')}
-            className="w-full bg-accent text-dark font-black py-4 rounded-xl text-lg hover:bg-yellow-500 transition shadow-xl shadow-accent/20 active:scale-95 uppercase tracking-widest"
+            className="w-full max-w-xs bg-brand text-white font-black py-5 rounded-2xl text-lg shadow-2xl shadow-brand/30 hover:bg-brand-dark transition active:scale-95 uppercase tracking-widest"
           >
             Start Order
           </button>
+          <p className="text-white/20 text-xs mt-5 font-medium">Scan QR at your table to order</p>
         </div>
       </div>
     );
@@ -535,113 +619,236 @@ export default function CustomerMenu() {
 
   if (flowState === 'name_input') {
     return (
-      <div className="min-h-[100dvh] bg-dark flex flex-col items-center justify-center p-6 animate-fade-in">
-        <div className="w-full max-w-sm bg-surface p-8 rounded-2xl border border-gray-800 shadow-2xl">
-          <h2 className="text-2xl font-black text-white mb-2">Who is ordering?</h2>
-          <p className="text-gray-400 text-sm mb-6">We'll use this to call your order when it's ready.</p>
-          
-          <input 
-            type="text" 
-            placeholder="Enter your nickname"
+      <div className="min-h-[100dvh] bg-page-bg flex flex-col items-center justify-center p-6 animate-fade-in">
+        <div className="w-full max-w-sm">
+          <button
+            onClick={() => setFlowState('landing')}
+            className="flex items-center gap-1.5 text-white/30 hover:text-white text-sm mb-10 transition font-bold"
+          >
+            <ChevronLeft size={16} /> Back
+          </button>
+          <h2 className="text-3xl font-black text-white mb-2">What's your name?</h2>
+          <p className="text-white/40 text-sm mb-8 leading-relaxed">We'll use this to call your order when it's ready.</p>
+          <input
+            type="text"
+            placeholder="Your nickname…"
+            aria-label="Your name"
             value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            className="w-full bg-dark border-2 border-gray-700 focus:border-accent text-center text-black py-4 rounded-xl outline-none mb-6 font-bold text-lg transition"
+            onChange={e => setCustomerName(e.target.value)}
+            className="w-full bg-white/5 border-2 border-white/10 focus:border-brand text-white text-center py-5 rounded-2xl outline-none mb-5 font-bold text-xl transition placeholder-white/20"
             autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && customerName.trim().length > 0) setFlowState('menu');
-            }}
+            onKeyDown={e => e.key === 'Enter' && customerName.trim().length > 0 && setFlowState('menu')}
           />
-          
-          <button 
+          <button
             onClick={() => setFlowState('menu')}
             disabled={customerName.trim().length === 0}
-            className={`w-full font-black py-4 rounded-xl text-lg transition shadow-xl uppercase tracking-widest ${customerName.trim().length === 0 ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-dark hover:bg-yellow-500 shadow-accent/20 active:scale-95'}`}
+            className={`w-full font-black py-5 rounded-2xl text-lg transition shadow-2xl uppercase tracking-widest
+              ${customerName.trim().length === 0 ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-brand text-white hover:bg-brand-dark shadow-brand/30 active:scale-95'}`}
           >
-            View Menu
+            Browse Menu →
           </button>
         </div>
       </div>
     );
   }
 
- // --- 7. ORIGINAL MENU DESIGN RESTORED ---
+  // --- MAIN MENU SCREEN (flowState === 'menu') ---
   return (
-    <div className="min-h-screen bg-accent text-white pb-[350px] animate-fade-in">
-      
+    <div className="min-h-[100dvh] bg-page-bg text-white animate-fade-in">
+
+      {/* SUCCESS FLASH */}
       {successMessage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-surface p-8 rounded-xl text-center shadow-[0_0_40px_rgba(234,179,8,0.2)] border border-accent max-w-sm w-full">
-            <h2 className="text-3xl font-black text-accent mb-2 uppercase tracking-widest">Received!</h2>
-            <p className="text-gray-300 font-medium">Your order has been sent to the kitchen.</p>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-sidebar-bg border border-brand/30 p-10 rounded-3xl text-center max-w-xs w-full mx-4">
+            <div className="w-16 h-16 rounded-full bg-brand/20 flex items-center justify-center mx-auto mb-5">
+              <CheckCircle size={32} className="text-brand" />
+            </div>
+            <h2 className="text-2xl font-black text-white mb-2 uppercase tracking-widest">Order Sent!</h2>
+            <p className="text-white/50 text-sm">Your order is on its way to the kitchen.</p>
           </div>
         </div>
       )}
 
-      {/* ORIGINAL HEADER PRESERVED */}
-      <header className="bg-surface pt-6 px-4 pb-4 sticky top-0 z-30 border-b border-gray-800 text-center shadow-lg">
-        <h1 className="text-2xl font-black tracking-widest text-accent uppercase mb-4">KASA LOKAL Menu</h1>
-        <div className="flex gap-3 overflow-x-auto scrollbar-none pb-2 max-w-5xl mx-auto">
+      {/* STICKY HEADER */}
+      <header className="sticky top-0 z-30 bg-page-bg/90 backdrop-blur-xl border-b border-white/5">
+        <div className="flex items-center justify-between px-5 pt-4 pb-2">
+          <div>
+            <h1 className="text-xl font-black text-white tracking-tight leading-none">{BIZ_NAME}</h1>
+            <p className="text-white/30 text-xs font-bold uppercase tracking-widest mt-0.5">Table {tableNum} · {customerName}</p>
+          </div>
+          {cart.length > 0 && (
+            <button
+              onClick={() => setCartOpen(true)}
+              className="relative flex items-center gap-2 bg-brand text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-brand/20 hover:bg-brand-dark transition"
+            >
+              <ShoppingCart size={15} />
+              <span>₱{total.toFixed(2)}</span>
+              <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-white text-brand rounded-full text-[10px] font-black flex items-center justify-center">
+                {cart.reduce((s, i) => s + i.quantity, 0)}
+              </span>
+            </button>
+          )}
+        </div>
+        {/* Category ribbon */}
+        <div className="flex gap-2 px-4 pb-3 pt-1 overflow-x-auto scrollbar-none">
           {allCategories.map(cat => (
-            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-full whitespace-nowrap text-sm font-bold transition ${activeCategory === cat ? 'bg-accent text-dark shadow-md shadow-accent/20' : 'bg-dark border border-gray-700 text-gray-400 hover:text-accent'}`}>{cat}</button>
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              aria-pressed={activeCategory === cat}
+              className={`px-4 py-2 rounded-full whitespace-nowrap text-sm font-bold flex-shrink-0 transition
+                ${activeCategory === cat
+                  ? 'bg-brand text-white shadow-md shadow-brand/20'
+                  : 'bg-white/5 text-white/50 border border-white/5 hover:text-white'}`}
+            >
+              {cat}
+            </button>
           ))}
         </div>
       </header>
 
-      {/* ORIGINAL MAIN GRID PRESERVED */}
-      <main className="p-4 max-w-5xl mx-auto space-y-10 mt-6">
-        {displayedCategories.length === 0 ? (
-          <p className="text-center text-gray-500 mt-10">No items available.</p>
-        ) : (
-          displayedCategories.map(category => {
-            const categoryProducts = products.filter(p => p.category === category);
-            if (categoryProducts.length === 0) return null; 
-            return (
-              <div key={category}>
-                <h2 className="text-2xl font-bold mb-4 text-white border-b-2 border-gray-800 pb-2 inline-block">{category}</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {categoryProducts.map(p => (
-                    <div key={p._id} onClick={() => handleProductClick(p)} className="bg-surface rounded-xl flex flex-col transition hover:shadow-2xl hover:shadow-accent/10 cursor-pointer border border-gray-800 hover:border-accent/50 group relative h-full">
-                      <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none z-0 rounded-xl"></div>
-                      {p.image ? (
-                        <div className="w-full h-40 relative z-20 shrink-0 flex items-center justify-center p-2 mt-2">
-                          <img src={p.image} alt={p.name} loading="lazy" className="w-full h-full object-contain transition-all duration-500 group-hover:scale-[1.15] group-hover:-translate-y-3 drop-shadow-2xl" />
-                        </div>
-                      ) : (
-                        <div className="w-full h-40 relative z-10 shrink-0 flex items-center justify-center text-gray-600 text-xs font-bold uppercase tracking-widest mt-2">No Image</div>
-                      )}
-                      <div className="p-5 flex flex-col flex-1 relative z-10">
-                        <h3 className="font-bold text-lg mb-1 text-white leading-tight">{p.name}</h3>
-                        {p.description && <p className="text-gray-400 text-xs leading-relaxed line-clamp-2 mb-3">{p.description}</p>}
-                        <div className="flex justify-between items-center mt-auto pt-4 border-t border-gray-800/50">
-                          <p className="text-accent font-bold text-xl">P{(p.basePrice || 0).toFixed(2)}{p.sizes?.length > 0 && <span className="text-sm font-normal text-gray-500 ml-1">+</span>}</p>
-                          <span className="bg-dark text-accent px-4 py-2 rounded-md text-xs font-bold border border-gray-700 group-hover:border-accent group-hover:text-accent transition shadow-sm uppercase tracking-wider">{p.sizes?.length > 0 ? 'Select' : 'Add'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+      {/* PRODUCT GRID */}
+      <main className="px-4 py-6 max-w-5xl mx-auto pb-32">
+        {displayedCategories.length === 0
+          ? <p className="text-center text-white/30 mt-20 font-bold">No items available.</p>
+          : displayedCategories.map(category => {
+              const catProducts = products.filter(p => p.category === category);
+              if (catProducts.length === 0) return null;
+              return (
+                <div key={category} className="mb-10">
+                  {activeCategory === 'All' && (
+                    <h2 className="text-base font-black text-white/60 mb-4 uppercase tracking-widest px-0.5">{category}</h2>
+                  )}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {catProducts.map(p => (
+                      <MenuItemCard key={p._id} product={p} onAdd={handleProductClick} />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            );
-          })
-        )}
+              );
+            })
+        }
       </main>
 
-      {/* ORIGINAL SIZE MODAL PRESERVED */}
-      {selectedProduct && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-surface rounded-xl p-6 w-full max-w-md border border-gray-700 shadow-2xl">
-            <h3 className="text-2xl font-bold mb-1 text-white">{selectedProduct.name}</h3>
-            {selectedProduct.description && <p className="text-gray-400 text-sm mb-6 line-clamp-2">{selectedProduct.description}</p>}
-            <p className="text-gray-300 text-sm font-semibold mb-3 uppercase tracking-wider">Choose a size:</p>
-            <div className="space-y-6 mb-8 max-h-[50vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+      {/* FLOATING CART BUTTON — portal to bypass animate-fade-in stacking context */}
+      {cart.length > 0 && !cartOpen && createPortal(
+        <div className="fixed bottom-6 left-4 right-4 z-[9990] max-w-lg mx-auto animate-fade-in">
+          <button
+            onClick={() => setCartOpen(true)}
+            className="w-full flex items-center justify-between bg-brand text-white px-6 py-4 rounded-2xl font-black shadow-2xl shadow-brand/30 hover:bg-brand-dark transition active:scale-[0.98]"
+          >
+            <div className="flex items-center gap-2 text-sm">
+              <ShoppingCart size={18} />
+              <span>{cart.reduce((s,i)=>s+i.quantity,0)} item{cart.reduce((s,i)=>s+i.quantity,0)!==1?'s':''}</span>
+            </div>
+            <span className="text-xl font-black">₱{total.toFixed(2)}</span>
+          </button>
+        </div>,
+        document.body
+      )}
+
+      {/* CART DRAWER — portal to bypass animate-fade-in stacking context */}
+      {cartOpen && createPortal(
+        <>
+          <div className="fixed inset-0 z-[9990] bg-black/60 backdrop-blur-sm" onClick={() => setCartOpen(false)} />
+          <div className="fixed bottom-0 left-0 right-0 z-[9991] bg-sidebar-bg border-t border-white/10 rounded-t-3xl flex flex-col animate-fade-in max-h-[82dvh]">
+            {/* Drawer handle */}
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 bg-white/20 rounded-full" />
+            </div>
+            {/* Drawer header */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-white/5">
+              <h3 className="font-black text-white text-lg">Your Basket</h3>
+              <button onClick={() => setCartOpen(false)} className="p-2 rounded-xl text-white/40 hover:text-white hover:bg-white/10 transition">
+                <X size={20} />
+              </button>
+            </div>
+            {/* Cart items */}
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 custom-scrollbar">
+              {cart.map(item => {
+                const addOnTotal = (item.selectedAddOns||[]).reduce((s,a)=>s+a.price,0);
+                const rowTotal = (item.price + addOnTotal) * item.quantity;
+                return (
+                  <div key={item.cartItemId} className="flex items-start gap-3 bg-white/5 rounded-2xl p-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <h4 className="font-bold text-white text-sm leading-tight">{item.name}</h4>
+                        <button onClick={() => removeFromCart(item.cartItemId)} aria-label={`Remove ${item.name}`} className="text-white/30 hover:text-red-400 transition p-0.5 flex-shrink-0">
+                          <X size={14} />
+                        </button>
+                      </div>
+                      {item.selectedAddOns && item.selectedAddOns.length > 0 && (
+                        <div className="space-y-0.5 mb-2">
+                          {item.selectedAddOns.map((a,i) => (
+                            <p key={i} className="text-brand/70 text-xs">+ {a.name} <span className="text-white/30">(+₱{a.price.toFixed(2)})</span></p>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="flex items-center gap-0.5 bg-black/30 rounded-xl p-1">
+                          <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-white/60 hover:text-red-400 hover:bg-white/10 transition">
+                            <Minus size={13} />
+                          </button>
+                          <span className="text-white font-bold w-6 text-center text-sm">{item.quantity}</span>
+                          <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-7 h-7 flex items-center justify-center rounded-lg text-white/60 hover:text-brand hover:bg-white/10 transition">
+                            <Plus size={13} />
+                          </button>
+                        </div>
+                        <span className="text-brand font-black text-base">₱{rowTotal.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Footer */}
+            <div className="px-5 py-4 border-t border-white/5">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-white/60 font-bold text-sm">Total</span>
+                <span className="text-white font-black text-2xl">₱{total.toFixed(2)}</span>
+              </div>
+              <button
+                onClick={async () => { await confirmOrder(); setCartOpen(false); }}
+                disabled={isSubmitting}
+                className="w-full bg-brand hover:bg-brand-dark text-white font-black py-4 rounded-2xl text-lg transition shadow-2xl shadow-brand/30 uppercase tracking-widest active:scale-95 disabled:opacity-60"
+              >
+                {isSubmitting ? 'Sending…' : 'Send to Kitchen'}
+              </button>
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
+
+      {/* SIZE / ADDON MODAL — portal to body to bypass any parent stacking context */}
+      {selectedProduct && createPortal(
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-end justify-center z-[9999]">
+          <div className="bg-sidebar-bg rounded-t-2xl w-full max-w-md border-t border-x border-white/10 flex flex-col max-h-[85dvh]">
+            {/* Modal header */}
+            <div className="flex items-start justify-between p-5 border-b border-white/5 flex-shrink-0">
+              <div className="flex-1">
+                <h3 className="text-xl font-black text-white leading-tight">{selectedProduct.name}</h3>
+                {selectedProduct.description && <p className="text-white/40 text-xs mt-1 line-clamp-2">{selectedProduct.description}</p>}
+              </div>
+              <button onClick={() => setSelectedProduct(null)} className="p-2 rounded-xl text-white/40 hover:text-white hover:bg-white/10 transition ml-3 flex-shrink-0">
+                <X size={18} />
+              </button>
+            </div>
+            {/* Sizes — scrollable middle */}
+            <div className="flex-1 px-5 py-4 space-y-4 overflow-y-auto custom-scrollbar">
               {groupedSizes.Hot && (
                 <div>
-                  <h4 className="text-red-400 font-bold text-sm uppercase tracking-wider mb-2 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400"></span> Hot Options</h4>
+                  <p className="flex items-center gap-2 text-red-400 text-xs font-black uppercase tracking-widest mb-2">
+                    <span className="w-2 h-2 rounded-full bg-red-400 inline-block" /> Hot Options
+                  </p>
                   <div className="space-y-2">
                     {groupedSizes.Hot.map((size, idx) => (
-                      <label key={`hot-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-gray-700'}`}>
-                        <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
-                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
+                      <label key={`hot-${idx}`} className={`flex items-center justify-between p-3.5 rounded-xl border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-brand bg-brand/10' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="size" className="accent-brand" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} />
+                          <span className="font-bold text-white capitalize text-sm">{size.displayName}</span>
+                        </div>
+                        <span className="text-brand font-bold text-sm">₱{size.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
@@ -649,12 +856,17 @@ export default function CustomerMenu() {
               )}
               {groupedSizes.Iced && (
                 <div>
-                  <h4 className="text-blue-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Iced Options</h4>
+                  <p className="flex items-center gap-2 text-blue-400 text-xs font-black uppercase tracking-widest mb-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-400 inline-block" /> Iced Options
+                  </p>
                   <div className="space-y-2">
                     {groupedSizes.Iced.map((size, idx) => (
-                      <label key={`iced-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-gray-700'}`}>
-                        <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white capitalize">{size.displayName}</span></div>
-                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
+                      <label key={`iced-${idx}`} className={`flex items-center justify-between p-3.5 rounded-xl border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-brand bg-brand/10' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="size" className="accent-brand" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} />
+                          <span className="font-bold text-white capitalize text-sm">{size.displayName}</span>
+                        </div>
+                        <span className="text-brand font-bold text-sm">₱{size.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
@@ -662,103 +874,49 @@ export default function CustomerMenu() {
               )}
               {groupedSizes.Standard && (
                 <div>
-                  {Object.keys(groupedSizes).length > 1 && <h4 className="text-gray-400 font-bold text-sm uppercase tracking-wider mb-2 mt-4">Other Options</h4>}
+                  {Object.keys(groupedSizes).length > 1 && <p className="text-white/40 text-xs font-black uppercase tracking-widest mb-2">Other Options</p>}
                   <div className="space-y-2">
                     {groupedSizes.Standard.map((size, idx) => (
-                      <label key={`std-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-accent bg-accent/10' : 'border-gray-700 hover:border-gray-500 bg-dark'}`}>
-                        <div className="flex items-center gap-3"><input type="radio" name="size" className="accent-accent w-4 h-4" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} /><span className="font-bold text-white">{size.displayName}</span></div>
-                        <span className="text-accent font-bold">P{size.price.toFixed(2)}</span>
+                      <label key={`std-${idx}`} className={`flex items-center justify-between p-3.5 rounded-xl border cursor-pointer transition ${selectedSize?.name === size.name ? 'border-brand bg-brand/10' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="size" className="accent-brand" checked={selectedSize?.name === size.name} onChange={() => setSelectedSize(size)} />
+                          <span className="font-bold text-white text-sm">{size.displayName}</span>
+                        </div>
+                        <span className="text-brand font-bold text-sm">₱{size.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
                 </div>
               )}
-              
-            {selectedProduct.addOns && selectedProduct.addOns.length > 0 && (
-                <div className="border-t border-gray-200 pt-4 mt-4">
-                  <h4 className="text-gray-300 font-bold text-sm uppercase tracking-wider mb-3">Optional Add-Ons</h4>
+              {selectedProduct.addOns && selectedProduct.addOns.length > 0 && (
+                <div className="border-t border-white/5 pt-4">
+                  <p className="text-white/60 text-xs font-black uppercase tracking-widest mb-3">Optional Add-Ons</p>
                   <div className="space-y-2">
                     {selectedProduct.addOns.map((addOn, idx) => (
-                      <label key={`addon-${idx}`} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${selectedAddOns.some(a => a.name === addOn.name) ? 'border-accent bg-accent/10' : 'border-gray-300 hover:border-gray-400 bg-gray-50'}`}>
+                      <label key={`addon-${idx}`} className={`flex items-center justify-between p-3.5 rounded-xl border cursor-pointer transition ${selectedAddOns.some(a => a.name === addOn.name) ? 'border-brand bg-brand/10' : 'border-white/10 hover:border-white/20 bg-white/5'}`}>
                         <div className="flex items-center gap-3">
-                          <input type="checkbox" className="accent-accent w-4 h-4 rounded" checked={selectedAddOns.some(a => a.name === addOn.name)} onChange={() => toggleAddOn(addOn)} />
-                          <span className="font-bold text-accent">{addOn.name}</span>
+                          <input type="checkbox" className="accent-brand" checked={selectedAddOns.some(a => a.name === addOn.name)} onChange={() => toggleAddOn(addOn)} />
+                          <span className="font-bold text-white text-sm">{addOn.name}</span>
                         </div>
-                        <span className="text-accent font-bold">+P{addOn.price.toFixed(2)}</span>
+                        <span className="text-brand font-bold text-sm">+₱{addOn.price.toFixed(2)}</span>
                       </label>
                     ))}
                   </div>
                 </div>
               )}
             </div>
-            <div className="flex gap-3">
-              <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-gray-100 text-gray-900 border border-gray-300 py-3 rounded-md font-semibold hover:bg-gray-200 transition">Cancel</button>
-              <button onClick={() => addToCart(selectedProduct, selectedSize, selectedAddOns)} className="flex-1 bg-accent text-white py-3 rounded-md font-bold hover:bg-opacity-90 transition shadow-lg shadow-accent/20">Add to Cart</button>
+            {/* Modal footer — always visible, never scrolled away */}
+            <div className="flex gap-3 p-5 border-t border-white/5 flex-shrink-0">
+              <button onClick={() => setSelectedProduct(null)} className="flex-1 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white font-bold py-3.5 rounded-2xl transition text-sm">
+                Cancel
+              </button>
+              <button onClick={() => addToCart(selectedProduct, selectedSize, selectedAddOns)} className="flex-2 flex-1 bg-brand hover:bg-brand-dark text-white font-black py-3.5 rounded-2xl transition shadow-lg shadow-brand/20 text-sm">
+                Add to Cart
+              </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ORIGINAL CART BOTTOM SHEET (Name Input Removed) */}
-      {cart.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-surface border-t border-gray-800 p-4 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] z-40">
-          <div className="max-w-4xl mx-auto">
-            <div className="mb-4 max-h-40 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
-              {/* --- CART ITEMS LIST --- */}
-              {cart.map((item) => {
-                // Calculate total for this specific item row (Base Price + AddOns) * Qty
-                const itemAddOnTotal = (item.selectedAddOns || []).reduce((s, a) => s + (Number(a.price) || 0), 0);
-                const rowTotal = ((item.price || 0) + itemAddOnTotal) * item.quantity;
-
-                return (
-                  <div key={item.cartItemId} className="flex justify-between items-start border-b border-gray-200 py-4 last:border-0">
-                    <div className="flex-1">
-                      
-                      {/* Name and Remove (X) Button */}
-                      <div className="flex justify-between mb-1">
-                        <h4 className="font-bold text-white text-sm leading-tight pr-4">{item.name}</h4>
-                        <button onClick={() => removeFromCart(item.cartItemId)} className="text-gray-400 hover:text-white transition p-1 shrink-0">
-                          <X size={18} />
-                        </button>
-                      </div>
-                      
-                      {/* Show Add-Ons List if they exist */}
-                      {item.selectedAddOns && item.selectedAddOns.length > 0 && (
-                        <div className="text-xs text-accent mb-3 space-y-0.5">
-                          {item.selectedAddOns.map((addon, idx) => (
-                            <div key={idx} className="flex items-center gap-1.5">
-                              <span className="text-accent text-[8px]">▶</span> {addon.name} <span className="font-mono text-[10px] tracking-wider text-white">(+₱{Number(addon.price).toFixed(2)})</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      
-                      {/* Plus/Minus Controls & Total Price */}
-                      <div className="flex items-center justify-between mt-2">
-                        <div className="flex items-center gap-3 bg-gray-100 rounded-lg p-1 border border-gray-200">
-                          <button onClick={() => updateQuantity(item.cartItemId, -1)} className="p-1.5 text-gray-600 hover:text-red-500 bg-white rounded shadow-sm transition">
-                            <Minus size={14} />
-                          </button>
-                          <span className="font-bold text-gray-900 w-4 text-center text-sm">{item.quantity}</span>
-                          <button onClick={() => updateQuantity(item.cartItemId, 1)} className="p-1.5 text-gray-600 hover:text-accent bg-white rounded shadow-sm transition">
-                            <Plus size={14} />
-                          </button>
-                        </div>
-                        <span className="font-black text-accent text-base">₱{rowTotal.toFixed(2)}</span>
-                      </div>
-                      
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-4 mt-2">
-              <div className="flex justify-between w-full md:w-auto md:flex-1 font-bold text-xl"><span className="text-gray-300">Total:</span><span className="text-accent text-2xl">P{total.toFixed(2)}</span></div>
-              <button type="button" onClick={confirmOrder} className="w-full md:w-auto bg-accent text-dark px-10 py-4 rounded-md font-black text-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-wide">Send to Kitchen</button>
-            </div>
-          </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -1,253 +1,967 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  Users, Shield, Menu, X, LogOut, Plus, Edit2, Trash2,
+  Search, Eye, EyeOff, AlertCircle, Tag, Loader2, Lock,
+  ChevronRight, UserCheck, Monitor, Check
+} from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5002';
 
+const ROLE_META = {
+  superadmin: { label: 'Superadmin', bg: 'bg-emerald-500/20', text: 'text-emerald-400', border: 'border-emerald-500/30' },
+  Admin:      { label: 'Admin',      bg: 'bg-blue-500/20',    text: 'text-blue-400',    border: 'border-blue-500/30' },
+  Staff:      { label: 'Staff',      bg: 'bg-gray-500/20',    text: 'text-gray-400',    border: 'border-gray-500/30' },
+};
+const getRoleMeta = (role) =>
+  ROLE_META[role] ?? { label: role, bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30' };
+
+// ---------------------------------------------------------------------------
+// Sub-components (defined outside main component to avoid remount on render)
+// ---------------------------------------------------------------------------
+
+const SkeletonRow = () => (
+  <div className="animate-pulse flex items-center gap-4 p-4 bg-white/5 rounded-xl border border-white/5">
+    <div className="w-5 h-5 bg-white/10 rounded" />
+    <div className="w-10 h-10 bg-white/10 rounded-xl flex-shrink-0" />
+    <div className="flex-1 space-y-2">
+      <div className="h-4 bg-white/10 rounded w-1/3" />
+      <div className="h-3 bg-white/5 rounded w-1/4" />
+    </div>
+    <div className="w-20 h-6 bg-white/10 rounded-full" />
+    <div className="flex gap-2">
+      <div className="w-8 h-8 bg-white/10 rounded-lg" />
+      <div className="w-8 h-8 bg-white/10 rounded-lg" />
+    </div>
+  </div>
+);
+
+const UserCard = memo(({ user, isSelected, onSelect, onEdit, onDelete }) => {
+  const meta = getRoleMeta(user.role);
+  const isProtected = user.role === 'superadmin';
+  const initials = user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+  return (
+    <div className={`flex items-center gap-4 p-4 rounded-xl border transition-all duration-150
+      ${isSelected ? 'bg-brand/10 border-brand/40' : 'bg-white/5 border-white/5 hover:border-white/15'}`}
+    >
+      <button
+        onClick={() => !isProtected && onSelect(user._id)}
+        className={`w-5 h-5 flex-shrink-0 rounded border flex items-center justify-center transition
+          ${isProtected ? 'opacity-0 pointer-events-none' : isSelected
+            ? 'bg-brand border-brand' : 'border-white/20 hover:border-brand'}`}
+        aria-label={isSelected ? 'Deselect' : 'Select'}
+      >
+        {isSelected && <Check size={11} className="text-white" strokeWidth={3} />}
+      </button>
+
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm flex-shrink-0 ${meta.bg} ${meta.text}`}>
+        {initials}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <p className="font-bold text-white truncate">{user.name}</p>
+        <p className="text-xs text-white/40 font-mono">{user.userCode}</p>
+      </div>
+
+      <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full border flex-shrink-0
+        ${meta.bg} ${meta.text} ${meta.border}`}>
+        {meta.label}
+      </span>
+
+      {!isProtected ? (
+        <div className="flex gap-1 flex-shrink-0">
+          <button
+            onClick={() => onEdit(user)}
+            className="p-2 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition"
+            aria-label={`Edit ${user.name}`}
+          >
+            <Edit2 size={14} />
+          </button>
+          <button
+            onClick={() => onDelete(user)}
+            className="p-2 rounded-lg text-red-400/50 hover:text-red-400 hover:bg-red-500/10 transition"
+            aria-label={`Delete ${user.name}`}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ) : (
+        <Lock size={13} className="text-white/20 flex-shrink-0" />
+      )}
+    </div>
+  );
+});
+UserCard.displayName = 'UserCard';
+
+const NAV_ITEMS = [
+  { id: 'users', label: 'User Control',  icon: Users },
+  { id: 'roles', label: 'Access Roles',  icon: Tag },
+];
+
+function SidebarNav({ activeSection, onSectionChange, onPOS, onLogout, onClose }) {
+  return (
+    <>
+      <div className="p-5 border-b border-white/5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-brand/20 flex items-center justify-center flex-shrink-0">
+            <Monitor size={16} className="text-brand" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-white text-xs uppercase tracking-widest leading-none">Command</p>
+            <p className="font-black text-brand text-xs uppercase tracking-widest leading-none mt-0.5">Center</p>
+          </div>
+          {onClose && (
+            <button onClick={onClose} className="p-1 rounded text-white/30 hover:text-white transition" aria-label="Close menu">
+              <X size={18} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <nav className="flex-1 p-3 space-y-0.5">
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => { onSectionChange(id); onClose?.(); }}
+            aria-current={activeSection === id ? 'page' : undefined}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition font-bold text-sm
+              ${activeSection === id ? 'bg-brand/20 text-brand' : 'text-white/50 hover:text-white hover:bg-white/5'}`}
+          >
+            <Icon size={16} />
+            {label}
+            {activeSection === id && <ChevronRight size={13} className="ml-auto" />}
+          </button>
+        ))}
+      </nav>
+
+      <div className="p-3 border-t border-white/5 space-y-0.5">
+        <button
+          onClick={onPOS}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition font-bold text-sm"
+        >
+          <Monitor size={16} />
+          POS Dashboard
+        </button>
+        <button
+          onClick={onLogout}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition font-bold text-sm"
+        >
+          <LogOut size={16} />
+          Lock Panel
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+const EMPTY_FORM = { name: '', password: '', role: 'Staff', showPassword: false };
+
 export default function SuperAdminPanel() {
-  const [users, setUsers] = useState([]);
-  const [roles, setRoles] = useState([]);
-  const [newUserForm, setNewUserForm] = useState({ name: '', password: '', role: 'Staff' });
-  const [newRole, setNewRole] = useState('');
-  const [loginForm, setLoginForm] = useState({ name: '', password: '' });
-  
-  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('semivra_token'));
   const navigate = useNavigate();
 
-  const apiFetch = async (endpoint, options = {}) => {
-    if (!options.headers) options.headers = {};
+  // Auth
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
     const token = localStorage.getItem('semivra_token');
-    if (token) options.headers['Authorization'] = `Bearer ${token}`;
-    
-    if (options.body && typeof options.body === 'string' && !options.headers['Content-Type']) {
-      options.headers['Content-Type'] = 'application/json';
-    }
-    
-    const cleanEndpoint = endpoint.replace(API_URL, '');
-    const response = await fetch(`${API_URL}${cleanEndpoint}`, options);
-    
-    if (response.status === 401 || response.status === 403) {
-      if (cleanEndpoint !== '/api/users/login') { 
-        handleLogout();
+    if (!token) return false;
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      if (payload.exp && payload.exp * 1000 < Date.now()) {
+        localStorage.removeItem('semivra_token');
+        return false;
       }
-    }
-    return response;
-  };
+      return payload.role === 'superadmin';
+    } catch { return false; }
+  });
+  const [loginForm, setLoginForm]   = useState({ name: '', password: '', showPassword: false });
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
 
+  // Data
+  const [users, setUsers]     = useState([]);
+  const [roles, setRoles]     = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  // Search / filter
+  const [search, setSearch]       = useState('');
+  const [filterRole, setFilterRole] = useState('All');
+
+  // Batch selection
+  const [selected, setSelected]     = useState(new Set());
+  const [batchRole, setBatchRole]   = useState('');
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  // Create / Edit modal
+  const [modal, setModal]           = useState({ open: false, mode: 'create', user: null });
+  const [form, setForm]             = useState(EMPTY_FORM);
+  const [formErrors, setFormErrors] = useState({});
+  const [formLoading, setFormLoading] = useState(false);
+
+  // Delete confirm
+  const [confirmDelete, setConfirmDelete] = useState({ open: false, user: null });
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Navigation / layout
+  const [activeSection, setActiveSection] = useState('users');
+  const [drawerOpen, setDrawerOpen]       = useState(false);
+
+  // Toast
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+
+  // Roles form
+  const [newRole, setNewRole]       = useState('');
+  const [roleLoading, setRoleLoading] = useState(false);
+
+  // -------------------------------------------------------------------------
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast(t => ({ ...t, show: false })), 3000);
+  }, []);
+
+  const apiFetch = useCallback(async (endpoint, options = {}) => {
+    const headers = { ...options.headers };
+    const token = localStorage.getItem('semivra_token');
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+    if ((res.status === 401 || res.status === 403) && endpoint !== '/api/users/login') handleLogout();
+    return res;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/users');
+      if (res.ok) setUsers((await res.json()).users || []);
+    } catch {} finally { setLoading(false); }
+  }, [apiFetch]);
+
+  const fetchRoles = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/roles');
+      if (res.ok) setRoles((await res.json()).roles || []);
+    } catch {}
+  }, [apiFetch]);
+
+  useEffect(() => {
+    if (isAuthenticated) { fetchUsers(); fetchRoles(); }
+  }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -------------------------------------------------------------------------
+  // Filtered users (memoised)
+  const filteredUsers = useMemo(() => {
+    const q = search.toLowerCase();
+    return users.filter(u => {
+      const matchSearch = !q
+        || u.name.toLowerCase().includes(q)
+        || u.userCode?.toLowerCase().includes(q)
+        || u.role?.toLowerCase().includes(q);
+      const matchRole = filterRole === 'All' || u.role === filterRole;
+      return matchSearch && matchRole;
+    });
+  }, [users, search, filterRole]);
+
+  const selectableUsers = useMemo(() => filteredUsers.filter(u => u.role !== 'superadmin'), [filteredUsers]);
+
+  // -------------------------------------------------------------------------
+  // Auth handlers
   const handleSystemLogin = async (e) => {
     e.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
     try {
       const res = await apiFetch('/api/users/login', {
-        method: 'POST', 
-        body: JSON.stringify(loginForm)
+        method: 'POST',
+        body: JSON.stringify({ name: loginForm.name, password: loginForm.password }),
       });
       const data = await res.json();
-      
       if (data.success) {
-        if (data.user.name !== 'Super Admin') {
-           alert("Access Denied: This panel is restricted to the Super Admin.");
-           return;
+        const payload = JSON.parse(atob(data.token.split('.')[1]));
+        if (payload.role !== 'superadmin') {
+          setLoginError('Access Denied: Superadmin credentials required.');
+          return;
         }
         localStorage.setItem('semivra_token', data.token);
         setIsAuthenticated(true);
       } else {
-        alert("Access Denied: Invalid name or password.");
+        setLoginError('Invalid name or password.');
       }
-    } catch (err) { console.error("Login failed", err); }
+    } catch { setLoginError('Network error. Please try again.'); }
+    finally { setLoginLoading(false); }
   };
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     localStorage.removeItem('semivra_token');
     setIsAuthenticated(false);
-    setLoginForm({name: '', password: ''});
+    setLoginForm({ name: '', password: '', showPassword: false });
     setUsers([]);
-  };
+    setSelected(new Set());
+  }, []);
 
-  const fetchUsers = async () => {
-    try {
-      const res = await apiFetch('/api/users');
-      if (res.ok) setUsers((await res.json()).users || []);
-    } catch (err) { console.error("Failed to fetch users", err); }
-  };
-
-  const fetchRoles = async () => {
-    try {
-      const res = await apiFetch('/api/roles');
-      if (res.ok) setRoles((await res.json()).roles || []);
-    } catch (err) { console.error("Failed to fetch roles", err); }
-  };
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      fetchUsers();
-      fetchRoles();
+  // -------------------------------------------------------------------------
+  // Validation
+  const validateForm = useCallback((f, mode, editingUser) => {
+    const errors = {};
+    const trimmed = f.name.trim();
+    if (!trimmed) errors.name = 'Name is required.';
+    else if (trimmed.length < 2) errors.name = 'Name must be at least 2 characters.';
+    else {
+      const exists = users.some(
+        u => u.name.toLowerCase() === trimmed.toLowerCase()
+          && (mode === 'create' || u._id !== editingUser?._id)
+      );
+      if (exists) errors.name = 'This name is already taken.';
     }
-  }, [isAuthenticated]);
+    if (mode === 'create' && !f.password) errors.password = 'Password is required.';
+    else if (f.password && f.password.length < 4) errors.password = 'Password must be at least 4 characters.';
+    return errors;
+  }, [users]);
 
-  const handleAddUser = async (e) => {
+  // -------------------------------------------------------------------------
+  // Modal helpers
+  const openCreateModal = useCallback(() => {
+    setForm(EMPTY_FORM);
+    setFormErrors({});
+    setModal({ open: true, mode: 'create', user: null });
+  }, []);
+
+  const openEditModal = useCallback((user) => {
+    setForm({ name: user.name, password: '', role: user.role, showPassword: false });
+    setFormErrors({});
+    setModal({ open: true, mode: 'edit', user });
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setModal({ open: false, mode: 'create', user: null });
+    setForm(EMPTY_FORM);
+    setFormErrors({});
+  }, []);
+
+  const handleFormChange = useCallback((field, value) => {
+    setForm(prev => {
+      const next = { ...prev, [field]: value };
+      setFormErrors(validateForm(next, modal.mode, modal.user));
+      return next;
+    });
+  }, [validateForm, modal.mode, modal.user]);
+
+  const handleSubmitModal = async (e) => {
     e.preventDefault();
-    if (!newUserForm.name || !newUserForm.password) return alert("Name and password required.");
+    const errors = validateForm(form, modal.mode, modal.user);
+    setFormErrors(errors);
+    if (Object.keys(errors).length) return;
 
+    setFormLoading(true);
     try {
-      const res = await apiFetch('/api/users', { method: 'POST', body: JSON.stringify(newUserForm) });
-      const data = await res.json();
-      
-      if (data.success) {
-        alert("User created successfully!");
-        setNewUserForm({ name: '', password: '', role: 'Staff' });
-        fetchUsers();
+      if (modal.mode === 'create') {
+        const res = await apiFetch('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({ name: form.name.trim(), password: form.password, role: form.role }),
+        });
+        const data = await res.json();
+        if (data.success) { showToast('User created.'); closeModal(); fetchUsers(); }
+        else setFormErrors({ general: data.error || 'Failed to create user.' });
       } else {
-        alert(`Failed to create user: ${data.error}`);
+        const body = { name: form.name.trim(), role: form.role };
+        if (form.password) body.password = form.password;
+        const res = await apiFetch(`/api/users/${modal.user._id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.success) { showToast('User updated.'); closeModal(); fetchUsers(); }
+        else setFormErrors({ general: data.error || 'Failed to update user.' });
       }
-    } catch (err) { console.error("Failed to add user", err); }
+    } catch { setFormErrors({ general: 'Network error. Please try again.' }); }
+    finally { setFormLoading(false); }
   };
 
-  const handleDeleteUser = async (id, name) => {
-    if (name === 'Super Admin') return alert("You cannot delete the master account.");
-    if (!window.confirm(`Are you sure you want to permanently delete user: ${name}?`)) return;
+  // -------------------------------------------------------------------------
+  // Delete
+  const handleDeleteUser = async () => {
+    if (!confirmDelete.user) return;
+    setDeleteLoading(true);
     try {
-      const res = await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
-      if (res.ok) fetchUsers();
-    } catch (err) { console.error("Delete failed", err); }
+      const res = await apiFetch(`/api/users/${confirmDelete.user._id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast(`${confirmDelete.user.name} removed.`);
+        setSelected(s => { const n = new Set(s); n.delete(confirmDelete.user._id); return n; });
+        setConfirmDelete({ open: false, user: null });
+        fetchUsers();
+      } else { showToast('Failed to remove user.', 'error'); }
+    } finally { setDeleteLoading(false); }
   };
 
-  // --- NEW: ROLE CRUD HANDLERS ---
+  // -------------------------------------------------------------------------
+  // Batch
+  const toggleSelect = useCallback((id) => {
+    setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    setSelected(selectableUsers.length && selected.size === selectableUsers.length
+      ? new Set()
+      : new Set(selectableUsers.map(u => u._id))
+    );
+  }, [selected, selectableUsers]);
+
+  const handleBatchChangeRole = async () => {
+    if (!batchRole || !selected.size) return;
+    setBatchLoading(true);
+    try {
+      await Promise.all([...selected].map(id =>
+        apiFetch(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role: batchRole }) })
+      ));
+      showToast(`Role updated for ${selected.size} user(s).`);
+      setSelected(new Set()); setBatchRole(''); fetchUsers();
+    } catch { showToast('Failed to update roles.', 'error'); }
+    finally { setBatchLoading(false); }
+  };
+
+  const handleBatchDelete = async () => {
+    if (!selected.size) return;
+    setBatchLoading(true);
+    try {
+      await Promise.all([...selected].map(id => apiFetch(`/api/users/${id}`, { method: 'DELETE' })));
+      showToast(`${selected.size} user(s) removed.`);
+      setSelected(new Set()); fetchUsers();
+    } catch { showToast('Failed to remove users.', 'error'); }
+    finally { setBatchLoading(false); }
+  };
+
+  // -------------------------------------------------------------------------
+  // Role management
   const handleAddRole = async (e) => {
     e.preventDefault();
-    if(!newRole.trim()) return;
+    if (!newRole.trim()) return;
+    setRoleLoading(true);
     try {
       await apiFetch('/api/roles', { method: 'POST', body: JSON.stringify({ name: newRole.trim() }) });
-      setNewRole('');
-      fetchRoles();
-    } catch (err) { console.error(err); }
+      setNewRole(''); fetchRoles(); showToast('Role added.');
+    } finally { setRoleLoading(false); }
   };
 
-  const handleDeleteRole = async (id) => {
-    if(!window.confirm("Delete this custom role?")) return;
+  const handleDeleteRole = async (id, name) => {
     try {
       await apiFetch(`/api/roles/${id}`, { method: 'DELETE' });
-      fetchRoles();
-    } catch (err) { console.error(err); }
+      fetchRoles(); showToast(`"${name}" removed.`);
+    } catch { showToast('Failed to delete role.', 'error'); }
   };
 
-  // --- LOGIN UI ---
+  // -------------------------------------------------------------------------
+  // Derived
+  const sectionLabel = NAV_ITEMS.find(n => n.id === activeSection)?.label ?? '';
+  const allSelected = selectableUsers.length > 0 && selected.size === selectableUsers.length;
+  const hasFormErrors = Object.keys(formErrors).some(k => k !== 'general' && formErrors[k]);
+
+  // =========================================================================
+  // LOGIN SCREEN
+  // =========================================================================
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-light flex flex-col items-center justify-center p-4">
-        <form onSubmit={handleSystemLogin} className="bg-surface p-8 rounded-xl border border-surface-800 shadow-2xl max-w-sm w-full text-center">
-          <h2 className="text-2xl font-black text-white tracking-widest mb-2 uppercase">System Config</h2>
-          <p className="text-gray-400 text-sm mb-6">Enter master credentials.</p>
-          <input type="text" placeholder="Admin Name" value={loginForm.name} onChange={(e) => setLoginForm({...loginForm, name: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-3 font-bold" required autoFocus />
-          <input type="password" placeholder="Password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-surface border-2 border-gray-700 focus:border-accent text-center text-white py-3 rounded-lg outline-none mb-6 font-bold tracking-widest" required />
-          <button type="submit" className="w-full bg-accent text-dark font-black py-4 rounded-lg hover:bg-yellow-500 transition shadow-lg shadow-accent/20 uppercase tracking-widest mb-4">AUTHENTICATE</button>
-          <button type="button" onClick={() => navigate('/admin')} className="text-gray-500 text-xs hover:text-white uppercase tracking-widest transition font-bold">Return to POS</button>
+      <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center p-4">
+        <form onSubmit={handleSystemLogin} className="bg-sidebar-bg border border-white/10 rounded-2xl shadow-2xl w-full max-w-sm p-8">
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-14 h-14 rounded-2xl bg-brand/20 flex items-center justify-center mb-4">
+              <Shield size={26} className="text-brand" />
+            </div>
+            <h2 className="text-xl font-black text-white uppercase tracking-widest">Command Center</h2>
+            <p className="text-white/40 text-xs mt-1">Superadmin credentials required</p>
+          </div>
+
+          {loginError && (
+            <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-xl px-4 py-3 mb-5">
+              <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <div className="space-y-3 mb-5">
+            <input
+              type="text"
+              placeholder="Admin Name"
+              aria-label="Admin Name"
+              value={loginForm.name}
+              onChange={e => setLoginForm(f => ({ ...f, name: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 focus:border-brand text-white placeholder-white/30 px-4 py-3 rounded-xl outline-none transition text-sm font-medium"
+              required
+              autoFocus
+            />
+            <div className="relative">
+              <input
+                type={loginForm.showPassword ? 'text' : 'password'}
+                placeholder="Password"
+                aria-label="Password"
+                value={loginForm.password}
+                onChange={e => setLoginForm(f => ({ ...f, password: e.target.value }))}
+                className="w-full bg-white/5 border border-white/10 focus:border-brand text-white placeholder-white/30 px-4 py-3 pr-12 rounded-xl outline-none transition text-sm tracking-widest"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setLoginForm(f => ({ ...f, showPassword: !f.showPassword }))}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/70 transition"
+                aria-label={loginForm.showPassword ? 'Hide password' : 'Show password'}
+              >
+                {loginForm.showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loginLoading}
+            className="w-full bg-brand hover:bg-brand-dark text-white font-black py-3 rounded-xl transition shadow-lg shadow-brand/20 uppercase tracking-widest text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {loginLoading ? <Loader2 size={15} className="animate-spin" /> : <Lock size={15} />}
+            {loginLoading ? 'Authenticating…' : 'Authenticate'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate('/admin')}
+            className="w-full text-white/30 hover:text-white/60 text-xs font-bold uppercase tracking-widest transition mt-4"
+          >
+            Return to POS
+          </button>
         </form>
       </div>
     );
   }
 
-  // --- DASHBOARD UI ---
+  // =========================================================================
+  // MAIN SHELL
+  // =========================================================================
   return (
-    <div className="min-h-screen bg-dark text-white p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto">
-        
-        {/* HEADER */}
-        <div className="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
-           <div>
-             <h1 className="text-3xl font-black text-accent tracking-tight leading-none mb-1">SYSTEM CONFIG</h1>
-             <p className="text-[11px] text-gray-500 font-bold uppercase tracking-[0.2em]">Super Admin Control Panel</p>
-           </div>
-           <div className="flex gap-4">
-              <button onClick={() => navigate('/admin')} className="border border-gray-700 text-black px-4 py-2 rounded font-bold hover:bg-black hover:text-white transition uppercase text-xs tracking-wider">POS Dashboard</button>
-              <button onClick={handleLogout} className="bg-red-900/30 text-red-500 border border-red-900 px-4 py-2 rounded font-bold hover:bg-red-600 hover:text-white transition uppercase text-xs tracking-wider">Lock Panel</button>
-           </div>
-        </div>
+    <div className="min-h-screen bg-page-bg flex text-white">
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-           
-           {/* LEFT COLUMN: FORMS */}
-           <div className="lg:col-span-1 flex flex-col gap-6">
-             
-             {/* REGISTER USER */}
-             <div className="bg-surface border border-gray-800 rounded-xl p-6 shadow-lg">
-               <h3 className="text-xl font-bold mb-4 text-accent border-b border-gray-800 pb-2">Register User</h3>
-               <form onSubmit={handleAddUser} className="space-y-4">
-                 <div>
-                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Employee Name</label>
-                   <input type="text" value={newUserForm.name} onChange={e => setNewUserForm({...newUserForm, name: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
-                 </div>
-                 <div>
-                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Account PIN / Password</label>
-                   <input type="password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
-                 </div>
-                 <div>
-                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1 block">Access Level</label>
-                   <select value={newUserForm.role} onChange={e => setNewUserForm({...newUserForm, role: e.target.value})} className="w-full bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent font-bold">
-                     <option value="Staff">Staff (Standard)</option>
-                     <option value="Admin">Admin (Manager)</option>
-                     {roles.map(r => <option key={r._id} value={r.name}>{r.name}</option>)}
-                   </select>
-                 </div>
-                 <button type="submit" className="w-full bg-accent text-dark font-black py-3 mt-2 rounded hover:bg-white shadow-lg hover:text-accent shadow-accent/20 transition uppercase tracking-wider text-xs">
-                   Create User
-                 </button>
-               </form>
-             </div>
-
-             {/* CUSTOM ROLE MANAGER */}
-             <div className="bg-surface border border-gray-800 rounded-xl p-6 shadow-lg">
-                <h3 className="text-xl font-bold mb-4 text-white border-b border-gray-800 pb-2">Custom Roles</h3>
-                <form onSubmit={handleAddRole} className="flex gap-2 mb-4">
-                  <input type="text" placeholder="e.g. Kitchen, Barista" value={newRole} onChange={e => setNewRole(e.target.value)} className="flex-1 bg-dark border border-gray-700 rounded p-2 text-sm text-black outline-none focus:border-accent" required />
-                  <button type="submit" className="bg-accent text-dark font-bold px-4 py-2 rounded text-xs hover:bg-white transition uppercase tracking-wider">Add</button>
-                </form>
-                <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
-                  {roles.length === 0 ? (
-                    <p className="text-xs text-gray-500 italic">No custom roles created.</p>
-                  ) : roles.map(r => (
-                     <div key={r._id} className="flex justify-between items-center bg-dark px-3 py-2 rounded border border-gray-700">
-                       <span className="text-sm font-bold text-black">{r.name}</span>
-                       <button onClick={() => handleDeleteRole(r._id)} className="text-red-500 hover:text-red-400 font-bold text-xs uppercase tracking-wider">Del</button>
-                     </div>
-                  ))}
-                </div>
-              </div>
-
-           </div>
-
-           {/* RIGHT COLUMN: USER LIST */}
-           <div className="lg:col-span-2 bg-surface border border-gray-800 rounded-xl p-6 shadow-lg flex flex-col h-[700px]">
-             <h3 className="text-xl font-bold mb-4 text-white border-b border-gray-800 pb-2">Active Personnel</h3>
-             
-             <div className="flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700">
-               <div className="space-y-3">
-                 {users.map(user => (
-                   <div key={user._id} className="bg-dark p-4 rounded-lg border border-gray-700 flex justify-between items-center transition hover:border-gray-500">
-                     <div className="flex items-center gap-4">
-                        <div className={`w-10 h-10 rounded flex items-center justify-center font-black text-lg ${user.role === 'Admin' || user.role === 'admin' ? 'bg-accent/20 text-accent' : 'bg-gray-800 text-gray-400'}`}>
-                          {user.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="font-bold text-black text-md">{user.name}</p>
-                          <div className="flex gap-2 items-center mt-1">
-                             <span className="text-[10px] bg-black text-gray-400 px-2 py-0.5 rounded font-mono border border-gray-800">{user.userCode}</span>
-                             <span className={`text-[9px] uppercase tracking-widest font-black ${user.role === 'Admin' || user.role === 'admin' ? 'text-accent' : 'text-gray-500'}`}>{user.role}</span>
-                          </div>
-                        </div>
-                     </div>
-                     
-                     {user.name !== 'Super Admin' && (
-                       <button onClick={() => handleDeleteUser(user._id, user.name)} className="text-red-500 hover:text-white font-bold px-3 py-1.5 bg-red-900/20 hover:bg-red-600 rounded transition text-xs uppercase tracking-wider">
-                         Revoke
-                       </button>
-                     )}
-                   </div>
-                 ))}
-               </div>
-             </div>
-           </div>
-
+      {/* Toast */}
+      <div className={`fixed top-4 right-4 z-[100] transition-all duration-300
+        ${toast.show ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'}`}>
+        <div className={`flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl border text-sm font-bold
+          ${toast.type === 'success'
+            ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'
+            : 'bg-red-500/20 border-red-500/30 text-red-400'}`}>
+          {toast.type === 'success' ? <UserCheck size={14} /> : <AlertCircle size={14} />}
+          {toast.message}
         </div>
       </div>
+
+      {/* Mobile drawer overlay */}
+      {drawerOpen && (
+        <div
+          className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+
+      {/* Mobile drawer */}
+      <aside className={`lg:hidden fixed top-0 left-0 h-full w-64 bg-sidebar-bg z-50 flex flex-col border-r border-white/5
+        transition-transform duration-300 ${drawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <SidebarNav
+          activeSection={activeSection}
+          onSectionChange={setActiveSection}
+          onPOS={() => navigate('/admin')}
+          onLogout={handleLogout}
+          onClose={() => setDrawerOpen(false)}
+        />
+      </aside>
+
+      {/* Desktop sidebar */}
+      <aside className="hidden lg:flex flex-col w-64 flex-shrink-0 bg-sidebar-bg border-r border-white/5 h-screen sticky top-0 overflow-y-auto">
+        <SidebarNav
+          activeSection={activeSection}
+          onSectionChange={setActiveSection}
+          onPOS={() => navigate('/admin')}
+          onLogout={handleLogout}
+        />
+      </aside>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0">
+
+        {/* Mobile top bar */}
+        <header className="lg:hidden flex items-center gap-3 px-4 h-16 bg-sidebar-bg border-b border-white/5 flex-shrink-0">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="p-2 rounded-xl text-white/50 hover:text-white hover:bg-white/10 transition"
+            aria-label="Open navigation menu"
+            aria-expanded={drawerOpen}
+          >
+            <Menu size={21} />
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-white text-sm uppercase tracking-widest truncate">Command Center</p>
+            <p className="text-brand text-[10px] font-bold uppercase tracking-[0.15em] truncate">
+              Management &rsaquo; {sectionLabel}
+            </p>
+          </div>
+        </header>
+
+        {/* Sticky section header */}
+        <div className="sticky top-0 z-20 bg-page-bg/90 backdrop-blur-md border-b border-white/5 px-6 py-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-white/30 text-[10px] font-bold uppercase tracking-[0.2em]">
+              Management &rsaquo; {sectionLabel}
+            </p>
+            <h1 className="text-xl font-black text-white mt-0.5">{sectionLabel}</h1>
+          </div>
+          {activeSection === 'users' && (
+            <button
+              onClick={openCreateModal}
+              className="flex items-center gap-2 bg-brand hover:bg-brand-dark text-white font-bold px-4 py-2.5 rounded-xl transition shadow-lg shadow-brand/20 text-sm flex-shrink-0"
+            >
+              <Plus size={15} />
+              New User
+            </button>
+          )}
+        </div>
+
+        {/* ----------------------------------------------------------------- */}
+        {/* USERS SECTION                                                      */}
+        {/* ----------------------------------------------------------------- */}
+        {activeSection === 'users' && (
+          <div className="flex-1 p-6 space-y-4">
+
+            {/* Search + filter */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30" />
+                <input
+                  type="text"
+                  placeholder="Search name, code, or role…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 focus:border-brand text-white placeholder-white/30
+                    pl-10 pr-4 py-2.5 rounded-xl outline-none transition text-sm"
+                />
+              </div>
+              <select
+                value={filterRole}
+                onChange={e => setFilterRole(e.target.value)}
+                className="bg-white/5 border border-white/10 focus:border-brand text-white px-4 py-2.5 rounded-xl outline-none text-sm font-medium"
+              >
+                <option className="bg-[#1a1a1a] text-white" value="All">All Roles</option>
+                <option className="bg-[#1a1a1a] text-white" value="superadmin">Superadmin</option>
+                <option className="bg-[#1a1a1a] text-white" value="Admin">Admin</option>
+                <option className="bg-[#1a1a1a] text-white" value="Staff">Staff</option>
+                {roles.map(r => <option className="bg-[#1a1a1a] text-white" key={r._id} value={r.name}>{r.name}</option>)}
+              </select>
+            </div>
+
+            {/* Select-all row */}
+            {!loading && filteredUsers.length > 0 && (
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSelectAll}
+                  className="flex items-center gap-2 text-xs font-bold text-white/40 hover:text-white transition uppercase tracking-wider"
+                >
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center transition
+                    ${allSelected ? 'bg-brand border-brand' : 'border-white/20'}`}>
+                    {allSelected && <Check size={10} className="text-white" strokeWidth={3} />}
+                  </div>
+                  {allSelected ? 'Deselect All' : 'Select All'}
+                </button>
+                {selected.size > 0 && (
+                  <span className="text-brand text-xs font-bold">{selected.size} selected</span>
+                )}
+              </div>
+            )}
+
+            {/* User cards */}
+            <div className="space-y-2">
+              {loading
+                ? Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
+                : filteredUsers.length === 0
+                  ? (
+                    <div className="flex flex-col items-center py-20 text-center">
+                      <Users size={40} className="text-white/10 mb-4" />
+                      <p className="text-white/40 font-bold text-sm mb-1">
+                        {search ? 'No users match your search.' : 'No users yet.'}
+                      </p>
+                      {!search && (
+                        <button
+                          onClick={openCreateModal}
+                          className="mt-4 flex items-center gap-2 bg-brand/20 hover:bg-brand/30 text-brand font-bold px-4 py-2 rounded-xl transition text-sm"
+                        >
+                          <Plus size={14} /> Create First User
+                        </button>
+                      )}
+                    </div>
+                  )
+                  : filteredUsers.map(user => (
+                    <UserCard
+                      key={user._id}
+                      user={user}
+                      isSelected={selected.has(user._id)}
+                      onSelect={toggleSelect}
+                      onEdit={openEditModal}
+                      onDelete={(u) => setConfirmDelete({ open: true, user: u })}
+                    />
+                  ))
+              }
+            </div>
+          </div>
+        )}
+
+        {/* ----------------------------------------------------------------- */}
+        {/* ROLES SECTION                                                      */}
+        {/* ----------------------------------------------------------------- */}
+        {activeSection === 'roles' && (
+          <div className="flex-1 p-6 max-w-lg">
+            <form onSubmit={handleAddRole} className="flex gap-3 mb-6">
+              <input
+                type="text"
+                placeholder="New role name (e.g. Barista, Kitchen)"
+                value={newRole}
+                onChange={e => setNewRole(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 focus:border-brand text-white placeholder-white/30 px-4 py-2.5 rounded-xl outline-none transition text-sm"
+              />
+              <button
+                type="submit"
+                disabled={roleLoading || !newRole.trim()}
+                className="flex items-center gap-2 bg-brand hover:bg-brand-dark text-white font-bold px-4 py-2.5 rounded-xl transition disabled:opacity-50 text-sm"
+              >
+                {roleLoading ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                Add
+              </button>
+            </form>
+
+            <div className="space-y-2">
+              {roles.length === 0 ? (
+                <div className="flex flex-col items-center py-16 text-center">
+                  <Tag size={32} className="text-white/10 mb-3" />
+                  <p className="text-white/40 font-bold text-sm">No custom roles yet.</p>
+                  <p className="text-white/20 text-xs mt-1">Staff and Admin are built-in.</p>
+                </div>
+              ) : roles.map(r => (
+                <div
+                  key={r._id}
+                  className="flex items-center justify-between bg-white/5 hover:bg-white/[0.07] border border-white/5 px-5 py-4 rounded-xl transition"
+                >
+                  <div className="flex items-center gap-3">
+                    <Tag size={13} className="text-brand" />
+                    <span className="font-bold text-white text-sm">{r.name}</span>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteRole(r._id, r.name)}
+                    className="p-1.5 rounded-lg text-red-400/40 hover:text-red-400 hover:bg-red-500/10 transition"
+                    aria-label={`Delete ${r.name} role`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* =================================================================== */}
+      {/* BATCH ACTION FLOATING BAR                                            */}
+      {/* =================================================================== */}
+      {selected.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3
+          bg-[#1f1f1f] border border-white/15 shadow-2xl px-5 py-3 rounded-2xl animate-fade-in">
+          <span className="text-white/50 text-sm font-bold whitespace-nowrap">{selected.size} selected</span>
+          <div className="w-px h-5 bg-white/10 flex-shrink-0" />
+          <select
+            value={batchRole}
+            onChange={e => setBatchRole(e.target.value)}
+            className="bg-white/10 border border-white/10 text-white text-sm px-3 py-1.5 rounded-lg outline-none"
+          >
+            <option className="bg-[#1a1a1a] text-white" value="">Change role…</option>
+            <option className="bg-[#1a1a1a] text-white" value="Admin">Admin</option>
+            <option className="bg-[#1a1a1a] text-white" value="Staff">Staff</option>
+            {roles.map(r => <option className="bg-[#1a1a1a] text-white" key={r._id} value={r.name}>{r.name}</option>)}
+          </select>
+          <button
+            onClick={handleBatchChangeRole}
+            disabled={!batchRole || batchLoading}
+            className="flex items-center gap-1.5 bg-brand/20 hover:bg-brand/30 text-brand font-bold px-3 py-1.5 rounded-lg text-sm transition disabled:opacity-40"
+          >
+            {batchLoading ? <Loader2 size={13} className="animate-spin" /> : <UserCheck size={13} />}
+            Apply
+          </button>
+          <button
+            onClick={handleBatchDelete}
+            disabled={batchLoading}
+            className="flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-bold px-3 py-1.5 rounded-lg text-sm transition disabled:opacity-40"
+          >
+            <Trash2 size={13} />
+            Revoke
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="p-1 text-white/30 hover:text-white transition"
+            aria-label="Clear selection"
+          >
+            <X size={17} />
+          </button>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* CREATE / EDIT MODAL                                                  */}
+      {/* =================================================================== */}
+      {modal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-sidebar-bg border border-white/10 rounded-2xl shadow-2xl w-full max-w-md animate-fade-in">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+              <div>
+                <h2 className="font-black text-white text-lg">
+                  {modal.mode === 'create' ? 'New User' : 'Edit User'}
+                </h2>
+                <p className="text-white/40 text-xs mt-0.5">
+                  {modal.mode === 'create' ? 'Create a new staff account.' : `Editing ${modal.user?.name}`}
+                </p>
+              </div>
+              <button
+                onClick={closeModal}
+                className="p-2 rounded-xl text-white/30 hover:text-white hover:bg-white/10 transition"
+                aria-label="Close modal"
+              >
+                <X size={17} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitModal} className="p-6 space-y-4">
+              {formErrors.general && (
+                <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-xl px-4 py-3">
+                  <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                  <span>{formErrors.general}</span>
+                </div>
+              )}
+
+              {/* Name field */}
+              <div>
+                <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-1.5">
+                  Employee Name
+                </label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={e => handleFormChange('name', e.target.value)}
+                  placeholder="e.g. Maria Santos"
+                  autoFocus
+                  className={`w-full bg-white/5 border text-white placeholder-white/20 px-4 py-3 rounded-xl outline-none transition text-sm
+                    ${formErrors.name ? 'border-red-500/60' : 'border-white/10 focus:border-brand'}`}
+                />
+                {formErrors.name && (
+                  <p className="flex items-center gap-1.5 text-red-400 text-xs mt-1.5">
+                    <AlertCircle size={11} />{formErrors.name}
+                  </p>
+                )}
+              </div>
+
+              {/* Password field */}
+              <div>
+                <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-1.5">
+                  {modal.mode === 'edit' ? 'New Password (leave blank to keep)' : 'Password / PIN'}
+                </label>
+                <div className="relative">
+                  <input
+                    type={form.showPassword ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={e => handleFormChange('password', e.target.value)}
+                    placeholder={modal.mode === 'edit' ? '(unchanged)' : 'Min. 4 characters'}
+                    className={`w-full bg-white/5 border text-white placeholder-white/20 px-4 py-3 pr-12 rounded-xl outline-none transition text-sm tracking-widest
+                      ${formErrors.password ? 'border-red-500/60' : 'border-white/10 focus:border-brand'}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, showPassword: !f.showPassword }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/70 transition"
+                    aria-label={form.showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {form.showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+                {formErrors.password && (
+                  <p className="flex items-center gap-1.5 text-red-400 text-xs mt-1.5">
+                    <AlertCircle size={11} />{formErrors.password}
+                  </p>
+                )}
+              </div>
+
+              {/* Role field */}
+              <div>
+                <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-1.5">
+                  Access Level
+                </label>
+                <select
+                  value={form.role}
+                  onChange={e => handleFormChange('role', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 focus:border-brand text-white px-4 py-3 rounded-xl outline-none transition text-sm font-medium"
+                >
+                  <option className="bg-[#1a1a1a] text-white" value="Staff">Staff (Standard)</option>
+                  <option className="bg-[#1a1a1a] text-white" value="Admin">Admin (Manager)</option>
+                  {roles.map(r => <option className="bg-[#1a1a1a] text-white" key={r._id} value={r.name}>{r.name}</option>)}
+                </select>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="flex-1 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white font-bold py-3 rounded-xl transition text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={formLoading || hasFormErrors}
+                  className="flex-1 bg-brand hover:bg-brand-dark text-white font-bold py-3 rounded-xl transition shadow-lg shadow-brand/20 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {formLoading && <Loader2 size={14} className="animate-spin" />}
+                  {formLoading ? 'Saving…' : modal.mode === 'create' ? 'Create User' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* CONFIRM DELETE MODAL                                                 */}
+      {/* =================================================================== */}
+      {confirmDelete.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-sidebar-bg border border-red-500/20 rounded-2xl shadow-2xl w-full max-w-sm p-6 animate-fade-in">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center flex-shrink-0">
+                <Trash2 size={17} className="text-red-400" />
+              </div>
+              <div>
+                <h2 className="font-black text-white">Remove User?</h2>
+                <p className="text-white/40 text-xs mt-0.5">{confirmDelete.user?.name}</p>
+              </div>
+            </div>
+            <p className="text-white/40 text-sm mb-6 pl-[52px]">
+              This permanently revokes their access and cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDelete({ open: false, user: null })}
+                className="flex-1 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white font-bold py-3 rounded-xl transition text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteUser}
+                disabled={deleteLoading}
+                className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 font-bold py-3 rounded-xl transition text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {deleteLoading ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                {deleteLoading ? 'Removing…' : 'Confirm Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

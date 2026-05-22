@@ -1,34 +1,58 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, Component, useEffect } from 'react';
 
-// 1. PROPER LAZY LOADING: This is the secret to making the app load instantly!
 const CustomerMenu = lazy(() => import('./pages/CustomerMenu'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const SuperAdminPanel = lazy(() => import('./pages/SuperAdminPanel'));
-const QRCodeComponent = lazy(() => import('./components/QRCode')); // Restored this!
+const QRCodeComponent = lazy(() => import('./components/QRCode'));
+
+class ErrorBoundary extends Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center text-center px-6">
+          <p className="text-4xl mb-4">⚠️</p>
+          <h1 className="text-white text-xl font-bold mb-2">Something went wrong</h1>
+          <p className="text-gray-400 text-sm mb-6">{this.state.error.message}</p>
+          <button
+            onClick={() => { this.setState({ error: null }); window.location.reload(); }}
+            className="bg-brand text-white px-6 py-2 rounded-lg font-bold"
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function App() {
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', import.meta.env.VITE_THEME || 'default');
+  }, []);
+
   return (
-    <Router>
-      <Suspense fallback={
-        <div className="min-h-screen bg-[#121212] flex flex-col items-center justify-center">
-          <div className="w-12 h-12 border-4 border-[#EAB308] border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-[#EAB308] font-bold tracking-widest uppercase">Loading System...</p>
-        </div>
-      }>
-        <Routes>
-          {/* Default URL redirects to the Cashier POS */}
-          <Route path="/" element={<Navigate to="/admin" replace />} />
-          
-          {/* THE FIX: This is the specific route the QR Codes look for! */}
-          <Route path="/menu/:table" element={<CustomerMenu />} />
-          
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/admin/admin-panel" element={<SuperAdminPanel />} />
-          <Route path="/generate-qr" element={<QRCodeComponent />} />
-        </Routes>
-      </Suspense>
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <Suspense fallback={
+          <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center">
+            <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin mb-4 border-brand"></div>
+            <p className="text-brand font-bold tracking-widest uppercase">Loading System...</p>
+          </div>
+        }>
+          <Routes>
+            <Route path="/" element={<Navigate to="/admin" replace />} />
+            <Route path="/menu/:table" element={<CustomerMenu />} />
+            <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="/admin/admin-panel" element={<SuperAdminPanel />} />
+            <Route path="/generate-qr" element={<QRCodeComponent />} />
+          </Routes>
+        </Suspense>
+      </Router>
+    </ErrorBoundary>
   );
 }
 

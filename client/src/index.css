@@ -2,9 +2,102 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * =====================================================================
+ * SEMIVRA POS — DESIGN TOKEN SYSTEM (WHITE-LABEL READY)
+ * To re-brand for a client, edit ONLY the values in :root below.
+ * All Tailwind classes (bg-brand, text-brand, etc.) inherit from these.
+ * =====================================================================
+ */
+/* =====================================================================
+ * THEME 1 — FOREST (default): deep charcoal + olive green
+ * ===================================================================== */
+:root,
+[data-theme="default"] {
+  /* --- PRIMARY BRAND COLOR (RGB channels for opacity modifier support) --- */
+  --brand:        111 135 77;   /* #6f874d — olive green                   */
+  --brand-dark:   90 110 61;    /* #5a6e3d — hover/pressed state           */
+
+  /* --- SURFACE SYSTEM --- */
+  --surface:      26 26 26;     /* #1a1a1a — card panels                   */
+  --surface-2:    36 36 36;     /* #242424 — nested / elevated panels      */
+
+  /* --- PAGE BACKGROUND --- */
+  --bg:           255 255 255;  /* #ffffff — outer page background         */
+  --page-bg:      13 13 13;     /* #0d0d0d — main dark canvas              */
+  --sidebar-bg:   26 26 26;     /* #1a1a1a — sidebar / modal panels        */
+
+  /* --- STATUS COLORS --- */
+  --danger:       239 68 68;    /* red-500                                 */
+  --success:      34 197 94;    /* green-500                               */
+  --warning:      234 179 8;    /* yellow-500                              */
+}
+
+/* =====================================================================
+ * THEME 2 — YELLOW: same black base, yellow accent
+ * ===================================================================== */
+[data-theme="yellow"] {
+  --brand:        234 179 8;    /* yellow-500 — #eab308                    */
+  --brand-dark:   202 138 4;    /* yellow-600 — hover state                */
+  --surface:      26 26 26;     /* #1a1a1a — identical to default          */
+  --surface-2:    36 36 36;     /* #242424 — identical to default          */
+  --bg:           255 255 255;
+  --page-bg:      13 13 13;     /* #0d0d0d — identical to default          */
+  --sidebar-bg:   26 26 26;     /* #1a1a1a — identical to default          */
+}
+
+/* =====================================================================
+ * THEME 3 — OCEAN: same black base, blue accent
+ * ===================================================================== */
+[data-theme="ocean"] {
+  --brand:        56 189 248;   /* sky-400 — electric blue                 */
+  --brand-dark:   14 165 233;   /* sky-500 — hover state                   */
+  --surface:      26 26 26;     /* #1a1a1a — identical to default          */
+  --surface-2:    36 36 36;     /* #242424 — identical to default          */
+  --bg:           255 255 255;
+  --page-bg:      13 13 13;     /* #0d0d0d — identical to default          */
+  --sidebar-bg:   26 26 26;     /* #1a1a1a — identical to default          */
+}
+
+/* ============================================================
+ * BASE RESETS
+ * ============================================================ */
 body {
   margin: 0;
   font-family: 'Inter', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Minimum touch target enforced by design system — 44px height minimum  */
 }
+
+/* Smooth theme transitions — layout shells only, never interactive elements */
+body, aside, header, nav, main {
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+/* Fat-finger safe: ensure all interactive elements hit 44×44px minimum */
+button, [role="button"], select, input[type="checkbox"], input[type="radio"] {
+  min-height: 44px;
+}
+
+/* Exception: icon-only buttons inside tight UI rows */
+button.btn-icon-sm {
+  min-height: 28px;
+}
+
+/* ============================================================
+ * SCROLLBAR THEMING
+ * ============================================================ */
+.custom-scrollbar::-webkit-scrollbar        { width: 4px; height: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track  { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb  { background: rgb(var(--brand) / 0.4); border-radius: 9999px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgb(var(--brand) / 0.7); }
+
+/* ============================================================
+ * UTILITY ANIMATIONS
+ * ============================================================ */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+.animate-fade-in { animation: fadeIn 0.2s ease-out both; }

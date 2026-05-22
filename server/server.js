@@ -6,9 +6,15 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import compression from 'compression'; // 1. Add this import
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 
-// ... (imports remain the same)
+// Fail fast on missing required env vars
+if (!process.env.MONGO_URI || !process.env.JWT_SECRET) {
+  console.error('❌ MONGO_URI and JWT_SECRET must be set in .env — server will not start.');
+  process.exit(1);
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -38,7 +44,7 @@ app.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   credentials: true
 }));
 
@@ -47,7 +53,7 @@ app.use(cors({
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true
   }
 });
@@ -55,35 +61,79 @@ const io = new Server(server, {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many login attempts. Try again in 15 minutes.' }
+});
 
-// --- MONGODB CONNECTION ---
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ Connected to MongoDB Atlas'))
-  .catch(err => console.error('❌ MongoDB Connection Error:', err));
+const orderLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Order rate limit exceeded. Slow down.' }
+});
 
+
+// --- MONGODB CONNECTION (single connect) ---
 mongoose.connect(process.env.MONGO_URI)
   .then(async () => {
-    console.log('  Connected to MongoDB Atlas');
-    
-    // --- SUPER ADMIN SEEDER ---
+    console.log('✅ Connected to MongoDB Atlas');
     try {
       const adminCount = await User.countDocuments();
       if (adminCount === 0) {
-        const defaultPass = process.env.ADMIN_PASS || 'fallback123';
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(defaultPass, saltRounds);
-        
-        // Ensure generateNextSequence is defined before this, or move this block down.
-        // For simplicity in this snippet, assuming the collection is empty, we can manually set the first code.
-        const userCode = 'ADN-A0001'; 
-        await User.create({ userCode, name: 'Super Admin', password: hashedPassword });
-        console.log(`  Default Admin seeded: Code [${userCode}]`);
+        const defaultPass = process.env.ADMIN_PASS || 'ChangeMe@2026!';
+        const hashedPassword = await bcrypt.hash(defaultPass, 10);
+        const userCode = 'ADN-A0001';
+        await User.create({ userCode, name: 'Super Admin', password: hashedPassword, role: 'superadmin' });
+        console.log(`✅ Default Superadmin seeded: Code [${userCode}]`);
       }
     } catch (err) {
-      console.error("Seeding error:", err);
+      console.error('Seeding error:', err);
+    }
+
+    // Sync atomic Counters to the highest existing seq so new inserts never collide
+    try {
+      // Orders: ORD-YYYY-AXXXX
+      const allOrders = await Order.find({}, { orderNumber: 1 }).lean();
+      const orderPrefixMax = {};
+      for (const o of allOrders) {
+        const m = o.orderNumber?.match(/^(ORD-\d{4})-A(\d+)$/);
+        if (m) orderPrefixMax[m[1]] = Math.max(orderPrefixMax[m[1]] || 0, parseInt(m[2], 10));
+      }
+      for (const [prefix, seq] of Object.entries(orderPrefixMax)) {
+        await Counter.collection.updateOne({ _id: prefix }, { $max: { seq } }, { upsert: true });
+      }
+
+      // Users: ADN-AXXXX
+      const allUsers = await User.find({}, { userCode: 1 }).lean();
+      let maxUserSeq = 0;
+      for (const u of allUsers) {
+        const m = u.userCode?.match(/^ADN-A(\d+)$/);
+        if (m) maxUserSeq = Math.max(maxUserSeq, parseInt(m[1], 10));
+      }
+      if (maxUserSeq > 0) await Counter.collection.updateOne({ _id: 'ADN' }, { $max: { seq: maxUserSeq } }, { upsert: true });
+
+      // Products: XXX-AXXXX (variable category prefix)
+      const allProducts = await Product.find({}, { productCode: 1 }).lean();
+      const prodPrefixMax = {};
+      for (const p of allProducts) {
+        const m = p.productCode?.match(/^([A-Z]{3})-A(\d+)$/);
+        if (m) prodPrefixMax[m[1]] = Math.max(prodPrefixMax[m[1]] || 0, parseInt(m[2], 10));
+      }
+      for (const [prefix, seq] of Object.entries(prodPrefixMax)) {
+        await Counter.collection.updateOne({ _id: prefix }, { $max: { seq } }, { upsert: true });
+      }
+
+      console.log('✅ Counters synced from existing data.');
+    } catch (err) {
+      console.error('Counter sync error:', err);
     }
   })
-  .catch(err => console.error('  MongoDB Connection Error:', err));
+  .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
   // --- 🔒 NEW: JWT MIDDLEWARE 🔒 ---
   const verifyToken = (req, res, next) => {
@@ -110,18 +160,18 @@ mongoose.connect(process.env.MONGO_URI)
   //   next();
   // };
 // --- DATABASE SCHEMAS ---
-const CategorySchema = new mongoose.Schema({ 
-  name: String,
+const CategorySchema = new mongoose.Schema({
+  name: { type: String, required: true },
   department: { type: String, enum: ['Kitchen', 'Bar'], default: 'Kitchen' }
-});
+}, { timestamps: true });
 const Category = mongoose.model('Category', CategorySchema);
 // --- ADD-ONS SCHEMA & ROUTES ---
 const AddOnSchema = new mongoose.Schema({
-  name: String,
-  price: Number,
-  category: { type: String, default: 'Extras' }, // e.g., 'Sinkers', 'Extras', 'Milks'
+  name: { type: String, required: true },
+  price: { type: Number, required: true },
+  category: { type: String, default: 'Extras' },
   recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }]
-});
+}, { timestamps: true });
 const AddOn = mongoose.model('AddOn', AddOnSchema);
 
 app.get('/api/addons', async (req, res) => {
@@ -143,21 +193,21 @@ app.delete('/api/addons/:id', verifyToken, async (req, res) => {
 // 1. UPDATE THE PRODUCT SCHEMA (Add Recipes)
 const ProductSchema = new mongoose.Schema({
   productCode: String,
-  name: String,
+  name: { type: String, required: true, index: true },
   description: String,
-  category: String,
-  basePrice: Number,
+  category: { type: String, index: true },
+  basePrice: { type: Number, required: true },
   baseSize: String,
   baseRecipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }],
-  sizes: [{ 
+  sizes: [{
     sizeCode: String,
-    name: String, 
-    price: Number, 
-    recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }] 
+    name: String,
+    price: Number,
+    recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }]
   }],
   addOns: [{ name: String, price: Number, recipe: [{ invId: String, name: String, qty: Number, cost: Number, unit: String }] }],
   image: String
-});
+}, { timestamps: true });
 const Product = mongoose.model('Product', ProductSchema);
 
 const OrderSchema = new mongoose.Schema({
@@ -194,13 +244,31 @@ items: [{
   discount: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
   isVatExempt: { type: Boolean, default: true },
-  isArchived: { type: Boolean, default: false },
-  // --- NEW ENTERPRISE FIELDS ---
-  cashier: { type: String, default: 'System' },
+  // --- ENTERPRISE FIELDS ---
+  cashier: { type: String, default: 'System', index: true },
+  transactionType: { type: String, enum: ['NORMAL', 'COMPLIMENTARY', 'REFUND', 'VOID'], default: 'NORMAL' },
   isComplimentary: { type: Boolean, default: false },
-  employeeName: { type: String, default: '' },
-  voidReason: { type: String, default: '' } // Tracks if a void was 'Spoiled' or 'Restocked'
+  employeeName: { type: String, default: '' },          // beneficiary (who the comp is for)
+  complimentaryReasonType: {
+    type: String,
+    enum: ['VIP_CUSTOMER','CUSTOMER_RECOVERY','FOOD_QUALITY_ISSUE','SERVICE_DELAY','EMPLOYEE_MEAL',
+           'OWNER_APPROVAL','MARKETING_PROMOTION','INFLUENCER_PROMO','SYSTEM_ERROR',
+           'TRAINING_ORDER','LOYALTY_REWARD','EVENT_SPONSORSHIP'],
+    default: null
+  },
+  complimentaryReasonNote: { type: String, default: '' },
+  complimentaryApprovedBy: { type: String, default: '' },
+  complimentaryApprovedAt: { type: Date },
+  complimentaryAmount: { type: Number, default: 0 },
+  complimentaryCost:   { type: Number, default: 0 },
+  complimentaryReferenceNumber: { type: String, default: '' },
+  voidReason: { type: String, default: '' },
+  amountTendered: { type: Number, default: 0 },
+  changeDue: { type: Number, default: 0 }
 }, { timestamps: true });
+OrderSchema.index({ createdAt: -1 });
+OrderSchema.index({ status: 1, isArchived: 1 });
+OrderSchema.index({ orderNumber: 1 }, { unique: true, sparse: true });
 const Order = mongoose.model('Order', OrderSchema);
 
 const QRSessionSchema = new mongoose.Schema({
@@ -222,8 +290,8 @@ const InventorySchema = new mongoose.Schema({
 const Inventory = mongoose.model('Inventory', InventorySchema);
 
 const JournalEntrySchema = new mongoose.Schema({
-  date: { type: Date, default: Date.now },
-  reference: String, // e.g., 'JE-001' or Order Number
+  date: { type: Date, default: Date.now, index: true },
+  reference: { type: String, index: true },
   description: String,
   lines: [{
     accountCode: String,
@@ -262,13 +330,67 @@ const StockCardSchema = new mongoose.Schema({
   unitCost: Number,
   remarks: String
 });
+StockCardSchema.index({ inventoryId: 1 });
+StockCardSchema.index({ reference: 1 });
 const StockCard = mongoose.model('StockCard', StockCardSchema);
 
+// --- SHIFT MANAGEMENT SCHEMA ---
+const ShiftSchema = new mongoose.Schema({
+  cashierId:       { type: String, required: true },
+  cashierName:     { type: String, required: true },
+  startingCash:    { type: Number, required: true, default: 0 },
+  shiftStart:      { type: Date, default: Date.now },
+  shiftEnd:        Date,
+  salesTotal:      { type: Number, default: 0 },   // Cash sales only during this shift
+  expectedCash:    Number,                          // startingCash + salesTotal
+  actualCash:      Number,                          // What cashier counted at close
+  variance:        Number,                          // actualCash - expectedCash
+  depositedAmount: { type: Number, default: 0 },   // Total posted to bank this shift
+  isReconciled:    { type: Boolean, default: false },
+  status:          { type: String, default: 'Open' } // 'Open' | 'Closed' | 'Reconciled'
+}, { timestamps: true });
+const Shift = mongoose.model('Shift', ShiftSchema);
+
+// --- CHART OF ACCOUNTS ---
+const AccountSchema = new mongoose.Schema({
+  code:          { type: String, unique: true },
+  name:          String,
+  type:          String, // 'Asset' | 'Liability' | 'Income' | 'Expense'
+  normalBalance: String, // 'Debit' | 'Credit'
+}, { timestamps: true });
+const Account = mongoose.model('Account', AccountSchema);
+
+// --- BANK DEPOSITS ---
+const BankDepositSchema = new mongoose.Schema({
+  shiftId:            { type: mongoose.Schema.Types.ObjectId, ref: 'Shift', required: true },
+  amount:             { type: Number, required: true },
+  depositedBy:        String,
+  reference:          String,  // slip number or note
+  journalEntryId:     { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry' },
+  drawerBalanceAfter: Number,
+  isDrawerReconciled: { type: Boolean, default: false },
+}, { timestamps: true });
+const BankDeposit = mongoose.model('BankDeposit', BankDepositSchema);
+
+// Seed cash management accounts (codes match existing JournalEntry account codes)
+const DEFAULT_ACCOUNTS = [
+  { code: '1000', name: 'Cash on Hand',             type: 'Asset',   normalBalance: 'Debit'  },
+  { code: '1010', name: 'Cash in Bank',              type: 'Asset',   normalBalance: 'Debit'  },
+  { code: '4000', name: 'Sales Revenue',             type: 'Income',  normalBalance: 'Credit' },
+  { code: '5010', name: 'Cash Short & Over Expense', type: 'Expense', normalBalance: 'Debit'  },
+  { code: '4020', name: 'Cash Short & Over Income',  type: 'Income',  normalBalance: 'Credit' },
+];
+(async () => {
+  for (const acct of DEFAULT_ACCOUNTS) {
+    await Account.findOneAndUpdate({ code: acct.code }, acct, { upsert: true, setDefaultsOnInsert: true });
+  }
+})();
+
 const UserSchema = new mongoose.Schema({
-  userCode: String,
-  name: String,
-  password: String,
-  role: { type: String, default: 'Staff' } // Added RBAC Role
+  userCode: { type: String, index: true },
+  name: { type: String, required: true, index: true },
+  password: { type: String, required: true },
+  role: { type: String, default: 'Staff' }
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
 
@@ -304,25 +426,49 @@ const requireAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET || 'infu-pass-2026');
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
   } catch (err) {
     res.status(401).json({ success: false, error: 'Unauthorized: Invalid token' });
   }
 };
 
-const requireAdmin = (req, res, next) => {
-  if (req.user?.name !== 'Super Admin') { // Minimal RBAC based on your existing structure
-    return res.status(403).json({ success: false, error: 'Forbidden: Admin access required' });
+// Hard-gate: role === 'superadmin' ONLY — never trust name strings
+const requireSuperAdmin = (req, res, next) => {
+  if (req.user?.role !== 'superadmin') {
+    return res.status(403).json({ success: false, error: 'Forbidden: Superadmin role required.' });
   }
   next();
 };
 
-app.use(express.json());
+// Accepts valid JWT (staff/admin) OR active QR session (customer dine-in)
+const verifyOrderAuth = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      req.user = jwt.verify(token, process.env.JWT_SECRET);
+      return next();
+    } catch {
+      return res.status(403).json({ success: false, error: 'Invalid or expired token.' });
+    }
+  }
+  const { sessionId, table } = req.body;
+  if (sessionId && table && !['Takeout', 'Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(table)) {
+    const qrSession = await QRSession.findOne({ sessionId, table, isActive: true });
+    if (qrSession && new Date() < qrSession.expiresAt) {
+      req.qrSession = qrSession;
+      return next();
+    }
+    return res.status(401).json({ success: false, error: 'QR session expired or invalid. Please scan again.' });
+  }
+  return res.status(401).json({ success: false, error: 'Unauthorized: provide a staff token or a valid QR session.' });
+};
 
 const DiscountSchema = new mongoose.Schema({
   name: String,        // e.g., "Senior Citizen 20%", "Employee 10%"
   percentage: Number,  // e.g., 20
+  isSCPWD: { type: Boolean, default: false },
 });
 const Discount = mongoose.model('Discount', DiscountSchema);
 
@@ -333,6 +479,10 @@ const EODRecordSchema = new mongoose.Schema({
   lockedBy: String
 });
 const EODRecord = mongoose.model('EODRecord', EODRecordSchema);
+
+// Atomic sequence counter — one document per prefix, incremented with $inc to prevent race conditions
+const CounterSchema = new mongoose.Schema({ _id: String, seq: { type: Number, default: 0 } });
+const Counter = mongoose.model('Counter', CounterSchema);
 
 // --- API ROUTES ---
 
@@ -502,7 +652,7 @@ app.post('/api/inventory/eod/reopen', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/inventory/history/:id', async (req, res) => {
+app.get('/api/inventory/history/:id', verifyToken, async (req, res) => {
   try {
     const history = await StockCard.find({ inventoryId: req.params.id }).sort({ date: -1 });
     res.json({ success: true, history });
@@ -512,7 +662,7 @@ app.get('/api/inventory/history/:id', async (req, res) => {
 });
 
 // Fetch ALL stock card history for the master PDF report
-app.get('/api/inventory/history', async (req, res) => {
+app.get('/api/inventory/history', verifyToken, async (req, res) => {
   try {
     const history = await StockCard.find().sort({ date: -1 });
     res.json({ success: true, history });
@@ -564,7 +714,7 @@ app.post('/api/sessions/generate', verifyToken, async (req, res) => {
     await QRSession.updateMany({ table, isActive: true }, { isActive: false });
     
     // Generate a secure random string
-    const sessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    const sessionId = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // Expires in exactly 10 minutes
     
     await QRSession.create({ sessionId, table, expiresAt });
@@ -633,9 +783,22 @@ app.post('/api/products', verifyToken, async (req, res) => {
 });
 
 app.put('/api/products/:id', verifyToken, async (req, res) => {
-  const updatedProduct = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  io.emit('menuUpdated');
-  res.json({ success: true, product: updatedProduct });
+  try {
+    const existing = await Product.findById(req.params.id).lean();
+    const updatedProduct = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (existing && req.body.basePrice !== undefined && Number(req.body.basePrice) !== Number(existing.basePrice)) {
+      await AuditLog.create({
+        userId: req.user ? req.user.name : 'System',
+        action: 'PRODUCT_PRICE_CHANGED',
+        targetReference: updatedProduct.productCode || req.params.id,
+        details: { name: updatedProduct.name, oldPrice: existing.basePrice, newPrice: updatedProduct.basePrice }
+      });
+    }
+    io.emit('menuUpdated');
+    res.json({ success: true, product: updatedProduct });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Change to PUT or handle inside DELETE for archiving
@@ -666,11 +829,24 @@ app.delete('/api/products/:id', verifyToken, async (req, res) => {
 
 // Orders
 app.get('/api/orders', verifyToken, async (req, res) => {
-  const orders = await Order.find({ isArchived: false }).sort({ createdAt: -1 }).lean();
-  res.json({ success: true, orders });
+  try {
+    const { page, limit } = req.query;
+    const query = Order.find({ isArchived: false }).sort({ createdAt: -1 }).lean();
+    if (page && limit) {
+      const pageNum = Math.max(1, parseInt(page, 10));
+      const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10)));
+      query.skip((pageNum - 1) * limitNum).limit(limitNum);
+      const [orders, total] = await Promise.all([query, Order.countDocuments({ isArchived: false })]);
+      return res.json({ success: true, orders, total, page: pageNum, limit: limitNum });
+    }
+    const orders = await query;
+    res.json({ success: true, orders });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.get('/api/orders/archives', verifyToken, async (req, res) => {
+app.get('/api/orders/archives', verifyToken, requireSuperAdmin, async (req, res) => {
   const archives = await Order.find({ isArchived: true }).sort({ createdAt: -1 });
   res.json({ success: true, archives });
 });
@@ -686,7 +862,7 @@ app.get('/api/orders/:id', async (req, res) => {
   }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', orderLimiter, verifyOrderAuth, async (req, res) => {
   try {
     // 1. IDEMPOTENCY CHECK
     const idempotencyKey = req.headers['idempotency-key'];
@@ -695,29 +871,48 @@ app.post('/api/orders', async (req, res) => {
       if (existingOrder) return res.status(200).json({ success: true, order: existingOrder, message: "Duplicate prevented." });
     }
 
-    let { items, discountPercent = 0, table, customerName, sessionId, isComplimentary = false, employeeName = '', cashier = 'System' } = req.body;
+    let { items, discountPercent = 0, table, customerName, sessionId, isComplimentary = false, employeeName = '' } = req.body;
+    const cashier = req.user?.name || 'System';
 
     let isVatExempt = true;
     // FIX 1: Safely default to Takeout if the table is null or empty
     if (!table) table = 'Takeout';
 
-    // SESSION VALIDATION (Only for dine-in tables)
-    if (!['Takeout', 'Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(table)) {
-      if (!sessionId) throw new Error("Unauthorized: QR Session required.");
-// ... rest of the function remains exactly the same
-      const activeSession = await QRSession.findOne({ sessionId, table, isActive: true });
-      if (!activeSession || new Date() > activeSession.expiresAt) {
-        return res.status(401).json({ success: false, error: "QR Session expired. Please scan again." });
-      }
-      activeSession.isActive = false; // Kill session immediately to prevent reuse
-      await activeSession.save();
+    // Kill QR session — already validated by verifyOrderAuth; burn it before processing to prevent replay
+    if (req.qrSession) {
+      req.qrSession.isActive = false;
+      await req.qrSession.save();
     }
-
-    const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
     if (!items || items.length === 0) {
       throw new Error("Cart is empty");
     }
+
+    for (const item of items) {
+      if (!item.quantity || item.quantity <= 0) {
+        throw new Error(`Invalid quantity for item: ${item.name || item.productId}`);
+      }
+      if (item.price === undefined || item.price < 0) {
+        throw new Error(`Invalid price for item: ${item.name || item.productId}`);
+      }
+    }
+
+    // Authoritative department stamping — look up each product's category and resolve to Kitchen/Bar
+    const productIds = items.map(i => i.productId).filter(Boolean);
+    if (productIds.length > 0) {
+      const [prods, cats] = await Promise.all([
+        Product.find({ _id: { $in: productIds } }, { _id: 1, category: 1 }).lean(),
+        Category.find({}, { name: 1, department: 1 }).lean()
+      ]);
+      const catDeptMap = Object.fromEntries(cats.map(c => [c.name, c.department || 'Kitchen']));
+      const prodCatMap = Object.fromEntries(prods.map(p => [p._id.toString(), p.category]));
+      for (const item of items) {
+        const catName = prodCatMap[item.productId];
+        item.department = catName ? (catDeptMap[catName] || 'Kitchen') : (item.department || 'Kitchen');
+      }
+    }
+
+    const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
     let totalGross = 0;
     let totalDiscount = 0;
@@ -763,11 +958,12 @@ app.post('/api/orders', async (req, res) => {
       subtotal: totalGross, 
       vatRate: vatRate, 
       vatAmount: totalVat, 
-      discountPercent: isComplimentary ? 100 : discountPercent, 
-      discount: totalDiscount, 
-      total: finalTotal, 
+      discountPercent: isComplimentary ? 0 : discountPercent,
+      discount: totalDiscount,
+      total: finalTotal,
       isVatExempt, discountType, customerName,
-      isComplimentary, employeeName, cashier
+      isComplimentary, employeeName, cashier,
+      transactionType: isComplimentary ? 'COMPLIMENTARY' : 'NORMAL'
     });
 
     io.emit('newOrder', newOrder);
@@ -778,12 +974,80 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
+// --- COMPLIMENTARY: APPLY ---
+app.put('/api/orders/:id/complimentary', verifyToken, async (req, res) => {
+  try {
+    const { reasonType, reasonNote, approvedBy, forEmployee } = req.body;
+    if (!reasonType) return res.status(400).json({ success: false, error: 'reasonType is required' });
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    if (order.status === 'Completed') return res.status(400).json({ success: false, error: 'Completed orders cannot be marked complimentary' });
+
+    const year = new Date().getFullYear();
+    const compCount = await Order.countDocuments({ isComplimentary: true });
+    const refNum = `COMP-${year}-${(compCount + 1).toString().padStart(4, '0')}`;
+
+    order.isComplimentary = true;
+    order.transactionType = 'COMPLIMENTARY';
+    order.complimentaryReasonType = reasonType;
+    order.complimentaryReasonNote = reasonNote || '';
+    order.complimentaryApprovedBy = approvedBy || 'Manager';
+    order.complimentaryApprovedAt = new Date();
+    order.complimentaryAmount = order.subtotal;
+    order.complimentaryReferenceNumber = refNum;
+    order.employeeName = forEmployee || approvedBy || '';
+    order.discountPercent = 0;
+    order.discount = order.subtotal;
+    order.total = 0;
+    order.discountType = 'Complimentary';
+    order.paymentMethod = 'Complimentary';
+
+    await order.save();
+    io.emit('orderUpdated', order.toObject());
+    res.json({ success: true, order });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- COMPLIMENTARY: REMOVE ---
+app.delete('/api/orders/:id/complimentary', verifyToken, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    if (order.status === 'Completed') return res.status(400).json({ success: false, error: 'Cannot reverse a completed complimentary order — void it instead' });
+
+    order.isComplimentary = false;
+    order.transactionType = 'NORMAL';
+    order.complimentaryReasonType = null;
+    order.complimentaryReasonNote = '';
+    order.complimentaryApprovedBy = '';
+    order.complimentaryApprovedAt = null;
+    order.complimentaryAmount = 0;
+    order.complimentaryReferenceNumber = '';
+    order.employeeName = '';
+    order.discountPercent = 0;
+    order.discount = 0;
+    order.total = order.subtotal;
+    order.paymentMethod = 'Cash';
+
+    await order.save();
+    io.emit('orderUpdated', order.toObject());
+    res.json({ success: true, order });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.put('/api/orders/:id', verifyToken, async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices, cashier, items } = req.body;
+    const { status, discountPercent, isVatExempt, paymentMethod, discountType, discountedIndices, items, amountTendered } = req.body;
     
     const order = await Order.findById(req.params.id).session(session);
     if (!order) {
@@ -795,10 +1059,16 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     // Freeze previousStatus to prevent the 500 Internal Server Crash
     const previousStatus = order.status;
     const wasNotCompleted = previousStatus !== 'Completed';
-    
+
+    // Immutability guard: completed orders are locked; use the void workflow
+    if (previousStatus === 'Completed') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, error: 'Completed orders are immutable. Use the void workflow for cancellations.' });
+    }
+
     if (status) order.status = status;
-    if (paymentMethod) order.paymentMethod = paymentMethod;
-    if (cashier) order.cashier = cashier; 
+    if (paymentMethod && !order.isComplimentary) order.paymentMethod = paymentMethod;
 
     // Allow the Kitchen/Bar to update specific item statuses safely
     // Allow the Kitchen/Bar to update specific item statuses safely
@@ -818,7 +1088,9 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
     if (discountType !== undefined) order.discountType = discountType;
 
-    if(order.discountPercent > 0 && (!order.discountType || order.discountType === 'None')) {
+    if (order.isComplimentary) {
+        order.discountType = 'Complimentary';
+    } else if (order.discountPercent > 0 && (!order.discountType || order.discountType === 'None')) {
         order.discountType = order.isVatExempt ? 'SC/PWD' : 'Promo';
     } else if (order.discountPercent === 0) {
         order.discountType = 'None';
@@ -874,6 +1146,17 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     order.vatRate = 0;
     order.total = Number((totalGross - totalDiscount + totalVat).toFixed(2));
 
+    // Cash tendered — only for cash orders transitioning to Preparing
+    if (status === 'Preparing' && amountTendered !== undefined && (order.paymentMethod === 'Cash' || paymentMethod === 'Cash')) {
+      const tendered = Number(amountTendered);
+      if (tendered < order.total) {
+        await session.abortTransaction(); session.endSession();
+        return res.status(400).json({ success: false, error: `Insufficient cash: tendered ₱${tendered.toFixed(2)} but total is ₱${order.total.toFixed(2)}` });
+      }
+      order.amountTendered = tendered;
+      order.changeDue = Number((tendered - order.total).toFixed(2));
+    }
+
     const validation = validateOrderMath(order);
     if (!validation.valid) {
       await session.abortTransaction();
@@ -921,33 +1204,28 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 
         for (const ing of recipeToUse) {
           if (!ing.invId) continue;
-          const invItem = await Inventory.findById(ing.invId).session(session);
-          
-          if (invItem) {
-            const deductQty = (ing.qty * item.quantity);
-            
-            // FIX: Graceful exit instead of a hard server crash if stock is too low
-            if (invItem.stockQty - deductQty < 0) {
-              await session.abortTransaction();
-              session.endSession();
-              return res.status(400).json({ success: false, error: `INSUFFICIENT STOCK: Cannot fulfill order. [${invItem.itemName}] would drop below zero. Please receive stock in the Procurement tab first.` });
-            }
-            
-            invItem.stockQty -= deductQty;
-            await invItem.save({ session });
-            
-            await StockCard.create([{
-              inventoryId: invItem._id,
-              itemName: invItem.itemName,
-              type: 'Sale', 
-              reference: order.orderNumber,
-              qtyChange: -deductQty, 
-              balanceAfter: invItem.stockQty,
-              remarks: `Sold via ${item.name}`
-            }], { session });
-
-            totalCogs += (invItem.unitCost * deductQty); 
+          const deductQty = (ing.qty * item.quantity);
+          const invItem = await Inventory.findOneAndUpdate(
+            { _id: ing.invId, stockQty: { $gte: deductQty } },
+            { $inc: { stockQty: -deductQty } },
+            { session, new: true }
+          );
+          if (!invItem) {
+            const missing = await Inventory.findById(ing.invId).lean();
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, error: `INSUFFICIENT STOCK: Cannot fulfill order. [${missing?.itemName || ing.name}] would drop below zero. Please receive stock in the Procurement tab first.` });
           }
+          await StockCard.create([{
+            inventoryId: invItem._id,
+            itemName: invItem.itemName,
+            type: 'Sale',
+            reference: order.orderNumber,
+            qtyChange: -deductQty,
+            balanceAfter: invItem.stockQty,
+            remarks: `Sold via ${item.name}`
+          }], { session });
+          totalCogs += (invItem.unitCost * deductQty);
         }
         // 👇 PASTE THIS RIGHT BELOW THE RECIPE LOOP
         // DEDUCT ADD-ONS INVENTORY
@@ -956,23 +1234,23 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
           if (productAddOn && productAddOn.recipe) {
             for (const ing of productAddOn.recipe) {
               if (!ing.invId) continue;
-              const invItem = await Inventory.findById(ing.invId).session(session);
-              if (invItem) {
-                const deductQty = (ing.qty * item.quantity);
-                if (invItem.stockQty - deductQty < 0) {
-                  await session.abortTransaction();
-                  session.endSession();
-                  return res.status(400).json({ success: false, error: `INSUFFICIENT STOCK: Add-on [${invItem.itemName}] drops below zero.` });
-                }
-                invItem.stockQty -= deductQty;
-                await invItem.save({ session });
-                await StockCard.create([{
-                  inventoryId: invItem._id, itemName: invItem.itemName, type: 'Sale', 
-                  reference: order.orderNumber, qtyChange: -deductQty, balanceAfter: invItem.stockQty, 
-                  remarks: `Sold via Add-on (${selectedAddOn.name})`
-                }], { session });
-                totalCogs += (invItem.unitCost * deductQty);
+              const deductQty = (ing.qty * item.quantity);
+              const invItem = await Inventory.findOneAndUpdate(
+                { _id: ing.invId, stockQty: { $gte: deductQty } },
+                { $inc: { stockQty: -deductQty } },
+                { session, new: true }
+              );
+              if (!invItem) {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(400).json({ success: false, error: `INSUFFICIENT STOCK: Add-on [${ing.name || ing.invId}] drops below zero.` });
               }
+              await StockCard.create([{
+                inventoryId: invItem._id, itemName: invItem.itemName, type: 'Sale',
+                reference: order.orderNumber, qtyChange: -deductQty, balanceAfter: invItem.stockQty,
+                remarks: `Sold via Add-on (${selectedAddOn.name})`
+              }], { session });
+              totalCogs += (invItem.unitCost * deductQty);
             }
           }
         }
@@ -998,8 +1276,18 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       const lines = [];
 
       if (order.isComplimentary) {
-        lines.push({ accountCode: '6100', accountName: 'Complimentary Expense', debit: totalCogs, credit: 0 });
-        lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
+        // DR 5300 Complimentary Expense / CR 4000 Sales Revenue at selling price (keeps gross visible)
+        const sellingPrice = order.subtotal || 0;
+        if (sellingPrice > 0) {
+          lines.push({ accountCode: '5300', accountName: 'Complimentary Expense', debit: sellingPrice, credit: 0 });
+          lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: 0, credit: sellingPrice });
+        }
+        // DR 5000 COGS / CR 1500 Inventory at cost
+        if (totalCogs > 0) {
+          lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
+          lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
+        }
+        order.complimentaryCost = totalCogs;
       } else {
         lines.push({ accountCode: debitAccountCode, accountName: debitAccountName, debit: order.total, credit: 0 });
         lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
@@ -1016,10 +1304,15 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 
       const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
       const totalCredit = lines.reduce((sum, line) => sum + line.credit, 0);
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        throw new Error(`Journal imbalance on ${reference}: DR=${totalDebit.toFixed(2)} CR=${totalCredit.toFixed(2)}`);
+      }
 
-      await JournalEntry.create([{ 
-        reference, 
-        description: `Sales & COGS for Order ${order.orderNumber}`, 
+      await JournalEntry.create([{
+        reference,
+        description: order.isComplimentary
+          ? `COMP [${order.complimentaryReasonType || 'UNKNOWN'}] For: ${order.employeeName || '—'} | By: ${order.complimentaryApprovedBy || '—'} | Ref: ${order.complimentaryReferenceNumber || order.orderNumber}`
+          : `Sales & COGS for Order ${order.orderNumber}`,
         lines, 
         totalDebit, 
         totalCredit 
@@ -1055,7 +1348,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 });
 
 // --- 🚨 SAFE VOID & REFUND ENGINE 🚨 ---
-app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
+app.post('/api/orders/:id/void', verifyToken, requireSuperAdmin, async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -1075,6 +1368,13 @@ app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Only completed orders can be voided.' });
     }
 
+    const orderDateStr = new Date(order.createdAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    const eodRecord = await EODRecord.findOne({ dateString: orderDateStr }).session(session);
+    if (eodRecord?.status === 'LOCKED') {
+      await session.abortTransaction(); session.endSession();
+      return res.status(403).json({ success: false, error: `EOD locked for ${orderDateStr}. Cannot void after day is closed.` });
+    }
+
     let cashAccount = '1000';
     const pm = order.paymentMethod;
     if (pm === 'Bank Transfer') cashAccount = '1010';
@@ -1090,8 +1390,12 @@ app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
       lines.push({ accountCode: cashAccount, accountName: 'Cash on Hand', debit: 0, credit: order.total });
       if (order.discount > 0) lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: 0, credit: order.discount });
     } else {
-      // Reversing a complimentary item
-      lines.push({ accountCode: '6100', accountName: 'Complimentary Expense', debit: 0, credit: order.subtotal });
+      // Reverse the complimentary revenue recognition: DR 4000 / CR 5300 at selling price
+      const sellingPrice = order.subtotal || 0;
+      if (sellingPrice > 0) {
+        lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: sellingPrice, credit: 0 });
+        lines.push({ accountCode: '5300', accountName: 'Complimentary Expense', debit: 0, credit: sellingPrice });
+      }
     }
 
     let totalCogs = 0;
@@ -1107,18 +1411,49 @@ app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
       }
 
       for (const ing of recipeToUse) {
-        const invItem = await Inventory.findById(ing.invId).session(session);
-        if (invItem) {
+        if (!ing.invId) continue;
+        const qtyUsed = ing.qty * item.quantity;
+
+        if (reason === 'Restock') {
+          const restored = await Inventory.findOneAndUpdate(
+            { _id: ing.invId },
+            { $inc: { stockQty: qtyUsed } },
+            { session, new: true }
+          );
+          if (!restored) continue;
+          totalCogs += (restored.unitCost * qtyUsed);
+          await StockCard.create([{
+            inventoryId: restored._id, itemName: restored.itemName, type: 'Adjustment',
+            reference: `VOID-${order.orderNumber}`, qtyChange: qtyUsed, balanceAfter: restored.stockQty, remarks: `Voided (${reason})`
+          }], { session });
+        } else {
+          const invItem = await Inventory.findById(ing.invId).session(session);
+          if (invItem) totalCogs += (invItem.unitCost * qtyUsed);
+        }
+      }
+
+      for (const selectedAddOn of (item.selectedAddOns || [])) {
+        const productAddOn = product.addOns?.find(a => a.name === selectedAddOn.name);
+        if (!productAddOn?.recipe) continue;
+        for (const ing of productAddOn.recipe) {
+          if (!ing.invId) continue;
           const qtyUsed = ing.qty * item.quantity;
-          totalCogs += (invItem.unitCost * qtyUsed);
-          
           if (reason === 'Restock') {
-            invItem.stockQty += qtyUsed;
-            await invItem.save({ session });
+            const restored = await Inventory.findOneAndUpdate(
+              { _id: ing.invId },
+              { $inc: { stockQty: qtyUsed } },
+              { session, new: true }
+            );
+            if (!restored) continue;
+            totalCogs += (restored.unitCost * qtyUsed);
             await StockCard.create([{
-              inventoryId: invItem._id, itemName: invItem.itemName, type: 'Adjustment', 
-              reference: `VOID-${order.orderNumber}`, qtyChange: qtyUsed, balanceAfter: invItem.stockQty, remarks: `Voided (${reason})`
+              inventoryId: restored._id, itemName: restored.itemName, type: 'Adjustment',
+              reference: `VOID-${order.orderNumber}`, qtyChange: qtyUsed, balanceAfter: restored.stockQty,
+              remarks: `Voided Add-on (${selectedAddOn.name}) (${reason})`
             }], { session });
+          } else {
+            const invItem = await Inventory.findById(ing.invId).session(session);
+            if (invItem) totalCogs += (invItem.unitCost * qtyUsed);
           }
         }
       }
@@ -1127,15 +1462,23 @@ app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
     if (totalCogs > 0) {
       if (reason === 'Restock') {
         lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: totalCogs, credit: 0 });
-        if (!order.isComplimentary) lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
-      } else if (reason === 'Spoilage') {
+        lines.push({
+          accountCode: '5000',
+          accountName: 'Cost of Goods Sold',
+          debit: 0, credit: totalCogs
+        });
+      } else if (reason === 'Spoilage' && !order.isComplimentary) {
         lines.push({ accountCode: '5100', accountName: 'Spoilage & Variance Expense', debit: totalCogs, credit: 0 });
-        if (!order.isComplimentary) lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
+        lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
       }
+      // Complimentary + Spoilage: cost already expensed at completion, inventory gone, no reversal
     }
 
     const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
     const totalCredit = lines.reduce((sum, line) => sum + line.credit, 0);
+    if (totalDebit > 0 && Math.abs(totalDebit - totalCredit) > 0.01) {
+      throw new Error(`Journal imbalance on VOID-${order.orderNumber}: DR=${totalDebit.toFixed(2)} CR=${totalCredit.toFixed(2)}`);
+    }
 
     // If totalDebit/Credit is 0, it means the item had no BOM and wasn't complimentary. We still log the order status change.
     if (totalDebit > 0) {
@@ -1164,26 +1507,6 @@ app.post('/api/orders/:id/void', verifyToken, async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-// --- UNLOCK / REOPEN EOD (ADMIN ONLY) ---
-app.post('/api/inventory/eod/reopen', verifyToken, async (req, res) => {
-  try {
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-    
-    // Find today's lock
-    const eod = await EODRecord.findOne({ dateString: todayStr });
-    if (!eod || eod.status === 'OPEN') return res.status(400).json({ success: false, error: 'Day is not locked.' });
-
-    // Reopen it
-    eod.status = 'OPEN';
-    await eod.save();
-
-    io.emit('erpUpdated'); // Tell all iPads the register is open again!
-    res.json({ success: true, message: 'Day reopened successfully.' });
-  } catch(err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 app.post('/api/orders/archive', verifyToken, async (req, res) => {
   try {
     // 1. Force any hanging kitchen orders to Cancelled
@@ -1210,7 +1533,18 @@ app.post('/api/orders/archive', verifyToken, async (req, res) => {
 
 // Inventory CRUD
 app.get('/api/inventory', verifyToken, async (req, res) => {
-  const items = await Inventory.find().sort({ itemName: 1 }).lean();
+  const { page, limit: lim, search } = req.query;
+  const filter = search ? { itemName: { $regex: search, $options: 'i' } } : {};
+  if (page) {
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSize = Math.min(100, parseInt(lim) || 50);
+    const [items, total] = await Promise.all([
+      Inventory.find(filter).sort({ itemName: 1 }).skip((pageNum - 1) * pageSize).limit(pageSize).lean(),
+      Inventory.countDocuments(filter)
+    ]);
+    return res.json({ success: true, items, total, page: pageNum, pages: Math.ceil(total / pageSize) });
+  }
+  const items = await Inventory.find(filter).sort({ itemName: 1 }).lean();
   res.json({ success: true, items });
 });
 
@@ -1299,13 +1633,18 @@ app.delete('/api/inventory/:id', verifyToken, async (req, res) => {
   res.json({ success: true });
 });
 
-// Accounting Ledger / Journal Entries
-app.get('/api/journal', verifyToken, async (req, res) => {
-  const entries = await JournalEntry.find().sort({ date: -1 });
-  res.json({ success: true, entries });
+// Accounting Ledger / Journal Entries — Superadmin only
+app.get('/api/journal', verifyToken, requireSuperAdmin, async (req, res) => {
+  const pageNum = Math.max(1, parseInt(req.query.page) || 1);
+  const pageSize = Math.min(100, parseInt(req.query.limit) || 50);
+  const [entries, total] = await Promise.all([
+    JournalEntry.find().sort({ date: -1 }).skip((pageNum - 1) * pageSize).limit(pageSize).lean(),
+    JournalEntry.countDocuments()
+  ]);
+  res.json({ success: true, entries, total, page: pageNum, pages: Math.ceil(total / pageSize) });
 });
 
-app.post('/api/journal', verifyToken, async (req, res) => {
+app.post('/api/journal', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
     const { description, lines } = req.body;
     
@@ -1332,7 +1671,7 @@ app.post('/api/journal', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/finance/balances', verifyToken, async (req, res) => {
+app.get('/api/finance/balances', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
     const entries = await JournalEntry.find();
     let cashOnHand = 0;
@@ -1375,15 +1714,13 @@ const getCategoryPrefix = (categoryName) => {
   return clean[0] + clean[1] + clean[clean.length - 1]; 
 };
 
-const generateNextSequence = async (Model, prefix, fieldName) => {
-  const lastDoc = await Model.findOne({ [fieldName]: new RegExp(`^${prefix}-A`) })
-                             .sort({ [fieldName]: -1 });
-  let nextNumber = 1;
-  if (lastDoc && lastDoc[fieldName]) {
-     const match = lastDoc[fieldName].match(/-A(\d+)$/);
-     if (match) nextNumber = parseInt(match[1], 10) + 1;
-  }
-  return `${prefix}-A${nextNumber.toString().padStart(4, '0')}`;
+const generateNextSequence = async (_Model, prefix, _fieldName) => {
+  const counter = await Counter.findOneAndUpdate(
+    { _id: prefix },
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true }
+  );
+  return `${prefix}-A${counter.seq.toString().padStart(4, '0')}`;
 };
 
 // --- MIDNIGHT AUTO-ARCHIVE SYSTEM ---
@@ -1498,30 +1835,203 @@ const validateOrderMath = (order) => {
 // Start the timer when the server boots up
 scheduleMidnightArchive();
 
+// --- SHIFT MANAGEMENT ROUTES ---
+
+// Open a new shift (called on login, records starting cash)
+app.post('/api/shifts/start', verifyToken, async (req, res) => {
+  try {
+    const { startingCash } = req.body;
+    // Close any dangling open shifts for this cashier
+    await Shift.updateMany(
+      { cashierId: String(req.user._id), status: 'Open' },
+      { status: 'Closed', shiftEnd: new Date() }
+    );
+    const shift = await Shift.create({
+      cashierId:    String(req.user._id),
+      cashierName:  req.user.name,
+      startingCash: parseFloat(startingCash) || 0,
+    });
+    res.json({ success: true, shift });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Close shift — records actual cash count and calculates variance
+app.post('/api/shifts/end', verifyToken, async (req, res) => {
+  try {
+    const { actualCash } = req.body;
+    const shift = await Shift.findOne({ cashierId: String(req.user._id), status: 'Open' });
+    if (!shift) return res.status(404).json({ success: false, error: 'No open shift found.' });
+
+    // Cash sales only (GCash/Card stay with the POS partner, not the register)
+    const cashOrders = await Order.find({
+      cashier:       req.user.name,
+      status:        'Completed',
+      paymentMethod: 'Cash',
+      createdAt:     { $gte: shift.shiftStart }
+    });
+    const salesTotal   = cashOrders.reduce((sum, o) => sum + o.total, 0);
+    const expectedCash = shift.startingCash + salesTotal;
+    const actual       = parseFloat(actualCash) || 0;
+
+    shift.shiftEnd     = new Date();
+    shift.salesTotal   = salesTotal;
+    shift.expectedCash = expectedCash;
+    shift.actualCash   = actual;
+    shift.variance     = actual - expectedCash;
+    shift.status       = 'Closed';
+    await shift.save();
+
+    // Variance journal entry (Cash Short & Over)
+    const variance = shift.variance;
+    if (Math.abs(variance) > 0.001) {
+      const varLines = variance < 0
+        ? [ // Short: cashier is missing money
+            { accountCode: '5010', accountName: 'Cash Short & Over Expense', debit: Math.abs(variance), credit: 0 },
+            { accountCode: '1000', accountName: 'Cash on Hand', debit: 0, credit: Math.abs(variance) },
+          ]
+        : [ // Over: cashier has extra money
+            { accountCode: '1000', accountName: 'Cash on Hand', debit: variance, credit: 0 },
+            { accountCode: '4020', accountName: 'Cash Short & Over Income', debit: 0, credit: variance },
+          ];
+      await JournalEntry.create({
+        reference: `VAR-${shift._id}`,
+        description: `Variance adjustment — ${shift.cashierName} (${variance >= 0 ? 'Over' : 'Short'} ₱${Math.abs(variance).toFixed(2)})`,
+        lines: varLines,
+        totalDebit: Math.abs(variance),
+        totalCredit: Math.abs(variance),
+      });
+    }
+
+    res.json({ success: true, shift });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- BANK DEPOSIT ROUTES ---
+app.post('/api/bank-deposits', verifyToken, async (req, res) => {
+  try {
+    const { shiftId, amount, reference } = req.body;
+    const depositAmount = parseFloat(amount);
+    if (isNaN(depositAmount) || depositAmount <= 0)
+      return res.status(400).json({ success: false, error: 'Invalid deposit amount.' });
+
+    const shift = await Shift.findById(shiftId);
+    if (!shift) return res.status(404).json({ success: false, error: 'Shift not found.' });
+    if (shift.status === 'Open')
+      return res.status(400).json({ success: false, error: 'Close the shift before posting a deposit.' });
+
+    const cashOnHand = (shift.actualCash || 0) - (shift.depositedAmount || 0);
+    const maxDeposit = cashOnHand - shift.startingCash;
+
+    if (depositAmount > cashOnHand + 0.01)
+      return res.status(400).json({ success: false, error: `Amount exceeds Cash on Hand (₱${cashOnHand.toFixed(2)}).` });
+    if (depositAmount > maxDeposit + 0.01)
+      return res.status(400).json({ success: false, error: `Cannot reduce drawer below starting fund (₱${shift.startingCash.toFixed(2)}).` });
+
+    const je = await JournalEntry.create({
+      reference: `DEP-${Date.now()}`,
+      description: `Bank deposit — ${shift.cashierName}${reference ? ` (${reference})` : ''}`,
+      lines: [
+        { accountCode: '1010', accountName: 'Cash in Bank', debit: depositAmount, credit: 0 },
+        { accountCode: '1000', accountName: 'Cash on Hand',  debit: 0, credit: depositAmount },
+      ],
+      totalDebit: depositAmount,
+      totalCredit: depositAmount,
+    });
+
+    shift.depositedAmount = (shift.depositedAmount || 0) + depositAmount;
+    const drawerBalanceAfter = (shift.actualCash || 0) - shift.depositedAmount;
+    const isReconciled = Math.abs(drawerBalanceAfter - shift.startingCash) < 0.01;
+    if (isReconciled) { shift.isReconciled = true; shift.status = 'Reconciled'; }
+    await shift.save();
+
+    const deposit = await BankDeposit.create({
+      shiftId: shift._id,
+      amount: depositAmount,
+      depositedBy: req.user.name,
+      reference: reference || '',
+      journalEntryId: je._id,
+      drawerBalanceAfter,
+      isDrawerReconciled: isReconciled,
+    });
+
+    res.json({ success: true, deposit, shift, drawerBalanceAfter, isReconciled });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/bank-deposits', verifyToken, async (req, res) => {
+  try {
+    const filter = req.query.shiftId ? { shiftId: req.query.shiftId } : {};
+    const deposits = await BankDeposit.find(filter).sort({ createdAt: -1 });
+    res.json({ success: true, deposits });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/accounts', verifyToken, async (req, res) => {
+  try {
+    const accounts = await Account.find().sort({ code: 1 });
+    res.json({ success: true, accounts });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get active shift for the logged-in cashier
+app.get('/api/shifts/current', verifyToken, async (req, res) => {
+  try {
+    const shift = await Shift.findOne({ cashierId: String(req.user._id), status: 'Open' });
+    res.json({ success: true, shift });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- PARTIAL DELIVERY ROUTE ---
+// Sets status to 'Partially Delivered' without triggering ERP (inventory deduction deferred to Completed)
+app.post('/api/orders/:id/partial-delivery', verifyToken, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found.' });
+    if (!['Ready', 'Preparing'].includes(order.status)) {
+      return res.status(400).json({ success: false, error: 'Order must be Ready or Preparing to partially deliver.' });
+    }
+    order.status = 'Partially Delivered';
+    await order.save();
+    io.emit('orderUpdated', order);
+    res.json({ success: true, order });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // --- USER / ADMIN ROUTES ---
 
-app.post('/api/users/login', async (req, res) => {
-  const { name, password } = req.body;
-  const user = await User.findOne({ name });
-  if (!user) return res.status(401).json({ success: false, message: 'Invalid name or password' });
-  const isMatch = await bcrypt.compare(password, user.password);
-  
-  if (isMatch) {
-    // Generate JWT
-    const token = jwt.sign(
-      // THE FIX: Add user.role to the token payload
-      { _id: user._id, name: user.name, userCode: user.userCode, role: user.role }, 
-      process.env.JWT_SECRET,
-      { expiresIn: '12h' } // Token expires in 12 hours
-    );
-    res.json({ 
-       success: true, 
-       token, 
-       // THE FIX: Also return the role to the frontend immediately
-       user: { _id: user._id, name: user.name, userCode: user.userCode, role: user.role } 
-     });
-  } else {
-    res.status(401).json({ success: false, message: 'Invalid name or password' });
+app.post('/api/users/login', loginLimiter, async (req, res) => {
+  try {
+    const { name, password } = req.body;
+    if (!name || !password) return res.status(400).json({ success: false, message: 'Name and password are required.' });
+    const user = await User.findOne({ name });
+    if (!user) return res.status(401).json({ success: false, message: 'Invalid name or password' });
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (isMatch) {
+      const token = jwt.sign(
+        { _id: user._id, name: user.name, userCode: user.userCode, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '12h' }
+      );
+      res.json({ success: true, token, user: { _id: user._id, name: user.name, userCode: user.userCode, role: user.role } });
+    } else {
+      res.status(401).json({ success: false, message: 'Invalid name or password' });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1529,7 +2039,7 @@ app.get('/api/users', verifyToken, async (req, res) => {
   const users = await User.find().select('-password').sort({ userCode: 1 });
   res.json({ success: true, users });
 });
-app.post('/api/users', verifyToken, async (req, res) => {
+app.post('/api/users', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
     const existing = await User.findOne({ name: { $regex: new RegExp(`^${req.body.name.trim()}$`, 'i') } });
     if (existing) return res.status(400).json({ success: false, error: 'User already exists' });
@@ -1548,10 +2058,10 @@ app.post('/api/users', verifyToken, async (req, res) => {
   }
 });
 
-app.put('/api/users/:id', verifyToken, async (req, res) => {
+app.put('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
     const updateData = { name: req.body.name };
-    
+
     // Only hash and update the password if they actually typed a new one
     if (req.body.password && req.body.password.trim() !== '') {
       updateData.password = await bcrypt.hash(req.body.password, 10);
@@ -1564,7 +2074,22 @@ app.put('/api/users/:id', verifyToken, async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', verifyToken, async (req, res) => {
+app.patch('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { name, password, role } = req.body;
+    const updates = {};
+    if (name) updates.name = name.trim();
+    if (role) updates.role = role;
+    if (password && password.trim()) updates.password = await bcrypt.hash(password, 10);
+    const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
+    res.json({ success: true, user });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
   res.json({ success: true });
 });
@@ -1574,3 +2099,15 @@ const PORT = process.env.PORT || 5002;
 server.listen(PORT, () => {
   console.log(`🚀 API Server running on port ${PORT}`);
 });
+
+const shutdown = async (signal) => {
+  console.log(`\n${signal} received — shutting down gracefully...`);
+  server.close(async () => {
+    await mongoose.connection.close();
+    console.log('✅ MongoDB connection closed. Server stopped.');
+    process.exit(0);
+  });
+  setTimeout(() => { console.error('⏱ Forced shutdown after timeout'); process.exit(1); }, 10000);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
