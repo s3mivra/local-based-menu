@@ -5,7 +5,7 @@ const CustomerMenu = lazy(() => import('./pages/CustomerMenu'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const SuperAdminPanel = lazy(() => import('./pages/SuperAdminPanel'));
 const QRCodeComponent = lazy(() => import('./components/QRCode'));
-
+//fix
 class ErrorBoundary extends Component {
   state = { error: null };
   static getDerivedStateFromError(error) { return { error }; }
