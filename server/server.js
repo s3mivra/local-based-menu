@@ -16,7 +16,7 @@ import pino from 'pino';
 import pinoHttp from 'pino-http';
 import { assertBalanced, debitAccountFor, grossSalesAmount, suggestedSettleAccount } from './lib/ledger.js';
 import { ACCOUNTS, EXPENSE_CATEGORIES } from './lib/chartOfAccounts.js';
-import { resolveUnit, displayToBase } from './lib/units.js';
+import { resolveUnit, displayToBase, effectiveDisplay } from './lib/units.js';
 import { addBatch, consumeBatches, soonestExpiry, sortBatchesFEFO, batchesTotal } from './lib/expiry.js';
 
 const log = pino({
@@ -4136,11 +4136,12 @@ app.get('/api/reports/purchase-order', verifyToken, requireSuperAdmin, async (re
     const lines = inv.map(i => {
       const adu = (usage[i._id.toString()] || 0) / 30; // avg daily usage (base units)
       const target = adu * days;
-      const mult = (i.unitMultiplier && i.unitMultiplier > 0) ? i.unitMultiplier : 1;
+      // Display in kg/L/pcs — auto-promote g/ml so the PO never shows base units.
+      const { displayUnit, mult } = effectiveDisplay(i);
       const needBase = Math.max(0, target - i.stockQty);
       const lowFlag = i.lowStockThreshold > 0 && i.stockQty <= i.lowStockThreshold;
       return {
-        itemName: i.itemName, currentStock: +(i.stockQty / mult).toFixed(2), displayUnit: i.displayUnit || i.unit,
+        itemName: i.itemName, currentStock: +(i.stockQty / mult).toFixed(2), displayUnit,
         avgDailyUse: +(adu / mult).toFixed(3), suggestedOrder: +(needBase / mult).toFixed(2),
         estCost: +((needBase) * (i.unitCost || 0)).toFixed(2), lowStock: lowFlag,
       };
