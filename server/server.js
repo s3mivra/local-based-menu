@@ -2107,16 +2107,19 @@ app.post('/api/orders/:id/void', verifyToken, requireSuperAdmin, async (req, res
 });
 app.post('/api/orders/archive', verifyToken, async (req, res) => {
   try {
-    // 1. Force any hanging kitchen orders to Cancelled
+    // 1. Force any hanging order to Cancelled — includes Ready (made but never
+    //    handed over) and Parked (held unpaid tabs). Parked orders also lose the
+    //    isParked flag so they don't linger in the parked list.
     await Order.updateMany(
-      { status: { $in: ['Pending', 'Preparing'] } },
-      { $set: { status: 'Cancelled' } }
+      { status: { $in: ['Pending', 'Preparing', 'Ready', 'Parked'] }, isArchived: false },
+      { $set: { status: 'Cancelled', isParked: false } }
     );
-    
+
     // 2. Sweep EVERYTHING that is currently active into the archive
+    //    (Completed, Voided, Cancelled, and the just-cancelled Parked tabs).
     await Order.updateMany(
       { isArchived: false },
-      { $set: { isArchived: true } }
+      { $set: { isArchived: true, isParked: false } }
     );
 
     emitToAll('ordersArchived');
@@ -3106,14 +3109,16 @@ function scheduleMidnightArchive() {
     log.info('  Midnight reached (PH Time): Auto-closing the day...');
     
     try {
-      // Step A: Force any hanging orders (Pending/Preparing/Ready) to Cancelled
+      // Step A: Force any hanging order to Cancelled — Pending/Preparing/Ready
+      //         plus Parked (held unpaid tabs); clear isParked so none linger.
       await Order.updateMany(
-        { status: { $in: ['Pending', 'Preparing', 'Ready'] }, isArchived: false }, 
-        { $set: { status: 'Cancelled' } }
+        { status: { $in: ['Pending', 'Preparing', 'Ready', 'Parked'] }, isArchived: false },
+        { $set: { status: 'Cancelled', isParked: false } }
       );
 
-      // Step B: Sweep everything active into the archive
-      await Order.updateMany({ isArchived: false }, { $set: { isArchived: true } });
+      // Step B: Sweep everything active into the archive (incl. the just-cancelled
+      //         Parked tabs and any existing Cancelled/Voided orders).
+      await Order.updateMany({ isArchived: false }, { $set: { isArchived: true, isParked: false } });
       emitToAll('ordersArchived'); // Tell all iPads/phones to clear their screens
 
       // Step C: Take the Midnight Inventory Snapshot
