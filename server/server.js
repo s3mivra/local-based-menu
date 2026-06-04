@@ -3169,8 +3169,17 @@ function scheduleMidnightArchive() {
 
   // 2. Set the countdown timer
   setTimeout(async () => {
+    // Superadmin-controlled toggle: when autoCloseEnabled is explicitly false,
+    // skip the automatic cancel/archive/lock and leave the day open for a manual
+    // close. The timer still reschedules for the next midnight.
+    const acSetting = await Settings.findOne({ key: 'autoCloseEnabled' }).lean();
+    if (acSetting && acSetting.value === false) {
+      log.info('  Midnight reached (PH Time): auto-close is DISABLED — leaving the day open for manual close.');
+      scheduleMidnightArchive();
+      return;
+    }
     log.info('  Midnight reached (PH Time): Auto-closing the day...');
-    
+
     try {
       // Step A: Force any hanging order to Cancelled — Pending/Preparing/Ready
       //         plus Parked (held unpaid tabs); clear isParked so none linger.

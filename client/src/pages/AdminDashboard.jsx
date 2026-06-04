@@ -178,7 +178,7 @@ export default function AdminDashboard() {
   // --- PROFIT BY CATEGORY ---
   const [profitByCategory, setProfitByCategory] = useState(null);
   // --- SYSTEM SETTINGS (QR toggle, etc.) ---
-  const [systemSettings, setSystemSettings] = useState({ isAcceptingQROrders: true });
+  const [systemSettings, setSystemSettings] = useState({ isAcceptingQROrders: true, autoCloseEnabled: true });
   // --- SALES BY PAYMENT ---
   const [salesByPayment, setSalesByPayment] = useState(null);
   const [sbpRange, setSbpRange] = useState({
@@ -2824,6 +2824,15 @@ const updateStatus = async (orderId, newStatus) => {
       const d = await res.json(); if (d.success) fetchSettings();
     } catch (err) { console.error('toggleQROrders', err); }
   };
+  // Superadmin-only: enable/disable the automatic midnight close & day archive.
+  const toggleAutoClose = async () => {
+    const next = systemSettings.autoCloseEnabled === false; // currently off → turning on
+    if (!next && !window.confirm('Disable automatic midnight close?\n\nThe day will stay OPEN past midnight and a superadmin must close & archive it manually.')) return;
+    try {
+      const res = await apiFetch('/api/settings/autoCloseEnabled', { method: 'PATCH', body: JSON.stringify({ value: next }) });
+      const d = await res.json(); if (d.success) fetchSettings();
+    } catch (err) { console.error('toggleAutoClose', err); }
+  };
 
   // ── Profit by category ──────────────────────────────────────────────────────
   const fetchProfitByCategory = async () => {
@@ -3478,6 +3487,14 @@ const updateStatus = async (orderId, newStatus) => {
             className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${systemSettings.isAcceptingQROrders ? 'text-green-400/70 hover:text-green-400 hover:bg-green-500/10' : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'}`}>
             {systemSettings.isAcceptingQROrders ? <Unlock size={15} /> : <Lock size={15} />}
             {systemSettings.isAcceptingQROrders ? 'QR Orders: OPEN' : 'QR Orders: CLOSED'}
+          </button>
+        )}
+        {/* Auto midnight close toggle (superadmin only) */}
+        {isSuperAdmin && (
+          <button onClick={toggleAutoClose}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${systemSettings.autoCloseEnabled !== false ? 'text-green-400/70 hover:text-green-400 hover:bg-green-500/10' : 'text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20'}`}>
+            <Clock size={15} />
+            {systemSettings.autoCloseEnabled !== false ? 'Auto Close: ON' : 'Auto Close: OFF (manual)'}
           </button>
         )}
         {/* Install as app (only when the browser offers it) */}
