@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as auth from '../lib/auth';
 import {
   Users, Shield, Menu, X, LogOut, Plus, Edit2, Trash2,
   Search, Eye, EyeOff, AlertCircle, Tag, Loader2, Lock,
@@ -163,19 +164,20 @@ const EMPTY_FORM = { name: '', password: '', role: 'Staff', showPassword: false 
 export default function SuperAdminPanel() {
   const navigate = useNavigate();
 
-  // Auth
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    const token = localStorage.getItem('semivra_token');
-    if (!token) return false;
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      if (payload.exp && payload.exp * 1000 < Date.now()) {
-        localStorage.removeItem('semivra_token');
-        return false;
-      }
-      return payload.role === 'superadmin';
-    } catch { return false; }
-  });
+  // Auth — access token lives in memory; restored via silent refresh on mount.
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authBootstrapping, setAuthBootstrapping] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    auth.refreshSession(API_URL).then((data) => {
+      if (cancelled) return;
+      // This panel is superadmin-only — only authenticate if the role matches.
+      if (data?.user?.role === 'superadmin') setIsAuthenticated(true);
+      setAuthBootstrapping(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
   const [loginForm, setLoginForm]   = useState({ name: '', password: '', showPassword: false });
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
@@ -222,11 +224,7 @@ export default function SuperAdminPanel() {
   }, []);
 
   const apiFetch = useCallback(async (endpoint, options = {}) => {
-    const headers = { ...options.headers };
-    const token = localStorage.getItem('semivra_token');
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-    const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+    const res = await auth.apiFetch(API_URL, endpoint, options);
     if ((res.status === 401 || res.status === 403) && endpoint !== '/api/users/login') handleLogout();
     return res;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -284,7 +282,7 @@ export default function SuperAdminPanel() {
           setLoginError('Access Denied: Superadmin credentials required.');
           return;
         }
-        localStorage.setItem('semivra_token', data.token);
+        auth.setToken(data.token);
         setIsAuthenticated(true);
       } else {
         setLoginError('Invalid name or password.');
@@ -294,7 +292,8 @@ export default function SuperAdminPanel() {
   };
 
   const handleLogout = useCallback(() => {
-    localStorage.removeItem('semivra_token');
+    auth.logout(API_URL); // revoke refresh session + clear cookie
+    auth.clearToken();
     setIsAuthenticated(false);
     setLoginForm({ name: '', password: '', showPassword: false });
     setUsers([]);
@@ -460,6 +459,14 @@ export default function SuperAdminPanel() {
   // =========================================================================
   // LOGIN SCREEN
   // =========================================================================
+  if (authBootstrapping) {
+    return (
+      <div className="min-h-screen bg-page-bg flex items-center justify-center text-white/60 text-sm">
+        Restoring session…
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center p-4">

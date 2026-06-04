@@ -4,6 +4,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { z } from 'zod';
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
@@ -103,6 +104,7 @@ app.use(pinoHttp({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(cookieParser());
 
 // ── STANDARDISED LEDGER REFERENCE GENERATOR ─────────────────────────────────────
 //
@@ -141,6 +143,65 @@ const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // bcrypt work factor — 12 rounds (OWASP-recommended minimum for 2025+).
 const BCRYPT_ROUNDS = 12;
+
+// ── DUAL-TOKEN AUTH CONFIG ───────────────────────────────────────────────────
+// Access token: short-lived (15m), sent as a Bearer header, held in client memory.
+// Refresh token: opaque random secret, long-lived (30d), httpOnly+Secure+SameSite
+// cookie, persisted (hashed) in the RefreshSession collection so it can be revoked
+// instantly on logout / privilege change. Rotated on every use.
+const ACCESS_TTL = '15m';
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const REFRESH_COOKIE = 'semivra_rt';
+
+const signAccessToken = (user) => jwt.sign(
+  { _id: user._id, name: user.name, userCode: user.userCode, role: user.role },
+  process.env.JWT_SECRET,
+  { expiresIn: ACCESS_TTL }
+);
+
+const hashToken = (raw) => crypto.createHash('sha256').update(raw).digest('hex');
+
+// In production the SPA (Vercel) and API (Railway) are different sites, so the
+// refresh cookie MUST be SameSite=None; Secure to be sent cross-site. That removes
+// SameSite's CSRF protection, so the /api/auth/* endpoints additionally enforce an
+// Origin allowlist (see requireTrustedOrigin). In dev (same-ish origin) we use Lax.
+const refreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: IS_PROD,                         // None requires Secure; HTTPS-only in prod
+  sameSite: IS_PROD ? 'none' : 'lax',
+  maxAge: REFRESH_TTL_MS,
+  path: '/api/auth',                       // cookie only ever sent to the refresh/logout endpoints
+});
+
+// CSRF defense for the cookie-bearing auth endpoints: reject requests whose Origin
+// is not on the allowlist. The access-token API is header-based (CSRF-immune); only
+// these cookie endpoints need this guard.
+const requireTrustedOrigin = (req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin) return next(); // non-browser / same-origin server call
+  const ok = allowedOrigins.includes(origin) ||
+    (!IS_PROD && (origin.startsWith('http://192.168.') || origin.startsWith('http://172.') || origin.startsWith('http://10.')));
+  if (!ok) return res.status(403).json({ success: false, error: 'Untrusted origin.' });
+  next();
+};
+
+// Issue a fresh access token + a new rotated refresh session, set the cookie.
+const issueSession = async (res, user, meta = {}) => {
+  const rawRefresh = crypto.randomBytes(48).toString('hex');
+  await RefreshSession.create({
+    tokenHash: hashToken(rawRefresh),
+    userId: user._id,
+    expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
+    userAgent: meta.userAgent?.slice(0, 200),
+  });
+  res.cookie(REFRESH_COOKIE, rawRefresh, refreshCookieOptions());
+  return signAccessToken(user);
+};
+
+// Revoke every active refresh session for a user — call on password/role change
+// or account deletion so existing logins can no longer silently refresh.
+const revokeUserSessions = (userId) =>
+  RefreshSession.updateMany({ userId, revoked: false }, { revoked: true });
 
 // ── BOUNDARY VALIDATION ──────────────────────────────────────────────────────
 // validate(schema) parses req.body against a Zod schema. Zod strips unknown keys
@@ -719,6 +780,21 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, default: 'Staff' }
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
+
+// Refresh-token session store — enables instant server-side revocation.
+// tokenHash = sha256(rawRefreshToken); the raw token lives only in the client's
+// httpOnly cookie. `revoked` is set on logout/rotation; expired docs auto-purge
+// via the TTL index on expiresAt.
+const RefreshSessionSchema = new mongoose.Schema({
+  tokenHash: { type: String, required: true, index: true },
+  userId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  revoked:   { type: Boolean, default: false },
+  replacedBy:{ type: String },          // tokenHash of the rotated successor (audit trail)
+  userAgent: { type: String },
+  expiresAt: { type: Date, required: true },
+}, { timestamps: true });
+RefreshSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL auto-cleanup
+const RefreshSession = mongoose.model('RefreshSession', RefreshSessionSchema);
 
 // --- NEW: CUSTOM ROLES SCHEMA & ROUTES ---
 const RoleSchema = new mongoose.Schema({ name: String });
@@ -3326,15 +3402,58 @@ app.post('/api/users/login', loginLimiter, validate(loginSchema), async (req, re
     if (!user) return res.status(401).json({ success: false, message: 'Invalid name or password' });
     const isMatch = await bcrypt.compare(password, user.password);
     if (isMatch) {
-      const token = jwt.sign(
-        { _id: user._id, name: user.name, userCode: user.userCode, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: '12h' }
-      );
+      const token = await issueSession(res, user, { userAgent: req.headers['user-agent'] });
       res.json({ success: true, token, user: { _id: user._id, name: user.name, userCode: user.userCode, role: user.role } });
     } else {
       res.status(401).json({ success: false, message: 'Invalid name or password' });
     }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Silent refresh — exchange a valid refresh cookie for a new access token.
+// Rotates the refresh token (single-use): the old session is revoked and a new
+// cookie is issued. A revoked/expired/unknown token clears the cookie and 401s.
+app.post('/api/auth/refresh', requireTrustedOrigin, async (req, res) => {
+  try {
+    const raw = req.cookies?.[REFRESH_COOKIE];
+    if (!raw) return res.status(401).json({ success: false, error: 'No refresh session.' });
+
+    const session = await RefreshSession.findOne({ tokenHash: hashToken(raw) });
+    if (!session || session.revoked || session.expiresAt < new Date()) {
+      res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(), maxAge: undefined });
+      // Reuse of an already-rotated (revoked) token can signal theft — revoke the whole chain.
+      if (session?.revoked) await RefreshSession.updateMany({ userId: session.userId }, { revoked: true });
+      return res.status(401).json({ success: false, error: 'Session expired. Please log in again.' });
+    }
+
+    const user = await User.findById(session.userId).select('-password');
+    if (!user) {
+      res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(), maxAge: undefined });
+      return res.status(401).json({ success: false, error: 'User no longer exists.' });
+    }
+
+    // Rotate: revoke old, issue new (issueSession sets the new cookie).
+    const newToken = await issueSession(res, user, { userAgent: req.headers['user-agent'] });
+    session.revoked = true;
+    session.replacedBy = hashToken(req.cookies[REFRESH_COOKIE]); // best-effort audit
+    await session.save();
+
+    res.json({ success: true, token: newToken, user: { _id: user._id, name: user.name, userCode: user.userCode, role: user.role } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Logout — revoke the current refresh session and clear the cookie.
+// This is the real teardown the old localStorage-only logout never provided.
+app.post('/api/auth/logout', requireTrustedOrigin, async (req, res) => {
+  try {
+    const raw = req.cookies?.[REFRESH_COOKIE];
+    if (raw) await RefreshSession.updateOne({ tokenHash: hashToken(raw) }, { revoked: true });
+    res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(), maxAge: undefined });
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -3373,6 +3492,7 @@ app.put('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => {
     }
 
     const updated = await User.findByIdAndUpdate(req.params.id, updateData, { new: true }).select('-password');
+    if (updateData.password) await revokeUserSessions(req.params.id); // force re-login after password change
     res.json({ success: true, user: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -3388,6 +3508,7 @@ app.patch('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => 
     if (password && password.trim()) updates.password = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true }).select('-password');
     if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
+    if (updates.password || updates.role) await revokeUserSessions(req.params.id); // privilege change → re-login
     res.json({ success: true, user });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -3396,6 +3517,7 @@ app.patch('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => 
 
 app.delete('/api/users/:id', verifyToken, requireSuperAdmin, async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
+  await revokeUserSessions(req.params.id); // kill any active sessions for the deleted account
   res.json({ success: true });
 });
 
@@ -3418,6 +3540,11 @@ app.patch('/api/users/me/password', verifyToken, async (req, res) => {
     user.password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await user.save();
 
+    // Invalidate all existing sessions (other devices), then re-issue one for the
+    // current device so the user who just changed their password stays logged in here.
+    await revokeUserSessions(user._id);
+    const token = await issueSession(res, user, { userAgent: req.headers['user-agent'] });
+
     await AuditLog.create({
       userId: user.name,
       action: 'PASSWORD_CHANGED',
@@ -3425,7 +3552,7 @@ app.patch('/api/users/me/password', verifyToken, async (req, res) => {
       details: { changedBy: user.name }
     });
 
-    res.json({ success: true, message: 'Password changed successfully.' });
+    res.json({ success: true, message: 'Password changed successfully.', token });
   } catch (err) {
     log.error({ err }, 'PATCH /api/users/me/password failed');
     res.status(500).json({ success: false, error: err.message });
