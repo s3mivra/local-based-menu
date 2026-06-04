@@ -173,6 +173,37 @@ const addonSchema    = z.object({
   recipe: z.array(z.object({ invId: z.string(), name: z.string(), qty: z.number(), cost: z.number().optional(), unit: z.string().optional() })).optional(),
 });
 
+// Reusable recipe-line shape
+const zRecipe = z.array(z.object({
+  invId: z.string().optional(), name: z.string().optional(),
+  qty: z.number().optional(), cost: z.number().optional(), unit: z.string().optional(),
+})).optional();
+
+// Mass-assignment fixes: each schema OMITS server-controlled fields
+// (codes, isArchived, timestamps) so a client can never set them via create().
+const productSchema = z.object({
+  name: zName, description: z.string().max(2000).optional(), category: z.string().trim().max(80).optional(),
+  basePrice: zMoney, baseSize: z.string().max(40).optional(), baseRecipe: zRecipe,
+  sizes: z.array(z.object({ sizeCode: z.string().optional(), name: z.string().optional(), price: zMoney.optional(), recipe: zRecipe })).optional(),
+  addOns: z.array(z.object({ name: z.string(), price: zMoney.optional(), recipe: zRecipe })).optional(),
+  image: z.string().optional(), isAvailable: z.boolean().optional(),
+  modifierGroups: z.array(z.string()).optional(),
+});
+const comboSchema = z.object({
+  name: zName, description: z.string().max(2000).optional(), price: zMoney, image: z.string().optional(),
+  isActive: z.boolean().optional(),
+  items: z.array(z.object({ productId: z.string().optional(), name: z.string().optional(), sizeName: z.string().optional(), quantity: z.number().int().positive().optional() })).optional(),
+});
+const discountSchema = z.object({
+  name: zName, percentage: z.number().min(0).max(100).optional(), isSCPWD: z.boolean().optional(),
+});
+const roleSchema = z.object({ name: zName });
+const modifierGroupSchema = z.object({
+  name: zName, isRequired: z.boolean().optional(),
+  minSelect: z.number().int().min(0).optional(), maxSelect: z.number().int().min(0).optional(),
+  options: z.array(z.object({ name: z.string(), price: zMoney.optional(), recipe: zRecipe })).optional(),
+});
+
 // mkSeqRef — ASYNC. Use for entries that have no natural document ID.
 //   Atomically increments a per-prefix-per-year counter, zero-collision.
 //   e.g.  await mkSeqRef('EXP')       →  "EXP-2025-000042"
@@ -697,7 +728,7 @@ app.get('/api/roles', verifyToken, async (req, res) => {
   const roles = await Role.find();
   res.json({ success: true, roles });
 });
-app.post('/api/roles', verifyToken, async (req, res) => {
+app.post('/api/roles', verifyToken, requireSuperAdmin, validate(roleSchema), async (req, res) => {
   const newRole = await Role.create(req.body);
   res.json({ success: true, role: newRole });
 });
@@ -750,7 +781,7 @@ app.get('/api/discounts', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/discounts', verifyToken, async (req, res) => {
+app.post('/api/discounts', verifyToken, validate(discountSchema), async (req, res) => {
   try {
     const newDiscount = await Discount.create(req.body);
     res.json({ success: true, discount: newDiscount });
@@ -1046,7 +1077,7 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-app.post('/api/products', verifyToken, async (req, res) => {
+app.post('/api/products', verifyToken, validate(productSchema), async (req, res) => {
   // Generate base product code (e.g., DRS-A0001)
   const catPrefix = getCategoryPrefix(req.body.category);
   req.body.productCode = await generateNextSequence(Product, catPrefix, 'productCode');
@@ -3712,7 +3743,7 @@ app.get('/api/modifier-groups', verifyToken, async (req, res) => {
   try { res.json({ success: true, groups: await ModifierGroup.find().lean() }); }
   catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-app.post('/api/modifier-groups', verifyToken, requireSuperAdmin, async (req, res) => {
+app.post('/api/modifier-groups', verifyToken, requireSuperAdmin, validate(modifierGroupSchema), async (req, res) => {
   try { const group = await ModifierGroup.create(req.body); emitToAll('menuUpdated'); res.json({ success: true, group }); }
   catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -3732,7 +3763,7 @@ app.get('/api/combos', async (req, res) => {
     res.json({ success: true, combos });
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-app.post('/api/combos', verifyToken, requireSuperAdmin, async (req, res) => {
+app.post('/api/combos', verifyToken, requireSuperAdmin, validate(comboSchema), async (req, res) => {
   try {
     if (!req.body.name || !(req.body.price > 0)) return res.status(400).json({ success: false, error: 'Name and a positive price are required.' });
     if (!Array.isArray(req.body.items) || req.body.items.length === 0) return res.status(400).json({ success: false, error: 'A combo needs at least one component product.' });
@@ -4337,16 +4368,24 @@ server.listen(PORT, () => {
   log.info({ port: PORT }, 'API server running');
 });
 
-const shutdown = async (signal) => {
+const shutdown = async (signal, exitCode = 0) => {
   log.info({ signal }, 'Shutting down gracefully');
   server.close(async () => {
     await mongoose.connection.close();
     log.info('MongoDB connection closed. Server stopped.');
-    process.exit(0);
+    process.exit(exitCode);
   });
   setTimeout(() => { log.error('Forced shutdown after timeout'); process.exit(1); }, 10000);
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('uncaughtException',  err => log.fatal({ err }, 'Uncaught exception'));
-process.on('unhandledRejection', err => log.fatal({ err }, 'Unhandled rejection'));
+// A process that has hit an uncaught exception is in an undefined state — log,
+// drain in-flight traffic via the normal shutdown path, then let the supervisor
+// (Railway / pm2 / Docker restart policy) start a fresh, clean process.
+const fatalExit = (kind) => (err) => {
+  log.fatal({ err }, kind);
+  // Best-effort graceful drain; force-exit guard inside shutdown() caps the wait.
+  try { shutdown(kind, 1); } catch { process.exit(1); }
+};
+process.on('uncaughtException', fatalExit('uncaughtException'));
+process.on('unhandledRejection', fatalExit('unhandledRejection'));
