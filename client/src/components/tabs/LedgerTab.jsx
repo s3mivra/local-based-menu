@@ -1,5 +1,7 @@
 import React from 'react';
 import { Menu, Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, TrendingDown, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, AlertTriangle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Check, Clock, Coffee, Minus, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Building2, Printer, ArrowUp, ArrowDown, Gift, XCircle, Zap, BarChart2, CreditCard, Banknote, Smartphone, Truck, Bell, ShieldCheck, Search, Tag } from 'lucide-react';
+import { usePagination } from '../../lib/usePagination';
+import Pager from '../Pager';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -83,6 +85,15 @@ export default function LedgerTab({ ctx }) {
     menuEngineering, fetchMenuEngineering, cashierVariance, fetchCashierVariance, purchaseOrder, fetchPurchaseOrder,
     exportPnlPDF, exportPurchaseOrderPDF,
   } = ctx;
+
+  // ── Report-table pagination (client-side, 10 rows/page) ──
+  const arPage   = usePagination(arOutstanding?.orders, 10);
+  const apPage   = usePagination(apData?.recent, 10);
+  const sbpPage  = usePagination(salesByPayment?.breakdown, 10);
+  const pbcPage  = usePagination(profitByCategory?.categories, 10);
+  const mePage   = usePagination(menuEngineering?.items, 10);
+  const cvPage   = usePagination(cashierVariance?.cashiers, 10);
+  const poPage   = usePagination(purchaseOrder?.lines, 10);
 
   return (
         <div className="space-y-4">
@@ -449,7 +460,7 @@ export default function LedgerTab({ ctx }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {arOutstanding.orders.map(o => (
+                      {arPage.pageItems.map(o => (
                         <tr key={o._id} className="border-b border-white/5 hover:bg-white/5 transition">
                           <td className="py-3 text-white font-bold">{o.orderNumber}</td>
                           <td className="py-3 text-white/70">{o.customerName}</td>
@@ -474,6 +485,7 @@ export default function LedgerTab({ ctx }) {
                       ))}
                     </tbody>
                   </table>
+                  <Pager {...arPage} label="orders" />
                 </div>
               )}
             </div>
@@ -585,7 +597,7 @@ export default function LedgerTab({ ctx }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {(apData.recent || []).map((e, i) => (
+                        {apPage.pageItems.map((e, i) => (
                           <tr key={e._id || i} className={`border-b border-white/5 hover:bg-white/3 ${i % 2 === 0 ? '' : 'bg-white/[0.015]'}`}>
                             <td className="px-5 py-2.5 text-white/40 whitespace-nowrap">{new Date(e.date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: '2-digit' })}</td>
                             <td className="px-5 py-2.5 font-mono text-white/60 whitespace-nowrap">{e.reference}</td>
@@ -596,6 +608,7 @@ export default function LedgerTab({ ctx }) {
                         ))}
                       </tbody>
                     </table>
+                    <Pager {...apPage} label="entries" />
                   </div>
                 )}
               </div>
@@ -640,7 +653,7 @@ export default function LedgerTab({ ctx }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {(salesByPayment.breakdown||[]).map((r,i) => (
+                        {sbpPage.pageItems.map((r,i) => (
                           <tr key={r.method||i} className={`border-b border-white/5 ${i%2===0?'':'bg-white/[0.015]'}`}>
                             <td className="px-5 py-3 font-bold text-white">{r.method||'Unknown'}</td>
                             <td className="px-5 py-3 text-right text-white/70 tabular-nums">{r.count}</td>
@@ -655,6 +668,7 @@ export default function LedgerTab({ ctx }) {
                         ))}
                       </tbody>
                     </table>
+                    <Pager {...sbpPage} label="methods" />
                   </div>
                 </>
               )}
@@ -684,7 +698,7 @@ export default function LedgerTab({ ctx }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {(profitByCategory.categories||[]).map((c,i) => (
+                      {pbcPage.pageItems.map((c,i) => (
                         <tr key={c.category||i} className={`border-b border-white/5 ${i%2===0?'':'bg-white/[0.015]'}`}>
                           <td className="px-5 py-3 font-bold text-white">{c.category}</td>
                           <td className="px-5 py-3 text-right text-white/80 tabular-nums font-mono">₱{c.revenue.toFixed(2)}</td>
@@ -699,6 +713,7 @@ export default function LedgerTab({ ctx }) {
                       ))}
                     </tbody>
                   </table>
+                  <div className="px-3"><Pager {...pbcPage} label="categories" /></div>
                   <p className="text-[10px] text-white/20 p-3 text-center">COGS is estimated from recipe ingredient costs. Items without recipes show ₱0 COGS.</p>
                 </div>
               )}
@@ -721,7 +736,7 @@ export default function LedgerTab({ ctx }) {
                       <tr><th className="px-5 py-3">Item</th><th className="px-5 py-3 text-right">Qty</th><th className="px-5 py-3 text-right">Revenue</th><th className="px-5 py-3 text-right">Margin</th><th className="px-5 py-3 text-center">Class</th></tr>
                     </thead>
                     <tbody>
-                      {(menuEngineering.items||[]).map((r,i) => {
+                      {mePage.pageItems.map((r,i) => {
                         const cls = { Star:'bg-green-500/20 text-green-400', Plowhorse:'bg-yellow-500/20 text-yellow-400', Puzzle:'bg-blue-500/20 text-blue-400', Dog:'bg-red-500/20 text-red-400' }[r.quadrant];
                         return (
                           <tr key={i} className={`border-b border-white/5 ${i%2?'bg-white/[0.015]':''}`}>
@@ -735,6 +750,7 @@ export default function LedgerTab({ ctx }) {
                       })}
                     </tbody>
                   </table>
+                  <div className="px-3"><Pager {...mePage} label="items" /></div>
                 </div>
               )}
             </div>
@@ -758,7 +774,7 @@ export default function LedgerTab({ ctx }) {
                       <tr><th className="px-5 py-3">Cashier</th><th className="px-5 py-3 text-right">Shifts</th><th className="px-5 py-3 text-right">Avg Variance</th><th className="px-5 py-3 text-right">Times Short</th><th className="px-5 py-3 text-right">Worst</th></tr>
                     </thead>
                     <tbody>
-                      {cashierVariance.cashiers.map((c,i) => (
+                      {cvPage.pageItems.map((c,i) => (
                         <tr key={i} className={`border-b border-white/5 ${i%2?'bg-white/[0.015]':''}`}>
                           <td className="px-5 py-2.5 font-bold text-white">{c.cashierName}</td>
                           <td className="px-5 py-2.5 text-right text-white/70 tabular-nums">{c.shifts}</td>
@@ -769,6 +785,7 @@ export default function LedgerTab({ ctx }) {
                       ))}
                     </tbody>
                   </table>
+                  <div className="px-3"><Pager {...cvPage} label="cashiers" /></div>
                 </div>
               )}
             </div>
@@ -799,7 +816,7 @@ export default function LedgerTab({ ctx }) {
                       <tr><th className="px-5 py-3">Item</th><th className="px-5 py-3 text-right">On Hand</th><th className="px-5 py-3 text-right">Daily Use</th><th className="px-5 py-3 text-right">Order Qty</th><th className="px-5 py-3 text-right">Est. Cost</th></tr>
                     </thead>
                     <tbody>
-                      {purchaseOrder.lines.map((l,i) => (
+                      {poPage.pageItems.map((l,i) => (
                         <tr key={i} className={`border-b border-white/5 ${i%2?'bg-white/[0.015]':''}`}>
                           <td className="px-5 py-2.5 font-bold text-white">{l.itemName} {l.lowStock && <span className="text-[9px] bg-red-500 text-white px-1.5 py-0.5 rounded uppercase ml-1">Low</span>}</td>
                           <td className="px-5 py-2.5 text-right text-white/70 tabular-nums">{l.currentStock} {l.displayUnit}</td>
@@ -810,6 +827,7 @@ export default function LedgerTab({ ctx }) {
                       ))}
                     </tbody>
                   </table>
+                  <div className="px-3"><Pager {...poPage} label="items" /></div>
                 </div>
               )}
             </div>
