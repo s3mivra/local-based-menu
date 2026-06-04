@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
@@ -24,6 +25,17 @@ const log = pino({
   base: { service: 'semivra-pos' },
   ...(process.env.NODE_ENV !== 'production' && { transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss.l' } } })
 });
+
+// Optional error monitoring — completely inert unless SENTRY_DSN is set.
+const SENTRY_ON = !!process.env.SENTRY_DSN;
+if (SENTRY_ON) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0, // error reporting only; no perf tracing overhead
+  });
+  log.info('Sentry error monitoring enabled');
+}
 
 // Fail fast on missing required env vars
 if (!process.env.MONGO_URI || !process.env.JWT_SECRET) {
@@ -4591,6 +4603,7 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   const status = err.status || (/^CORS blocked/.test(err.message || '') ? 403 : 500);
   log.error({ err, url: req.url, method: req.method }, 'Unhandled request error');
+  if (SENTRY_ON && status >= 500) Sentry.captureException(err);
   res.status(status).json({
     success: false,
     error: IS_PROD ? 'An unexpected error occurred.' : (err.message || 'Internal error'),
@@ -4619,6 +4632,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // (Railway / pm2 / Docker restart policy) start a fresh, clean process.
 const fatalExit = (kind) => (err) => {
   log.fatal({ err }, kind);
+  if (SENTRY_ON) { try { Sentry.captureException(err); } catch { /* never block exit */ } }
   // Best-effort graceful drain; force-exit guard inside shutdown() caps the wait.
   try { shutdown(kind, 1); } catch { process.exit(1); }
 };
