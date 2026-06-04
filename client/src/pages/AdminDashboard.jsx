@@ -311,6 +311,8 @@ export default function AdminDashboard() {
   // --- MANUAL POS STATES ---
   const [isPosOpen, setIsPosOpen] = useState(false);
   const [posCart, setPosCart] = useState([]);
+  const [posSubmitting, setPosSubmitting] = useState(false); // disables Place Order while in flight
+  const posSubmittingRef = useRef(false);                    // synchronous double-tap guard
   const [posCategory, setPosCategory] = useState('All');
   const [posPage, setPosPage] = useState(1);
   const [posSearch, setPosSearch] = useState('');
@@ -923,12 +925,20 @@ export default function AdminDashboard() {
   const posCashChange = Math.max(0, (parseFloat(posCashTendered) || 0) - posGrandTotal);
 
   const submitManualOrder = async () => {
+    // Synchronous double-tap guard — blocks a second submit before React re-renders.
+    if (posSubmittingRef.current) return;
     if (posCart.length === 0) return alert("Cart is empty!");
     if (!posCustomerName) return alert("Please enter Customer / Driver Name.");
     const isDelivery = posTable === 'Manual Delivery';
     const isPickup = posTable === 'Pickup';
     if (isDelivery && !posDeliveryAddress) return alert("Please enter delivery address.");
     if ((isDelivery || isPickup) && !posCustomerPhone) return alert("Please enter customer phone number.");
+
+    posSubmittingRef.current = true;
+    setPosSubmitting(true);
+    // Idempotency key so even if two requests slip through (retry/proxy), the
+    // server returns the same order instead of creating a duplicate.
+    const idemKey = (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
     // Manual orders are PLACED as Pending — payment/checkout happens later from
     // the Orders "All view" when the order is completed (same as dine-in/QR).
@@ -969,12 +979,13 @@ export default function AdminDashboard() {
       refreshQueue();
       resetPosForm();
       alert('You are offline. Order saved and will sync automatically when the connection returns.');
+      posSubmittingRef.current = false; setPosSubmitting(false);
       return;
     }
 
     try {
       const res = await apiFetch(`/api/orders`, {
-        method: 'POST', body: JSON.stringify(payload)
+        method: 'POST', headers: { 'Idempotency-Key': idemKey }, body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (data.success) {
@@ -990,6 +1001,9 @@ export default function AdminDashboard() {
       refreshQueue();
       resetPosForm();
       alert('Connection lost. Order saved and will sync automatically when the connection returns.');
+    } finally {
+      posSubmittingRef.current = false;
+      setPosSubmitting(false);
     }
   };
 
@@ -3565,7 +3579,7 @@ const updateStatus = async (orderId, newStatus) => {
     posPayment, setPosPayment, posSelectedProduct, setPosSelectedProduct,
     posActiveSize, setPosActiveSize, posActiveAddOns, setPosActiveAddOns,
     posDiscountType, setPosDiscountType, posDiscountValue, setPosDiscountValue,
-    posDiscountAmt, posGrandTotal, posSubtotal,
+    posDiscountAmt, posGrandTotal, posSubtotal, posSubmitting,
     posCheckoutModal, setPosCheckoutModal, posCashTendered, setPosCashTendered,
     posDeliveryAddress, setPosDeliveryAddress, posCustomerPhone, setPosCustomerPhone,
     posDeliveryFee, setPosDeliveryFee, posDeliveryFeeNum, posScheduledTime, setPosScheduledTime,
