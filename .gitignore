@@ -1,4 +1,11 @@
 ############################
+# Semivra POS — Operations Artifacts
+############################
+backups/
+*.tar.gz
+/var/log/
+
+############################
 # OS Files
 ############################
 .DS_Store
@@ -127,3 +134,5 @@ DerivedData/
 .terraform/
 *.tfstate
 *.tfstate.*
+# Claude Code local worktrees/state
+.claude/
