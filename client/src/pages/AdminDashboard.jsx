@@ -2908,12 +2908,15 @@ const updateStatus = async (orderId, newStatus) => {
   const printKitchenTicket = (order) => {
     const win = window.open('', '_blank', 'width=320,height=600');
     if (!win) return alert('Pop-up blocked — allow pop-ups for this site.');
+    // Escape all dynamic values — customerName / orderNotes / item names can be
+    // customer-supplied (QR menu) and are written into raw HTML below.
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const items = (order.items||[]).map(item => `
       <div class="item">
-        <span class="qty">${item.quantity}×</span>
-        <span class="name">${item.name}</span>
-        ${item.isCombo ? (item.comboItems||[]).map(c=>`<div class="addon">• ${c.quantity>1?c.quantity+'× ':''}${c.name}${c.sizeName?` (${c.sizeName})`:''}</div>`).join('') : ''}
-        ${(item.selectedAddOns||[]).map(a=>`<div class="addon">+ ${a.name}</div>`).join('')}
+        <span class="qty">${esc(item.quantity)}×</span>
+        <span class="name">${esc(item.name)}</span>
+        ${item.isCombo ? (item.comboItems||[]).map(c=>`<div class="addon">• ${c.quantity>1?esc(c.quantity)+'× ':''}${esc(c.name)}${c.sizeName?` (${esc(c.sizeName)})`:''}</div>`).join('') : ''}
+        ${(item.selectedAddOns||[]).map(a=>`<div class="addon">+ ${esc(a.name)}</div>`).join('')}
       </div>`).join('');
     win.document.write(`<!DOCTYPE html><html><head><style>
       body { font-family:monospace; width:72mm; font-size:14px; }
@@ -2928,12 +2931,12 @@ const updateStatus = async (orderId, newStatus) => {
       @media print { @page { size:80mm auto; margin:3mm; } }
     </style></head><body>
       <div class="header">
-        <div class="order-num">${order.orderNumber}</div>
-        <div class="tbl">${order.table||'Takeout'} · ${order.customerName||'Guest'}</div>
+        <div class="order-num">${esc(order.orderNumber)}</div>
+        <div class="tbl">${esc(order.table||'Takeout')} · ${esc(order.customerName||'Guest')}</div>
         <div style="font-size:11px">${new Date(order.createdAt||Date.now()).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'})}</div>
       </div>
       ${items}
-      ${order.orderNotes ? `<div class="notes">📝 ${order.orderNotes}</div>` : ''}
+      ${order.orderNotes ? `<div class="notes">📝 ${esc(order.orderNotes)}</div>` : ''}
     </body></html>`);
     win.document.close();
     setTimeout(() => { win.print(); win.close(); }, 300);
