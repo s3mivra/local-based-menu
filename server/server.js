@@ -2701,6 +2701,7 @@ app.post('/api/journal', verifyToken, requireSuperAdmin, async (req, res) => {
       reference, description, lines, totalDebit, totalCredit
     });
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger
     res.json({ success: true, entry: newEntry });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });
@@ -2919,6 +2920,7 @@ app.post('/api/finance/ap-payment', verifyToken, requireSuperAdmin, async (req, 
       details: { amount: amt, payFromAccount: srcCode, vendorName, recordedBy: req.user?.name }
     });
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger
     res.json({ success: true, journalEntry: je });
   } catch (err) {
     log.error({ err }, 'POST /api/finance/ap-payment failed');
@@ -3379,6 +3381,7 @@ app.post('/api/shifts/end', verifyToken, async (req, res) => {
       });
     }
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger (variance entry)
     res.json({ success: true, shift });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });
@@ -3434,6 +3437,7 @@ app.post('/api/bank-deposits', verifyToken, async (req, res) => {
       isDrawerReconciled: isReconciled,
     });
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger (bank deposit)
     res.json({ success: true, deposit, shift, drawerBalanceAfter, isReconciled });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });
@@ -4436,6 +4440,7 @@ app.post('/api/revolving-funds', verifyToken, requireSuperAdmin, async (req, res
       journalRef: je._id,
     });
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger (fund opened)
     res.json({ success: true, fund });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });
@@ -4481,6 +4486,7 @@ app.post('/api/revolving-funds/:id/disburse', verifyToken, async (req, res) => {
       journalRef: je._id,
     });
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger (fund disbursement)
     res.json({ success: true, fund, tx });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });
@@ -4528,6 +4534,7 @@ app.post('/api/revolving-funds/:id/replenish', verifyToken, requireSuperAdmin, a
       journalRef: je._id,
     });
 
+    emitToMgr('erpUpdated'); // auto-refresh the general ledger (fund replenishment)
     res.json({ success: true, fund, tx });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });
