@@ -381,7 +381,7 @@ export default function AdminDashboard() {
   const [rfTxPage, setRfTxPage] = useState(1);
   const [rfTxPages, setRfTxPages] = useState(1);
   const [rfNewModal, setRfNewModal] = useState(false);
-  const [rfNewForm, setRfNewForm] = useState({ name: '', initialAmount: '', description: '' });
+  const [rfNewForm, setRfNewForm] = useState({ name: '', initialAmount: '', description: '', sourceAccount: '1000' });
   const [rfNewSubmitting, setRfNewSubmitting] = useState(false);
   const [rfDisbModal, setRfDisbModal] = useState(false);
   const [rfDisbForm, setRfDisbForm] = useState({ amount: '', description: '', categoryCode: '6090' });
@@ -1245,12 +1245,12 @@ const updateStatus = async (orderId, newStatus) => {
       const res = await apiFetch('/api/revolving-funds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: rfNewForm.name.trim(), initialAmount: amt, description: rfNewForm.description }),
+        body: JSON.stringify({ name: rfNewForm.name.trim(), initialAmount: amt, description: rfNewForm.description, sourceAccount: rfNewForm.sourceAccount }),
       });
       const data = await res.json();
       if (!data.success) return alert(data.error || 'Failed to create fund.');
       setRfNewModal(false);
-      setRfNewForm({ name: '', initialAmount: '', description: '' });
+      setRfNewForm({ name: '', initialAmount: '', description: '', sourceAccount: '1000' });
       await fetchRfFunds();
     } catch (err) { alert('Network error.'); }
     finally { setRfNewSubmitting(false); }
@@ -3993,7 +3993,20 @@ const updateStatus = async (orderId, newStatus) => {
                 <input type="number" min="0" step="1" placeholder="e.g. 5000" value={rfNewForm.initialAmount}
                   onChange={e => setRfNewForm({...rfNewForm, initialAmount: e.target.value})}
                   className="w-full bg-page-bg border border-white/10 rounded-xl px-3 py-3 text-white text-xl font-black tabular-nums outline-none focus:border-brand/60"/>
-                <p className="text-white/30 text-[10px] mt-1">This is the fixed float amount. Cash on Hand will be reduced by this amount in the journal.</p>
+                <p className="text-white/30 text-[10px] mt-1">This is the fixed float amount. The source account below will be reduced by this amount in the journal.</p>
+              </div>
+              <div>
+                <label className="text-[10px] text-white/40 font-bold uppercase block mb-1">Paid From *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[['1000','Cash on Hand'],['1010','Cash in Bank']].map(([code,label]) => (
+                    <button key={code} type="button"
+                      onClick={() => setRfNewForm({...rfNewForm, sourceAccount: code})}
+                      className={`flex items-center justify-center gap-2 px-3 py-3 rounded-xl border font-bold text-sm transition ${rfNewForm.sourceAccount === code ? 'border-brand bg-brand/20 text-brand' : 'border-white/10 bg-page-bg text-white/50 hover:border-white/30'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-white/30 text-[10px] mt-1">Where the float comes from — this account is credited (reduced) in the opening journal entry.</p>
               </div>
               <div>
                 <label className="text-[10px] text-white/40 font-bold uppercase block mb-1">Purpose / Notes</label>

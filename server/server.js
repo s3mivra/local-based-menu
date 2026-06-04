@@ -144,6 +144,21 @@ const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // bcrypt work factor — 12 rounds (OWASP-recommended minimum for 2025+).
 const BCRYPT_ROUNDS = 12;
 
+// Mongo filter for cash that has physically entered the drawer during a shift.
+// Cash is tendered at the Preparing transition (amountTendered), so the drawer
+// holds cash from: every Completed cash sale, PLUS any in-progress (Preparing/Ready)
+// cash order that already has amountTendered recorded. Pending/Cancelled/Voided/
+// Parked are excluded (no cash collected, or cash reversed).
+const shiftCashFilter = (cashierName, shiftStart) => ({
+  cashier: cashierName,
+  paymentMethod: 'Cash',
+  createdAt: { $gte: shiftStart },
+  $or: [
+    { status: 'Completed' },
+    { status: { $in: ['Preparing', 'Ready'] }, amountTendered: { $gt: 0 } },
+  ],
+});
+
 // ── DUAL-TOKEN AUTH CONFIG ───────────────────────────────────────────────────
 // Access token: short-lived (15m), sent as a Bearer header, held in client memory.
 // Refresh token: opaque random secret, long-lived (30d), httpOnly+Secure+SameSite
@@ -2350,15 +2365,38 @@ app.post('/api/inventory/:id/batches', verifyToken, requireSuperAdmin, async (re
     const item = await Inventory.findById(req.params.id);
     if (!item) return res.status(404).json({ success: false, error: 'Item not found' });
     const batchRef = await mkSeqRef('INV-BATCH');
+    const unitCost = item.unitCost || 0;
     item.expiryBatches = addBatch(item.expiryBatches || [], {
       qty: n,
       expiryDate: new Date(expiryDate),
       receivedAt: new Date(),
       reference: batchRef,
-      unitCost: item.unitCost || 0
+      unitCost
     });
     item.expiryDate = soonestExpiry(item.expiryBatches);
+    // A manually added batch is real stock arriving — keep stockQty in sync with
+    // the batch total so they never drift, and book it like a found-stock adjustment.
+    item.stockQty = +(Number(item.stockQty || 0) + n);
     await item.save();
+
+    await StockCard.create({
+      inventoryId: item._id, itemName: item.itemName, type: 'Adjustment',
+      reference: batchRef, qtyChange: n, balanceAfter: item.stockQty, unitCost,
+      remarks: `Manual batch added (${reference || 'no ref'})`,
+    });
+
+    const value = +(n * unitCost).toFixed(2);
+    if (value > 0) {
+      await JournalEntry.create({
+        reference: batchRef, description: `Manual batch added: ${n}${item.unit} of ${item.itemName}`,
+        lines: [
+          { accountCode: '1500', accountName: 'Inventory Asset',            debit: value, credit: 0 },
+          { accountCode: '4200', accountName: 'Inventory Adjustment Gain',  debit: 0, credit: value },
+        ],
+        totalDebit: value, totalCredit: value,
+      });
+    }
+
     emitToMgr('erpUpdated');
     res.json({ success: true, item });
   } catch (err) {
@@ -2375,9 +2413,34 @@ app.delete('/api/inventory/:id/batches/:batchIdx', verifyToken, requireSuperAdmi
     if (Number.isNaN(idx) || idx < 0 || idx >= (item.expiryBatches || []).length) {
       return res.status(400).json({ success: false, error: 'Invalid batch index.' });
     }
-    item.expiryBatches.splice(idx, 1);
+    const [removed] = item.expiryBatches.splice(idx, 1);
+    const removedQty = Number(removed?.qty || 0);
+    const unitCost   = Number(removed?.unitCost || item.unitCost || 0);
     item.expiryDate = soonestExpiry(item.expiryBatches);
+    // Removing a batch means that stock is physically gone — decrement stockQty and
+    // book it as a variance/write-off so the ledger and stock card stay truthful.
+    item.stockQty = +Math.max(0, Number(item.stockQty || 0) - removedQty).toFixed(4);
     await item.save();
+
+    const delRef = await mkSeqRef('INV-BATCHDEL');
+    await StockCard.create({
+      inventoryId: item._id, itemName: item.itemName, type: 'Adjustment',
+      reference: delRef, qtyChange: -removedQty, balanceAfter: item.stockQty, unitCost,
+      remarks: 'Manual batch removed (physically depleted)',
+    });
+
+    const value = +(removedQty * unitCost).toFixed(2);
+    if (value > 0) {
+      await JournalEntry.create({
+        reference: delRef, description: `Manual batch removed: ${removedQty}${item.unit} of ${item.itemName}`,
+        lines: [
+          { accountCode: '5100', accountName: 'Spoilage, Variance & Waste Expense', debit: value, credit: 0 },
+          { accountCode: '1500', accountName: 'Inventory Asset',                     debit: 0, credit: value },
+        ],
+        totalDebit: value, totalCredit: value,
+      });
+    }
+
     emitToMgr('erpUpdated');
     res.json({ success: true, item });
   } catch (err) {
@@ -3264,13 +3327,8 @@ app.post('/api/shifts/end', verifyToken, async (req, res) => {
     const shift = await Shift.findOne({ cashierId: String(req.user._id), status: 'Open' });
     if (!shift) return res.status(404).json({ success: false, error: 'No open shift found.' });
 
-    // Cash sales only (GCash/Card stay with the POS partner, not the register)
-    const cashOrders = await Order.find({
-      cashier:       req.user.name,
-      status:        'Completed',
-      paymentMethod: 'Cash',
-      createdAt:     { $gte: shift.shiftStart }
-    });
+    // Cash sales only (GCash/Card stay with the POS partner, not the register).
+    const cashOrders = await Order.find(shiftCashFilter(req.user.name, shift.shiftStart));
     const salesTotal   = cashOrders.reduce((sum, o) => sum + o.total, 0);
     const expectedCash = shift.startingCash + salesTotal;
     const actual       = parseFloat(actualCash) || 0;
@@ -3595,10 +3653,7 @@ app.get('/api/shifts', verifyToken, requireSuperAdmin, async (req, res) => {
     // Compute live cash sales so the cashier sees their running total in history.
     for (const s of shifts) {
       if (s.status === 'Open') {
-        const cashOrders = await Order.find({
-          cashier: s.cashierName, status: 'Completed', paymentMethod: 'Cash',
-          createdAt: { $gte: s.shiftStart }
-        }, { total: 1 }).lean();
+        const cashOrders = await Order.find(shiftCashFilter(s.cashierName, s.shiftStart), { total: 1 }).lean();
         s.salesTotal = cashOrders.reduce((sum, o) => sum + (o.total || 0), 0);
         s.expectedCash = (s.startingCash || 0) + s.salesTotal;
         s.isLive = true; // flag for the UI
@@ -4324,25 +4379,31 @@ app.get('/api/revolving-funds', verifyToken, requireSuperAdmin, async (req, res)
 // POST create a new fund (superadmin only)
 app.post('/api/revolving-funds', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
-    const { name, initialAmount, description } = req.body;
+    const { name, initialAmount, description, sourceAccount } = req.body;
     if (!name || !initialAmount || Number(initialAmount) <= 0)
       return res.status(400).json({ success: false, error: 'Fund name and a positive initial amount are required.' });
 
+    // "Paid from" — the cash account the fund is seeded out of (not from thin air).
+    const validSources = { '1000': 'Cash on Hand', '1010': 'Cash in Bank' };
+    const srcCode = validSources[sourceAccount] ? sourceAccount : '1000';
+    const srcName = validSources[srcCode];
+    const amt = Number(initialAmount);
+
     const fund = await RevolvingFund.create({
-      name, initialAmount: Number(initialAmount),
-      currentBalance: Number(initialAmount),
+      name, initialAmount: amt,
+      currentBalance: amt,
       description: description || '',
       createdBy: req.user?.name,
     });
 
-    // Opening journal entry: DR 1050 Petty Cash / CR 1000 Cash on Hand
+    // Opening journal entry: DR 1050 Petty Cash / CR <chosen source account>
     const je = await JournalEntry.create({
-      date: new Date(), description: `Revolving Fund established: ${name}`,
+      date: new Date(), description: `Revolving Fund established: ${name} (from ${srcName})`,
       lines: [
-        { accountCode: '1050', accountName: 'Petty Cash / Revolving Fund', debit: Number(initialAmount), credit: 0 },
-        { accountCode: '1000', accountName: 'Cash on Hand',               debit: 0, credit: Number(initialAmount) },
+        { accountCode: '1050', accountName: 'Petty Cash / Revolving Fund', debit: amt, credit: 0 },
+        { accountCode: srcCode, accountName: srcName,                      debit: 0, credit: amt },
       ],
-      totalDebit: Number(initialAmount), totalCredit: Number(initialAmount),
+      totalDebit: amt, totalCredit: amt,
       reference: await mkSeqRef('RF-OPEN'),
     });
 
