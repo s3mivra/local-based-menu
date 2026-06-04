@@ -768,6 +768,14 @@ const ClockEntrySchema = new mongoose.Schema({
 }, { timestamps: true });
 const ClockEntry = mongoose.model('ClockEntry', ClockEntrySchema);
 
+// The owner (superadmin) is excluded from staff-facing reports — hours, shift
+// history, cashier variance — since they're not a tracked employee/cashier.
+// Returns their user _id strings for use in a $nin filter.
+const ownerUserIds = async () => {
+  const owners = await User.find({ role: 'superadmin' }, { _id: 1 }).lean();
+  return owners.map(o => String(o._id));
+};
+
 // --- CHART OF ACCOUNTS ---
 const AccountSchema = new mongoose.Schema({
   code:          { type: String, unique: true },
@@ -3650,7 +3658,8 @@ app.patch('/api/users/me/password', verifyToken, async (req, res) => {
 app.get('/api/shifts', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
     const { page = 1, limit: lim = 20, cashier } = req.query;
-    const filter = cashier ? { cashierName: { $regex: cashier, $options: 'i' } } : {};
+    const filter = { cashierId: { $nin: await ownerUserIds() } }; // hide the owner's shifts
+    if (cashier) filter.cashierName = { $regex: cashier, $options: 'i' };
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, parseInt(lim) || 20);
     const [shifts, total] = await Promise.all([
@@ -4083,8 +4092,9 @@ app.get('/api/reports/menu-engineering', verifyToken, requireSuperAdmin, async (
 // ── REPORT: CASHIER VARIANCE TREND ───────────────────────────────────────────
 app.get('/api/reports/cashier-variance', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
+    const ownerIds = await ownerUserIds();
     const agg = await Shift.aggregate([
-      { $match: { status: { $in: ['Closed', 'Reconciled'] }, variance: { $ne: null } } },
+      { $match: { status: { $in: ['Closed', 'Reconciled'] }, variance: { $ne: null }, cashierId: { $nin: ownerIds } } },
       { $group: {
         _id: '$cashierName',
         shifts: { $sum: 1 },
@@ -4334,7 +4344,7 @@ app.get('/api/clock/status', verifyToken, async (req, res) => {
 app.get('/api/clock/entries', verifyToken, requireSuperAdmin, async (req, res) => {
   try {
     const { page = 1, limit: lim = 30, date, staff } = req.query;
-    const filter = {};
+    const filter = { staffId: { $nin: await ownerUserIds() } }; // hide the owner
     if (date) filter.date = date;
     if (staff) filter.staffName = { $regex: staff, $options: 'i' };
     const pageNum = Math.max(1, parseInt(page) || 1);
