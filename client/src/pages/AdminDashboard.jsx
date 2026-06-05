@@ -790,25 +790,35 @@ export default function AdminDashboard() {
     } catch (err) { console.error('Failed to fetch orders', err); }
   };
 
-  // Sends one queued offline order to the server. Returns true on success so
-  // the queue can drop it; false/throw keeps it for the next sync attempt.
-  const sendQueuedOrder = async (payload) => {
+  // Sends one queued offline order. The stable queue-entry id is the idempotency
+  // key, so replaying a half-sent order won't create a duplicate. Returns true on
+  // success so the queue drops it; false/throw keeps it for the next attempt.
+  const sendQueuedOrder = async (entry) => {
     try {
-      const res = await apiFetch('/api/orders', { method: 'POST', body: JSON.stringify(payload) });
+      const res = await apiFetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': entry.id },
+        body: JSON.stringify(entry.payload),
+      });
       const data = await res.json();
       return !!data.success;
     } catch { return false; }
   };
 
-  // Auto-flush the offline order queue whenever connectivity returns.
+  const flushOfflineQueue = () => {
+    if (!navigator.onLine || !isAuthenticated) return;
+    syncQueue(sendQueuedOrder).then(({ sent }) => { if (sent > 0) fetchOrders(); });
+  };
+
+  // Auto-flush the offline order queue: on reconnect/login, whenever the queue
+  // grows (e.g. a mid-request failure while still "online"), and on a periodic
+  // safety-net timer so nothing is ever stranded.
   useEffect(() => {
-    if (isOnline && isAuthenticated && queuedCount > 0) {
-      syncQueue(sendQueuedOrder).then(({ sent }) => {
-        if (sent > 0) { fetchOrders(); }
-      });
-    }
+    if (isOnline && isAuthenticated && queuedCount > 0) flushOfflineQueue();
+    const id = setInterval(() => { if (queuedCount > 0) flushOfflineQueue(); }, 30000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, isAuthenticated]);
+  }, [isOnline, isAuthenticated, queuedCount]);
 
   const injectOwnerCapital = async () => {
     const amountStr = prompt("Enter amount of capital to inject from Owner's Equity:");
@@ -1023,7 +1033,7 @@ export default function AdminDashboard() {
 
     // OFFLINE: if the device is offline, queue the order locally and move on.
     if (!navigator.onLine) {
-      queueOrder(payload);
+      queueOrder(payload, idemKey);
       refreshQueue();
       resetPosForm();
       alert('You are offline. Order saved and will sync automatically when the connection returns.');
@@ -1043,9 +1053,10 @@ export default function AdminDashboard() {
         alert(data.error);
       }
     } catch (e) {
-      // Network died mid-request — queue it rather than losing the sale.
+      // Network died mid-request — queue it under the SAME idempotency key so the
+      // replay can't duplicate an order the server may have already received.
       console.error(e);
-      queueOrder(payload);
+      queueOrder(payload, idemKey);
       refreshQueue();
       resetPosForm();
       alert('Connection lost. Order saved and will sync automatically when the connection returns.');

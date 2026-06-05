@@ -59,9 +59,13 @@ export function getQueuedOrders() {
   catch { return []; }
 }
 
-export function queueOrder(payload) {
+// Optional `id` lets the caller reuse a prior idempotency key (e.g. an online
+// submit that failed mid-request) so replay can't duplicate a half-sent order.
+export function queueOrder(payload, id) {
   const queue = getQueuedOrders();
-  queue.push({ id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, payload, queuedAt: Date.now() });
+  const entryId = id || `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  if (queue.some(e => e.id === entryId)) return queue.length; // already queued — don't double
+  queue.push({ id: entryId, payload, queuedAt: Date.now() });
   localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
   return queue.length;
 }
@@ -72,23 +76,32 @@ function setQueue(queue) {
 
 /**
  * Replay every queued order through the provided sender.
- * `sender(payload)` must return a truthy value on success (it is awaited).
- * Successfully-sent orders are removed; failures stay in the queue for the
- * next flush. Returns { sent, remaining }.
+ * `sender(entry)` receives the full queue entry ({ id, payload, queuedAt }) and
+ * must return a truthy value on success (it is awaited). The stable `entry.id`
+ * doubles as an idempotency key so a mid-flush network flap can't duplicate an
+ * order. Successfully-sent orders are removed; failures stay for the next flush.
+ * A simple in-flight guard prevents concurrent flushes racing the same queue.
  */
+let _flushing = false;
 export async function flushQueue(sender) {
-  let queue = getQueuedOrders();
-  if (queue.length === 0) return { sent: 0, remaining: 0 };
-  let sent = 0;
-  const survivors = [];
-  for (const entry of queue) {
-    try {
-      const ok = await sender(entry.payload);
-      if (ok) { sent++; } else { survivors.push(entry); }
-    } catch {
-      survivors.push(entry);
+  if (_flushing) return { sent: 0, remaining: getQueuedOrders().length };
+  _flushing = true;
+  try {
+    const queue = getQueuedOrders();
+    if (queue.length === 0) return { sent: 0, remaining: 0 };
+    let sent = 0;
+    const survivors = [];
+    for (const entry of queue) {
+      try {
+        const ok = await sender(entry);
+        if (ok) { sent++; } else { survivors.push(entry); }
+      } catch {
+        survivors.push(entry);
+      }
     }
+    setQueue(survivors);
+    return { sent, remaining: survivors.length };
+  } finally {
+    _flushing = false;
   }
-  setQueue(survivors);
-  return { sent, remaining: survivors.length };
 }
