@@ -4255,6 +4255,52 @@ app.get('/api/reports/sales-by-payment', verifyToken, requireSuperAdmin, async (
   } catch (err) { res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }
 });
 
+// ── REPORT: SALES SUMMARY BY CHANNEL (Cash / E-Wallet / Bank / Delivery) ──────
+// Per-order rows (client can roll up to per-day). Splits each order's payment(s)
+// into the four channels, keeping the per-method detail (GCash/Maya/Grab/...).
+const paymentChannel = (method) => {
+  if (!method || method === 'Cash') return 'cash';
+  if (method === 'Bank Transfer') return 'bank';
+  if (['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(method)) return 'delivery';
+  return 'ewallet'; // GCash, Maya, Maribank, E-Wallet, Other E-Wallet, etc.
+};
+app.get('/api/reports/sales-summary', verifyToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    const match = { status: 'Completed', isComplimentary: { $ne: true } };
+    if (start || end) {
+      match.createdAt = {};
+      if (start) match.createdAt.$gte = new Date(start);
+      if (end) { const d = new Date(end); d.setHours(23, 59, 59, 999); match.createdAt.$lte = d; }
+    }
+    const orders = await Order.find(match, { orderNumber: 1, total: 1, paymentMethod: 1, payments: 1, createdAt: 1 })
+      .sort({ createdAt: 1 }).lean();
+
+    const rows = orders.map(o => {
+      const ch = { cash: 0, ewallet: 0, bank: 0, delivery: 0 };
+      const methods = {};
+      const splits = (o.payments && o.payments.length)
+        ? o.payments
+        : [{ method: o.paymentMethod || 'Cash', amount: o.total || 0 }];
+      for (const p of splits) {
+        const amt = Number(p.amount) || 0;
+        const m = p.method || 'Cash';
+        ch[paymentChannel(m)] += amt;
+        methods[m] = (methods[m] || 0) + amt;
+      }
+      return { date: o.createdAt, orderNumber: o.orderNumber, ...ch, methods, total: Number(o.total) || 0 };
+    });
+
+    const totals = rows.reduce((t, r) => {
+      t.cash += r.cash; t.ewallet += r.ewallet; t.bank += r.bank; t.delivery += r.delivery; t.total += r.total;
+      for (const [m, a] of Object.entries(r.methods)) t.methods[m] = (t.methods[m] || 0) + a;
+      return t;
+    }, { cash: 0, ewallet: 0, bank: 0, delivery: 0, total: 0, methods: {} });
+
+    res.json({ success: true, rows, totals });
+  } catch (err) { res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }
+});
+
 // ── REFUND FLOW ───────────────────────────────────────────────────────────────
 app.post('/api/orders/:id/refund', verifyToken, requireSuperAdmin, async (req, res) => {
   const session = await mongoose.startSession();

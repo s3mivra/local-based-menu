@@ -204,6 +204,13 @@ export default function AdminDashboard() {
     start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10),
     end: new Date().toISOString().slice(0,10)
   });
+  // --- SUMMARY SALES (by channel: cash / e-wallet / bank / delivery) ---
+  const [salesSummary, setSalesSummary] = useState(null);
+  const [sssRange, setSssRange] = useState({
+    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10),
+    end: new Date().toISOString().slice(0,10)
+  });
+  const [sssGroup, setSssGroup] = useState('order'); // 'order' | 'day'
   // --- REFUND ---
   const [refundModal, setRefundModal] = useState(null);
   const [refundForm, setRefundForm] = useState({ reason: '', refundAmount: '' });
@@ -2965,6 +2972,56 @@ const updateStatus = async (orderId, newStatus) => {
     catch (err) { console.error('fetchSalesByPayment', err); }
   };
 
+  // ── Summary Sales (channel breakdown: cash / e-wallet / bank / delivery) ──────
+  const fetchSalesSummary = async () => {
+    try { const res = await apiFetch(`/api/reports/sales-summary?start=${sssRange.start}&end=${sssRange.end}`); const d = await res.json(); if (d.success) setSalesSummary(d); }
+    catch (err) { console.error('fetchSalesSummary', err); }
+  };
+  // Roll per-order rows up to per-day rows (client-side), merging channel + method detail.
+  const sssRows = useMemo(() => {
+    const rows = salesSummary?.rows || [];
+    if (sssGroup === 'order') return rows;
+    const byDay = {};
+    for (const r of rows) {
+      const day = new Date(r.date).toLocaleDateString('en-CA'); // YYYY-MM-DD
+      if (!byDay[day]) byDay[day] = { date: r.date, orderNumber: null, count: 0, cash: 0, ewallet: 0, bank: 0, delivery: 0, total: 0, methods: {} };
+      const t = byDay[day];
+      t.count++; t.cash += r.cash; t.ewallet += r.ewallet; t.bank += r.bank; t.delivery += r.delivery; t.total += r.total;
+      for (const [m, a] of Object.entries(r.methods || {})) t.methods[m] = (t.methods[m] || 0) + a;
+    }
+    return Object.values(byDay).sort((a, b) => new Date(a.date) - new Date(b.date));
+  }, [salesSummary, sssGroup]);
+
+  const exportSalesSummaryPDF = async () => {
+    if (!salesSummary) return alert('Load the Summary Sales report first.');
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
+    doc.setFontSize(16); doc.text(`${BIZ_NAME} — Sales Summary`, 14, 14);
+    doc.setFontSize(9); doc.text(`${sssRange.start} to ${sssRange.end}  ·  ${sssGroup === 'day' ? 'Per Day' : 'Per Order'}`, 14, 20);
+    const methodLine = (r, keys) => keys.map(k => `${k}: ${pdfMoney(r.methods?.[k] || 0)}`).filter(s => !/: 0\.00$/.test(s)).join('  ');
+    const EW = ['GCash','Maya','Maribank','E-Wallet','Other E-Wallet'];
+    const BK = ['Bank Transfer'];
+    const DL = ['Grab Delivery','Foodpanda','Manual Delivery'];
+    const head = sssGroup === 'day'
+      ? ['Date','Orders','Cash','E-Wallet','Bank','Delivery','Total']
+      : ['Date','Order #','Cash','E-Wallet','Bank','Delivery','Total'];
+    const body = sssRows.map(r => [
+      new Date(r.date).toLocaleDateString(),
+      sssGroup === 'day' ? String(r.count) : r.orderNumber,
+      pdfMoney(r.cash),
+      pdfMoney(r.ewallet) + (methodLine(r, EW) ? `\n${methodLine(r, EW)}` : ''),
+      pdfMoney(r.bank),
+      pdfMoney(r.delivery) + (methodLine(r, DL) ? `\n${methodLine(r, DL)}` : ''),
+      pdfMoney(r.total),
+    ]);
+    const t = salesSummary.totals || {};
+    autoTable(doc, {
+      startY: 24, head: [head], body,
+      foot: [[ 'TOTALS', '', pdfMoney(t.cash), pdfMoney(t.ewallet), pdfMoney(t.bank), pdfMoney(t.delivery), pdfMoney(t.total) ]],
+      styles: { fontSize: 8 }, headStyles: { fillColor: [111,135,77] }, footStyles: { fillColor: [61,74,42], textColor: 255 },
+    });
+    doc.save(`Sales-Summary_${sssRange.start}_to_${sssRange.end}.pdf`);
+  };
+
   // ── Refund ──────────────────────────────────────────────────────────────────
   const handleRefund = async () => {
     if (!refundModal || !refundForm.reason.trim()) return alert('Reason required.');
@@ -3791,6 +3848,8 @@ const updateStatus = async (orderId, newStatus) => {
     systemSettings, toggleQROrders,
     // ── Sales by Payment ─────────────────────────────────────────────────────
     salesByPayment, sbpRange, setSbpRange, fetchSalesByPayment,
+    // ── Summary Sales (channel breakdown) ────────────────────────────────────
+    salesSummary, sssRange, setSssRange, sssGroup, setSssGroup, sssRows, fetchSalesSummary, exportSalesSummaryPDF,
     // ── Refund ───────────────────────────────────────────────────────────────
     refundModal, setRefundModal, refundForm, setRefundForm, refundSubmitting, handleRefund,
     // ── Clock In/Out ─────────────────────────────────────────────────────────

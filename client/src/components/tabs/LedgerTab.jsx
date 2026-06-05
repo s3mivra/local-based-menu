@@ -80,6 +80,7 @@ export default function LedgerTab({ ctx }) {
     apData, fetchApData, apPayModal, setApPayModal, apPayForm, setApPayForm, apPaySubmitting, submitApPayment,
     profitByCategory, fetchProfitByCategory,
     salesByPayment, sbpRange, setSbpRange, fetchSalesByPayment,
+    salesSummary, sssRange, setSssRange, sssGroup, setSssGroup, sssRows, fetchSalesSummary, exportSalesSummaryPDF,
     menuEngineering, fetchMenuEngineering, cashierVariance, fetchCashierVariance, purchaseOrder, fetchPurchaseOrder,
     exportPnlPDF, exportBalanceSheetPDF, exportPurchaseOrderPDF,
   } = ctx;
@@ -88,6 +89,7 @@ export default function LedgerTab({ ctx }) {
   const arPage   = usePagination(arOutstanding?.orders, 10);
   const apPage   = usePagination(apData?.recent, 10);
   const sbpPage  = usePagination(salesByPayment?.breakdown, 10);
+  const sssPage  = usePagination(sssRows, 15);
   const pbcPage  = usePagination(profitByCategory?.categories, 10);
   const mePage   = usePagination(menuEngineering?.items, 10);
   const cvPage   = usePagination(cashierVariance?.cashiers, 10);
@@ -105,6 +107,7 @@ export default function LedgerTab({ ctx }) {
               ['ar',        'A/R Outstanding',  Truck],
               ['ap',        'A/P Payables',     CreditCard],
               ['payments',  'By Payment',       Banknote],
+              ['salessummary', 'Summary Sales', DollarSign],
               ['profitcat', 'Profit by Cat.',   BarChart2],
               ['menueng',   'Menu Engineering', TrendingUp],
               ['variance',  'Cashier Variance', Users],
@@ -122,6 +125,7 @@ export default function LedgerTab({ ctx }) {
                   if (id === 'ar') fetchArOutstanding();
                   if (id === 'ap') fetchApData();
                   if (id === 'payments') fetchSalesByPayment();
+                  if (id === 'salessummary') fetchSalesSummary();
                   if (id === 'profitcat') fetchProfitByCategory();
                   if (id === 'menueng') fetchMenuEngineering();
                   if (id === 'variance') fetchCashierVariance();
@@ -672,6 +676,88 @@ export default function LedgerTab({ ctx }) {
                     <Pager {...sbpPage} label="methods" />
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {/* ===== SUMMARY SALES (channel breakdown) ===== */}
+          {ledgerSubTab === 'salessummary' && (
+            <div className="space-y-4 animate-fade-in">
+              {/* Controls */}
+              <div className="flex flex-wrap gap-3 items-center">
+                <input type="date" value={sssRange.start} onChange={e => setSssRange(p => ({ ...p, start: e.target.value }))}
+                  className="bg-surface border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50" />
+                <span className="text-white/30 font-bold text-sm">→</span>
+                <input type="date" value={sssRange.end} onChange={e => setSssRange(p => ({ ...p, end: e.target.value }))}
+                  className="bg-surface border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50" />
+                <button onClick={fetchSalesSummary} className="px-5 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:bg-brand/90 transition">Load</button>
+                <div className="flex rounded-xl overflow-hidden border border-white/10">
+                  {[['order', 'Per Order'], ['day', 'Per Day']].map(([g, lbl]) => (
+                    <button key={g} onClick={() => setSssGroup(g)}
+                      className={`px-4 py-2 text-xs font-bold uppercase tracking-wider transition ${sssGroup === g ? 'bg-brand text-white' : 'bg-surface text-white/50 hover:text-white'}`}>{lbl}</button>
+                  ))}
+                </div>
+                {salesSummary && <button onClick={exportSalesSummaryPDF} className="ml-auto bg-white/5 text-white/70 hover:text-white hover:bg-white/10 px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-1.5"><Download size={13} /> PDF</button>}
+              </div>
+
+              {!salesSummary ? (
+                <p className="text-white/30 text-sm text-center p-6 font-bold">Pick a range and click Load.</p>
+              ) : sssRows.length === 0 ? (
+                <p className="text-white/30 text-sm text-center p-6 font-bold">No completed sales in this range.</p>
+              ) : (
+                <div className="bg-surface border border-white/8 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs min-w-[760px]">
+                      <thead className="text-white/25 text-[10px] font-black uppercase tracking-wider border-b border-white/5">
+                        <tr>
+                          <th className="px-4 py-3">Date</th>
+                          <th className="px-4 py-3">{sssGroup === 'day' ? 'Orders' : 'Order #'}</th>
+                          <th className="px-4 py-3 text-right">Cash</th>
+                          <th className="px-4 py-3 text-right">E-Wallet</th>
+                          <th className="px-4 py-3 text-right">Bank</th>
+                          <th className="px-4 py-3 text-right">Delivery</th>
+                          <th className="px-4 py-3 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sssPage.pageItems.map((r, i) => {
+                          const detail = (keys) => keys.map(k => r.methods?.[k] ? `${k} ₱${r.methods[k].toFixed(2)}` : null).filter(Boolean).join(' · ');
+                          const ew = detail(['GCash', 'Maya', 'Maribank', 'E-Wallet', 'Other E-Wallet']);
+                          const dl = detail(['Grab Delivery', 'Foodpanda', 'Manual Delivery']);
+                          return (
+                            <tr key={i} className={`border-b border-white/5 ${i % 2 ? 'bg-white/[0.015]' : ''}`}>
+                              <td className="px-4 py-2.5 text-white/70 whitespace-nowrap">{new Date(r.date).toLocaleDateString()}</td>
+                              <td className="px-4 py-2.5 font-bold text-white">{sssGroup === 'day' ? r.count : r.orderNumber}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums text-white/80">{r.cash ? `₱${r.cash.toFixed(2)}` : '—'}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums text-white/80">
+                                {r.ewallet ? `₱${r.ewallet.toFixed(2)}` : '—'}
+                                {ew && <div className="text-[9px] text-white/35 font-normal">{ew}</div>}
+                              </td>
+                              <td className="px-4 py-2.5 text-right tabular-nums text-white/80">{r.bank ? `₱${r.bank.toFixed(2)}` : '—'}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums text-white/80">
+                                {r.delivery ? `₱${r.delivery.toFixed(2)}` : '—'}
+                                {dl && <div className="text-[9px] text-white/35 font-normal">{dl}</div>}
+                              </td>
+                              <td className="px-4 py-2.5 text-right tabular-nums font-black text-brand">₱{r.total.toFixed(2)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-white/10 bg-brand/5 font-black text-white">
+                          <td className="px-4 py-3 uppercase text-[10px] tracking-wider">Totals</td>
+                          <td className="px-4 py-3"></td>
+                          <td className="px-4 py-3 text-right tabular-nums">₱{(salesSummary.totals?.cash || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">₱{(salesSummary.totals?.ewallet || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">₱{(salesSummary.totals?.bank || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">₱{(salesSummary.totals?.delivery || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums text-brand">₱{(salesSummary.totals?.total || 0).toFixed(2)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <div className="px-3"><Pager {...sssPage} label="rows" /></div>
+                </div>
               )}
             </div>
           )}
