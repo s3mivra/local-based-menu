@@ -3534,8 +3534,6 @@ app.post('/api/auth/refresh', requireTrustedOrigin, async (req, res) => {
     const session = await RefreshSession.findOne({ tokenHash: hashToken(raw) });
     if (!session || session.revoked || session.expiresAt < new Date()) {
       res.clearCookie(REFRESH_COOKIE, { ...refreshCookieOptions(), maxAge: undefined });
-      // Reuse of an already-rotated (revoked) token can signal theft — revoke the whole chain.
-      if (session?.revoked) await RefreshSession.updateMany({ userId: session.userId }, { revoked: true });
       return res.status(401).json({ success: false, error: 'Session expired. Please log in again.' });
     }
 
@@ -3545,12 +3543,16 @@ app.post('/api/auth/refresh', requireTrustedOrigin, async (req, res) => {
       return res.status(401).json({ success: false, error: 'User no longer exists.' });
     }
 
-    // Rotate: revoke old, issue new (issueSession sets the new cookie).
-    const newToken = await issueSession(res, user, { userAgent: req.headers['user-agent'] });
-    session.revoked = true;
-    session.replacedBy = hashToken(req.cookies[REFRESH_COOKIE]); // best-effort audit
+    // NON-ROTATING refresh: validate the existing session and mint a fresh access
+    // token, keeping the SAME refresh cookie. (We deliberately don't rotate on every
+    // refresh — rapid reloads fire concurrent refreshes and rotation would treat the
+    // in-flight duplicate as token reuse and log the user out.) Slide the expiry so
+    // active sessions stay alive; logout/password/role changes still revoke server-side.
+    session.expiresAt = new Date(Date.now() + REFRESH_TTL_MS);
     await session.save();
+    res.cookie(REFRESH_COOKIE, raw, refreshCookieOptions());
 
+    const newToken = signAccessToken(user);
     res.json({ success: true, token: newToken, user: { _id: user._id, name: user.name, userCode: user.userCode, role: user.role } });
   } catch (err) {
     res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message });

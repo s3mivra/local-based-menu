@@ -11,6 +11,13 @@
 
 let accessToken = null;
 
+// One-time cleanup of legacy localStorage tokens from the pre-migration build.
+// The access token now lives only in memory; these keys are never written anymore.
+try {
+  localStorage.removeItem('semivra_token');
+  localStorage.removeItem('kasa_token');
+} catch { /* SSR / private mode — ignore */ }
+
 export const getToken = () => accessToken;
 export const setToken = (t) => { accessToken = t || null; };
 export const clearToken = () => { accessToken = null; };
