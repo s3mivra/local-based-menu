@@ -428,7 +428,9 @@ mongoose.connect(process.env.MONGO_URI, {
       req.user = decoded; // Attach user info to the request
       next();
     } catch (error) {
-      return res.status(403).json({ success: false, message: 'Forbidden: Invalid or expired token' });
+      // 401 (not 403) for an expired/invalid token so the client silently refreshes
+      // and retries — otherwise an idle session shows "Forbidden" until manual reload.
+      return res.status(401).json({ success: false, message: 'Unauthorized: Invalid or expired token' });
     }
   };
 
@@ -461,7 +463,8 @@ mongoose.connect(process.env.MONGO_URI, {
         req.user = jwt.verify(token, process.env.JWT_SECRET);
         return next();
       } catch {
-        return res.status(403).json({ success: false, error: 'Invalid or expired token.' });
+        // 401 so the client refreshes + retries instead of failing an expired session.
+        return res.status(401).json({ success: false, error: 'Invalid or expired token.' });
       }
     }
     const { sessionId, table } = req.body;
