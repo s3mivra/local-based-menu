@@ -170,7 +170,7 @@ export default function AnalyticsTab({ ctx }) {
               <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
                 <h3 className="text-white font-bold">Daily Revenue Trend</h3>
                 <button onClick={exportAnalyticsToPDF} className="text-[10px] bg-brand/10 border border-brand/30 text-brand px-3 py-1.5 rounded hover:bg-brand hover:text-page-bg transition font-bold uppercase tracking-wider">
-                  Export Trend
+                  Export Analytics PDF
                 </button>
               </div>
               <div className="overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 flex-1 space-y-2">
@@ -201,7 +201,7 @@ export default function AnalyticsTab({ ctx }) {
                 <div className="space-y-4">
                   {mus.length === 0 ? (
                     <p className="text-gray-600 text-xs">No sales data yet — complete orders to populate.</p>
-                  ) : mus.map((item, idx) => (
+                  ) : mus.map((item, idx) => { const d = effectiveDisplay(item); return (
                     <div key={idx} className="flex flex-col border-b border-accent/10 pb-3 last:border-0 last:pb-0">
                       <div className="flex justify-between items-center mb-2">
                         <span className="text-gray-200 font-bold text-sm truncate pr-2">{item.name}</span>
@@ -211,7 +211,7 @@ export default function AnalyticsTab({ ctx }) {
                         </span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                        {[['Daily Burn', `${item.dailyAvg?.toFixed(2)} ${item.unit}`], ['Lasts', item.daysLeft === Infinity || !isFinite(item.daysLeft) ? '∞' : `${item.daysLeft}d`], ['Buy 1wk', `${item.weeklyNeed} ${item.unit}`], ['Buy 1mo', `${item.monthlyNeed} ${item.unit}`]].map(([lbl, val]) => (
+                        {[['Daily Burn', `${((item.dailyAvg||0)/d.mult).toFixed(2)} ${d.displayUnit}`], ['Lasts', item.daysLeft === Infinity || !isFinite(item.daysLeft) ? '∞' : `${item.daysLeft}d`], ['Buy 1wk', `${((item.weeklyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`], ['Buy 1mo', `${((item.monthlyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`]].map(([lbl, val]) => (
                           <div key={lbl} className="bg-page-bg p-2 rounded flex flex-col items-center border border-gray-800/50">
                             <p className="text-[8px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">{lbl}</p>
                             <p className="text-xs font-black text-white">{val}</p>
@@ -219,7 +219,7 @@ export default function AnalyticsTab({ ctx }) {
                         ))}
                       </div>
                     </div>
-                  ))}
+                  ); })}
                 </div>
               </div>
 
@@ -234,7 +234,7 @@ export default function AnalyticsTab({ ctx }) {
                       <div key={item._id} className="flex justify-between items-center text-sm">
                         <div className="flex flex-col min-w-0 pr-2">
                           <span className="text-gray-300 truncate font-semibold">{item.itemName}</span>
-                          <span className="text-gray-600 text-[10px]">{Number(item.stockQty).toFixed(2)} {item.unit} left</span>
+                          <span className="text-gray-600 text-[10px]">{(Number(item.stockQty)/effectiveDisplay(item).mult).toFixed(2)} {effectiveDisplay(item).displayUnit} left</span>
                         </div>
                         <span className={`font-black text-xs whitespace-nowrap px-2 py-1 rounded ${item.daysOfSupply <= 3 ? 'bg-red-900/40 text-red-400 animate-pulse' : item.daysOfSupply <= 7 ? 'bg-yellow-900/30 text-yellow-400' : 'bg-orange-900/20 text-orange-400'}`}>
                           {item.daysOfSupply <= 0 ? 'OUT' : `~${Math.floor(item.daysOfSupply)}d left`}
@@ -254,7 +254,7 @@ export default function AnalyticsTab({ ctx }) {
                       <div key={item._id} className="flex justify-between items-center text-sm">
                         <div className="flex flex-col min-w-0 pr-2">
                           <span className="text-gray-300 truncate font-semibold">{item.itemName}</span>
-                          <span className="text-gray-600 text-[10px]">{Number(item.stockQty).toFixed(2)} {item.unit}</span>
+                          <span className="text-gray-600 text-[10px]">{(Number(item.stockQty)/effectiveDisplay(item).mult).toFixed(2)} {effectiveDisplay(item).displayUnit}</span>
                         </div>
                         <div className="flex flex-col items-end gap-0.5">
                           <span className="text-gray-400 font-bold text-xs">{isFinite(item.daysOfSupply) ? `~${Math.floor(item.daysOfSupply)}d supply` : '∞ supply'}</span>

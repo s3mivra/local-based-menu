@@ -81,7 +81,7 @@ export default function LedgerTab({ ctx }) {
     profitByCategory, fetchProfitByCategory,
     salesByPayment, sbpRange, setSbpRange, fetchSalesByPayment,
     menuEngineering, fetchMenuEngineering, cashierVariance, fetchCashierVariance, purchaseOrder, fetchPurchaseOrder,
-    exportPnlPDF, exportPurchaseOrderPDF,
+    exportPnlPDF, exportBalanceSheetPDF, exportPurchaseOrderPDF,
   } = ctx;
 
   // ── Report-table pagination (client-side, 10 rows/page) ──
@@ -357,7 +357,10 @@ export default function LedgerTab({ ctx }) {
                   <h3 className="text-2xl font-black text-white">Balance Sheet</h3>
                   <p className="text-white/40 text-xs font-bold uppercase tracking-widest mt-1">Snapshot as of {bsData ? new Date(bsData.asOf).toLocaleDateString() : 'today'}</p>
                 </div>
-                <button onClick={fetchBalanceSheet} className="bg-brand text-white px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-brand/90 transition min-h-[44px] flex items-center gap-1.5"><RefreshCw size={13}/> Refresh</button>
+                <div className="flex gap-2">
+                  {bsData && <button onClick={exportBalanceSheetPDF} className="bg-white/5 text-white/70 hover:text-white hover:bg-white/10 px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition min-h-[44px] flex items-center gap-1.5"><Download size={13}/> PDF</button>}
+                  <button onClick={fetchBalanceSheet} className="bg-brand text-white px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-brand/90 transition min-h-[44px] flex items-center gap-1.5"><RefreshCw size={13}/> Refresh</button>
+                </div>
               </div>
 
               {!bsData ? (
