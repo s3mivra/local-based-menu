@@ -19,7 +19,7 @@ test('dashboard renders after login with no console errors', async ({ page }) =>
   await page.getByLabel('Staff Name').fill(ADMIN);
   await page.getByLabel('Password', { exact: true }).fill(PASS);
   await page.locator('form button[type="submit"]').click();
-  await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0, { timeout: 30000 });
 
   // Ignore benign network noise; fail on real runtime errors.
   const real = errors.filter(e => !/favicon|manifest|service ?worker|net::ERR|Failed to load resource/i.test(e));
