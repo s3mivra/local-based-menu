@@ -2997,22 +2997,25 @@ const updateStatus = async (orderId, newStatus) => {
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
     doc.setFontSize(16); doc.text(`${BIZ_NAME} — Sales Summary`, 14, 14);
     doc.setFontSize(9); doc.text(`${sssRange.start} to ${sssRange.end}  ·  ${sssGroup === 'day' ? 'Per Day' : 'Per Order'}`, 14, 20);
-    // Dynamic per-method columns — only methods that occurred in the range.
+    // Fixed columns (match the on-screen Summary Sales table).
     const tm = salesSummary.totals?.methods || {};
-    const ALL = ['GCash','Maya','Maribank','E-Wallet','Other E-Wallet','Bank Transfer','Grab Delivery','Foodpanda','Manual Delivery'];
-    const cols = ALL.filter(m => (tm[m] || 0) !== 0);
-    const head = ['Date', sssGroup === 'day' ? 'Orders' : 'Order #', 'Cash', ...cols, 'Total'];
+    const COLS = [
+      ['Cash', ['Cash']], ['Bank', ['Bank Transfer']], ['GCash', ['GCash']], ['Maya', ['Maya']],
+      ['Maribank/SeaBank', ['Maribank']], ['Other E-Wallet', ['E-Wallet', 'Other E-Wallet']],
+      ['GrabFood', ['Grab Delivery']], ['Foodpanda', ['Foodpanda']], ['Manual/Direct', ['Manual Delivery']],
+    ];
+    const cv = (r, ms) => ms.reduce((s, m) => s + (r?.methods?.[m] || 0), 0);
+    const head = ['Date', sssGroup === 'day' ? 'Orders' : 'Order ID', ...COLS.map(c => c[0]), 'Total'];
     const body = sssRows.map(r => [
       new Date(r.date).toLocaleDateString(),
       sssGroup === 'day' ? String(r.count) : r.orderNumber,
-      pdfMoney(r.cash),
-      ...cols.map(m => pdfMoney(r.methods?.[m] || 0)),
+      ...COLS.map(([, ms]) => pdfMoney(cv(r, ms))),
       pdfMoney(r.total),
     ]);
     const t = salesSummary.totals || {};
     autoTable(doc, {
       startY: 24, head: [head], body,
-      foot: [[ 'TOTALS', '', pdfMoney(t.cash), ...cols.map(m => pdfMoney(tm[m] || 0)), pdfMoney(t.total) ]],
+      foot: [[ 'TOTALS', '', ...COLS.map(([, ms]) => pdfMoney(ms.reduce((s, m) => s + (tm[m] || 0), 0))), pdfMoney(t.total) ]],
       styles: { fontSize: 7 }, headStyles: { fillColor: [111,135,77] }, footStyles: { fillColor: [61,74,42], textColor: 255 },
     });
     doc.save(`Sales-Summary_${sssRange.start}_to_${sssRange.end}.pdf`);

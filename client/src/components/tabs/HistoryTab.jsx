@@ -83,19 +83,20 @@ export default function HistoryTab({ ctx }) {
   } = ctx;
 
   const sssPage = usePagination(sssRows, 15);
-  // Build the per-method columns that actually occurred in the range, grouped by channel.
-  const SSS_GROUPS = [
-    ['E-Wallet', ['GCash', 'Maya', 'Maribank', 'E-Wallet', 'Other E-Wallet']],
-    ['Bank',     ['Bank Transfer']],
-    ['Delivery', ['Grab Delivery', 'Foodpanda', 'Manual Delivery']],
+  // Fixed Summary-Sales columns (always shown), each summing one or more raw methods.
+  const SSS_COLS = [
+    ['Cash',             ['Cash']],
+    ['Bank',             ['Bank Transfer']],
+    ['GCash',            ['GCash']],
+    ['Maya',             ['Maya']],
+    ['Maribank/SeaBank', ['Maribank']],
+    ['Other E-Wallet',   ['E-Wallet', 'Other E-Wallet']],
+    ['GrabFood',         ['Grab Delivery']],
+    ['Foodpanda',        ['Foodpanda']],
+    ['Manual/Direct',    ['Manual Delivery']],
   ];
-  const sssGroups = (() => {
-    const tm = salesSummary?.totals?.methods || {};
-    return SSS_GROUPS
-      .map(([label, methods]) => ({ label, methods: methods.filter(m => (tm[m] || 0) !== 0) }))
-      .filter(g => g.methods.length);
-  })();
-  const sssFlatMethods = sssGroups.flatMap(g => g.methods);
+  const sssColVal = (row, methods) => methods.reduce((s, m) => s + (row?.methods?.[m] || 0), 0);
+  const sssColTotal = (methods) => methods.reduce((s, m) => s + (salesSummary?.totals?.methods?.[m] || 0), 0);
 
   // todayCompleted comes from today's live orders
   const todayCompleted     = orders.filter(o => o.status === 'Completed');
@@ -149,32 +150,25 @@ export default function HistoryTab({ ctx }) {
               ) : (
                 <div className="bg-surface border border-white/8 rounded-xl overflow-hidden">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
                       <thead className="text-white/25 text-[10px] font-black uppercase tracking-wider border-b border-white/5">
                         <tr>
-                          <th className="px-3 py-2 align-bottom" rowSpan={2}>Date</th>
-                          <th className="px-3 py-2 align-bottom" rowSpan={2}>{sssGroup === 'day' ? 'Orders' : 'Order #'}</th>
-                          <th className="px-3 py-2 text-right align-bottom" rowSpan={2}>Cash</th>
-                          {sssGroups.map(g => (
-                            <th key={g.label} className="px-3 py-1.5 text-center border-l border-white/5" colSpan={g.methods.length}>{g.label}</th>
+                          <th className="px-3 py-2.5">Date</th>
+                          <th className="px-3 py-2.5">{sssGroup === 'day' ? 'Orders' : 'Order ID'}</th>
+                          {SSS_COLS.map(([label]) => (
+                            <th key={label} className="px-3 py-2.5 text-right">{label}</th>
                           ))}
-                          <th className="px-3 py-2 text-right align-bottom border-l border-white/5" rowSpan={2}>Total</th>
-                        </tr>
-                        <tr>
-                          {sssFlatMethods.map((m, idx) => (
-                            <th key={m} className={`px-3 py-1.5 text-right font-bold normal-case ${idx === 0 || sssGroups.some(g => g.methods[0] === m) ? 'border-l border-white/5' : ''}`}>{m}</th>
-                          ))}
+                          <th className="px-3 py-2.5 text-right">Total</th>
                         </tr>
                       </thead>
                       <tbody>
                         {sssPage.pageItems.map((r, i) => (
                           <tr key={i} className={`border-b border-white/5 ${i % 2 ? 'bg-white/[0.015]' : ''}`}>
-                            <td className="px-3 py-2.5 text-white/70 whitespace-nowrap">{new Date(r.date).toLocaleDateString()}</td>
+                            <td className="px-3 py-2.5 text-white/70">{new Date(r.date).toLocaleDateString()}</td>
                             <td className="px-3 py-2.5 font-bold text-white">{sssGroup === 'day' ? r.count : r.orderNumber}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-white/80">{r.cash ? `₱${r.cash.toFixed(2)}` : '—'}</td>
-                            {sssFlatMethods.map(m => (
-                              <td key={m} className="px-3 py-2.5 text-right tabular-nums text-white/80">{r.methods?.[m] ? `₱${r.methods[m].toFixed(2)}` : '—'}</td>
-                            ))}
+                            {SSS_COLS.map(([label, methods]) => { const v = sssColVal(r, methods); return (
+                              <td key={label} className="px-3 py-2.5 text-right tabular-nums text-white/80">{v ? `₱${v.toFixed(2)}` : '—'}</td>
+                            ); })}
                             <td className="px-3 py-2.5 text-right tabular-nums font-black text-brand">₱{r.total.toFixed(2)}</td>
                           </tr>
                         ))}
@@ -183,9 +177,8 @@ export default function HistoryTab({ ctx }) {
                         <tr className="border-t-2 border-white/10 bg-brand/5 font-black text-white">
                           <td className="px-3 py-3 uppercase text-[10px] tracking-wider">Totals</td>
                           <td className="px-3 py-3"></td>
-                          <td className="px-3 py-3 text-right tabular-nums">₱{(salesSummary.totals?.cash || 0).toFixed(2)}</td>
-                          {sssFlatMethods.map(m => (
-                            <td key={m} className="px-3 py-3 text-right tabular-nums">₱{(salesSummary.totals?.methods?.[m] || 0).toFixed(2)}</td>
+                          {SSS_COLS.map(([label, methods]) => (
+                            <td key={label} className="px-3 py-3 text-right tabular-nums">₱{sssColTotal(methods).toFixed(2)}</td>
                           ))}
                           <td className="px-3 py-3 text-right tabular-nums text-brand">₱{(salesSummary.totals?.total || 0).toFixed(2)}</td>
                         </tr>
