@@ -737,15 +737,15 @@ export default function InventoryTab({ ctx }) {
               <div>
                 <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Paid From / Charge To</label>
                 <select
-                  value={invForm.creditAccount || '1000'}
+                  value={invForm.creditAccount || '111000'}
                   onChange={e => setInvForm({...invForm, creditAccount: e.target.value})}
                   className="w-full bg-page-bg border border-gray-700 rounded p-2 text-white outline-none focus:border-accent text-sm"
                 >
-                  <option value="1000">Cash on Hand (1000)</option>
-                  <option value="1010">Cash in Bank (1010)</option>
-                  <option value="2000">Accounts Payable — Buy on Credit (2000)</option>
+                  <option value="111000">Cash on Hand (111000)</option>
+                  <option value="112000">Cash in Bank (112000)</option>
+                  <option value="220000">Accounts Payable — Buy on Credit (220000)</option>
                 </select>
-                {invForm.creditAccount === '2000' && (
+                {invForm.creditAccount === '220000' && (
                   <p className="text-[9px] text-yellow-500/80 mt-1">Goods received on credit. Settle later via Add Expense → AP payment.</p>
                 )}
               </div>
@@ -753,10 +753,10 @@ export default function InventoryTab({ ctx }) {
               {/* --- UPDATED SUBMIT BUTTON (DISABLED IF INSUFFICIENT FUNDS, unless using AP) --- */}
               <button
                 onClick={addInventory}
-                disabled={invForm.creditAccount !== '2000' && cashOnHand < (invForm.packQty * invForm.costPerPack)}
-                className={`w-full font-bold py-3 rounded transition shadow-lg ${(invForm.creditAccount !== '2000' && cashOnHand < (invForm.packQty * invForm.costPerPack)) ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-white hover:bg-page-bg hover:text-accent shadow-accent/20'}`}
+                disabled={invForm.creditAccount !== '220000' && cashOnHand < (invForm.packQty * invForm.costPerPack)}
+                className={`w-full font-bold py-3 rounded transition shadow-lg ${(invForm.creditAccount !== '220000' && cashOnHand < (invForm.packQty * invForm.costPerPack)) ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-accent text-white hover:bg-page-bg hover:text-accent shadow-accent/20'}`}
               >
-                {(invForm.creditAccount !== '2000' && cashOnHand < (invForm.packQty * invForm.costPerPack)) ? 'Insufficient Funds' : 'Add to Stock'}
+                {(invForm.creditAccount !== '220000' && cashOnHand < (invForm.packQty * invForm.costPerPack)) ? 'Insufficient Funds' : 'Add to Stock'}
               </button>
             </div>
           </div>

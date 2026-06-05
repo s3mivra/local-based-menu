@@ -162,7 +162,7 @@ export default function AdminDashboard() {
 
   const [inventory, setInventory] = useState([]);
   const [journalEntries, setJournalEntries] = useState([]);
-  const [invForm, setInvForm] = useState({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '', lowStockThreshold: '', expiryDate: '', expiryWarnDays: 7, creditAccount: '1000' });
+  const [invForm, setInvForm] = useState({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '', lowStockThreshold: '', expiryDate: '', expiryWarnDays: 7, creditAccount: '111000' });
   // --- INVENTORY EDIT MODAL ---
   const [editInvModal, setEditInvModal] = useState(null);   // { item } | null
   const [editInvForm, setEditInvForm] = useState({ itemName: '', unit: '', unitCost: '', lowStockThreshold: '', expiryDate: '', expiryWarnDays: 7, displayUnit: '' });
@@ -175,7 +175,7 @@ export default function AdminDashboard() {
   const [expandedBatchRows, setExpandedBatchRows] = useState({}); // { [itemId]: bool }
 
   const [physicalCounts, setPhysicalCounts] = useState({});
-  const [restockData, setRestockData] = useState({ addedStock: '', totalCost: '', creditAccount: '1000' });
+  const [restockData, setRestockData] = useState({ addedStock: '', totalCost: '', creditAccount: '111000' });
   // --- ORDER SEARCH ---
   const [orderSearch, setOrderSearch] = useState('');
   // --- ORDER NOTES (POS) ---
@@ -249,7 +249,7 @@ export default function AdminDashboard() {
   // --- AP OUTSTANDING ---
   const [apData, setApData] = useState(null);
   const [apPayModal, setApPayModal] = useState(false);
-  const [apPayForm, setApPayForm] = useState({ amount: '', payFromAccount: '1000', description: '', vendorName: '' });
+  const [apPayForm, setApPayForm] = useState({ amount: '', payFromAccount: '111000', description: '', vendorName: '' });
   const [apPaySubmitting, setApPaySubmitting] = useState(false);
   const [activeInventoryItem, setActiveInventoryItem] = useState(null); // For the restock modal
 
@@ -410,13 +410,13 @@ export default function AdminDashboard() {
   const [rfTxPage, setRfTxPage] = useState(1);
   const [rfTxPages, setRfTxPages] = useState(1);
   const [rfNewModal, setRfNewModal] = useState(false);
-  const [rfNewForm, setRfNewForm] = useState({ name: '', initialAmount: '', description: '', sourceAccount: '1000' });
+  const [rfNewForm, setRfNewForm] = useState({ name: '', initialAmount: '', description: '', sourceAccount: '111000' });
   const [rfNewSubmitting, setRfNewSubmitting] = useState(false);
   const [rfDisbModal, setRfDisbModal] = useState(false);
-  const [rfDisbForm, setRfDisbForm] = useState({ amount: '', description: '', categoryCode: '6090' });
+  const [rfDisbForm, setRfDisbForm] = useState({ amount: '', description: '', categoryCode: '760000' });
   const [rfDisbSubmitting, setRfDisbSubmitting] = useState(false);
   const [rfReplModal, setRfReplModal] = useState(false);
-  const [rfReplForm, setRfReplForm] = useState({ amount: '', note: '', sourceAccount: '1000' });
+  const [rfReplForm, setRfReplForm] = useState({ amount: '', note: '', sourceAccount: '111000' });
   const [rfReplSubmitting, setRfReplSubmitting] = useState(false);
 
   // --- IN-APP ORDER TOAST (no browser popup) ---
@@ -804,8 +804,8 @@ export default function AdminDashboard() {
     const jePayload = {
       description: 'Owner Capital Injection',
       lines: [
-        { accountCode: '1000', accountName: 'Cash on Hand', debit: amount, credit: 0 },
-        { accountCode: '3000', accountName: 'Owner Equity', debit: 0, credit: amount }
+        { accountCode: '111000', accountName: 'Cash on Hand', debit: amount, credit: 0 },
+        { accountCode: '310000', accountName: 'Owner Equity', debit: 0, credit: amount }
       ]
     };
 
@@ -838,19 +838,19 @@ export default function AdminDashboard() {
   });
 
   const standardAccounts = [
-    { accountCode: '1000', accountName: 'Cash on Hand', type: 'Asset' },
-    { accountCode: '1010', accountName: 'Cash in Bank', type: 'Asset' },
-    { accountCode: '1015', accountName: 'E-Wallet', type: 'Asset' },
-    { accountCode: '1200', accountName: 'Accounts Receivable', type: 'Asset' },
-    { accountCode: '1500', accountName: 'Inventory Asset', type: 'Asset' },
-    { accountCode: '2000', accountName: 'Accounts Payable', type: 'Liability' },
-    { accountCode: '2100', accountName: 'VAT Payable', type: 'Liability' },
-    { accountCode: '3000', accountName: 'Owner Equity', type: 'Equity' },
-    { accountCode: '4000', accountName: 'Sales Revenue', type: 'Revenue' },
-    { accountCode: '4150', accountName: 'Sales Returns', type: 'Revenue' },
-    { accountCode: '5000', accountName: 'Cost of Goods Sold', type: 'Expense' },
-    { accountCode: '6000', accountName: 'Operating Expenses', type: 'Expense' },
-    { accountCode: '6100', accountName: 'Complimentary Expense', type: 'Expense' }
+    { accountCode: '111000', accountName: 'Cash on Hand', type: 'Asset' },
+    { accountCode: '112000', accountName: 'Cash in Bank', type: 'Asset' },
+    { accountCode: '113000', accountName: 'E-Wallet', type: 'Asset' },
+    { accountCode: '120000', accountName: 'Accounts Receivable', type: 'Asset' },
+    { accountCode: '130000', accountName: 'Inventory Asset', type: 'Asset' },
+    { accountCode: '220000', accountName: 'Accounts Payable', type: 'Liability' },
+    { accountCode: '230000', accountName: 'Taxes Payable', type: 'Liability' },
+    { accountCode: '310000', accountName: 'Owner Equity', type: 'Equity' },
+    { accountCode: '410000', accountName: 'Sales Revenue', type: 'Revenue' },
+    { accountCode: '440000', accountName: 'Sales Returns', type: 'Revenue' },
+    { accountCode: '510000', accountName: 'Cost of Goods Sold', type: 'Expense' },
+    { accountCode: '600000', accountName: 'Operating Expenses', type: 'Expense' },
+    { accountCode: '540000', accountName: 'Complimentary Expense', type: 'Expense' }
   ];
 
   useEffect(() => { if (isAuthenticated) fetchDiscounts(); }, [isAuthenticated]);
@@ -1298,7 +1298,7 @@ const updateStatus = async (orderId, newStatus) => {
       const data = await res.json();
       if (!data.success) return alert(data.error || 'Failed to create fund.');
       setRfNewModal(false);
-      setRfNewForm({ name: '', initialAmount: '', description: '', sourceAccount: '1000' });
+      setRfNewForm({ name: '', initialAmount: '', description: '', sourceAccount: '111000' });
       await fetchRfFunds();
     } catch (err) { alert('Network error.'); }
     finally { setRfNewSubmitting(false); }
@@ -1319,7 +1319,7 @@ const updateStatus = async (orderId, newStatus) => {
       const data = await res.json();
       if (!data.success) return alert(data.error || 'Disbursement failed.');
       setRfDisbModal(false);
-      setRfDisbForm({ amount: '', description: '', categoryCode: '6090' });
+      setRfDisbForm({ amount: '', description: '', categoryCode: '760000' });
       // Update local fund balance without full refetch
       setRfFunds(prev => prev.map(f => f._id === data.fund._id ? data.fund : f));
       setRfActiveFund(data.fund);
@@ -1342,7 +1342,7 @@ const updateStatus = async (orderId, newStatus) => {
       const data = await res.json();
       if (!data.success) return alert(data.error || 'Replenishment failed.');
       setRfReplModal(false);
-      setRfReplForm({ amount: '', note: '', sourceAccount: '1000' });
+      setRfReplForm({ amount: '', note: '', sourceAccount: '111000' });
       setRfFunds(prev => prev.map(f => f._id === data.fund._id ? data.fund : f));
       setRfActiveFund(data.fund);
       await fetchRfTxs(rfActiveFund._id, 1);
@@ -1883,13 +1883,13 @@ const updateStatus = async (orderId, newStatus) => {
         body: JSON.stringify({
           addedStock: Number(restockData.addedStock),
           totalCost: Number(restockData.totalCost),
-          creditAccount: restockData.creditAccount || '1000',
+          creditAccount: restockData.creditAccount || '111000',
         })
       });
       if (res.ok) {
         alert("Stock received. Weighted Average Cost updated!");
         setActiveInventoryItem(null);
-        setRestockData({ addedStock: '', totalCost: '', creditAccount: '1000' });
+        setRestockData({ addedStock: '', totalCost: '', creditAccount: '111000' });
         fetchERPData(); // Re-fetch inventory
       }
     } catch (err) { console.error("Restock failed", err); }
@@ -1956,7 +1956,7 @@ const updateStatus = async (orderId, newStatus) => {
       // RESTOCK EXISTING ITEM — send base-unit values
       await apiFetch(`/api/inventory/restock/${existingItem._id}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ addedStock: totalStockBase, totalCost, expiryDate: invForm.expiryDate || null, creditAccount: invForm.creditAccount || '1000' })
+        body: JSON.stringify({ addedStock: totalStockBase, totalCost, expiryDate: invForm.expiryDate || null, creditAccount: invForm.creditAccount || '111000' })
       });
     } else {
       // ADD BRAND NEW ITEM
@@ -1972,13 +1972,13 @@ const updateStatus = async (orderId, newStatus) => {
         unitMultiplier: mult
       };
 
-      payload.creditAccount = invForm.creditAccount || '1000';
+      payload.creditAccount = invForm.creditAccount || '111000';
       const res = await apiFetch(`/api/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!data.success) return alert(data.error);
     }
 
-    setInvForm({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '', lowStockThreshold: '', expiryDate: '', expiryWarnDays: 7, creditAccount: '1000' });
+    setInvForm({ itemName: '', packQty: '', unitPerPack: '', unit: '', costPerPack: '', lowStockThreshold: '', expiryDate: '', expiryWarnDays: 7, creditAccount: '111000' });
     fetchERPData();
   };
   const deleteInventory = async (id) => { if(window.confirm('Delete inventory item?')) { await apiFetch(`/api/inventory/${id}`, { method: 'DELETE' }); fetchERPData(); } };
@@ -3241,7 +3241,7 @@ const updateStatus = async (orderId, newStatus) => {
       if (data.success) {
         alert('AP payment recorded.');
         setApPayModal(false);
-        setApPayForm({ amount: '', payFromAccount: '1000', description: '', vendorName: '' });
+        setApPayForm({ amount: '', payFromAccount: '111000', description: '', vendorName: '' });
         fetchApData();
       } else alert(data.error || 'Failed to record payment.');
     } catch { alert('Network error.'); }
@@ -4274,14 +4274,14 @@ const updateStatus = async (orderId, newStatus) => {
                 <label className="text-[10px] text-white/40 font-bold uppercase block mb-1">Expense Category</label>
                 <select value={rfDisbForm.categoryCode} onChange={e => setRfDisbForm({...rfDisbForm, categoryCode: e.target.value})}
                   className="w-full bg-page-bg border border-white/10 rounded-xl px-3 py-3 text-white outline-none focus:border-danger/60">
-                  <option value="6000">Rent</option>
-                  <option value="6010">Utilities (Electricity / Water / Internet)</option>
-                  <option value="6020">Salaries & Wages</option>
-                  <option value="6030">Supplies (Non-Inventory)</option>
-                  <option value="6040">Marketing & Advertising</option>
-                  <option value="6050">Repairs & Maintenance</option>
-                  <option value="6060">Bank Charges</option>
-                  <option value="6090">Other Operating Expense</option>
+                  <option value="630000">Rent</option>
+                  <option value="640000">Utilities (Electricity / Water / Internet)</option>
+                  <option value="610000">Salaries & Wages</option>
+                  <option value="650000">Supplies (Non-Inventory)</option>
+                  <option value="660000">Marketing & Advertising</option>
+                  <option value="680000">Repairs & Maintenance</option>
+                  <option value="720000">Bank Charges</option>
+                  <option value="760000">Other Operating Expense</option>
                 </select>
               </div>
               <div className="bg-danger/10 border border-danger/20 rounded-xl p-3 text-xs text-danger/80">

@@ -548,8 +548,8 @@ export default function LedgerTab({ ctx }) {
                         <label className="text-[10px] text-white/40 font-bold uppercase block mb-1">Pay From *</label>
                         <select value={apPayForm.payFromAccount} onChange={e => setApPayForm(p => ({...p, payFromAccount: e.target.value}))}
                           className="w-full bg-page-bg border border-white/10 rounded-xl px-3 py-3 text-white font-bold outline-none focus:border-brand/60">
-                          <option value="1000">Cash on Hand (1000)</option>
-                          <option value="1010">Cash in Bank (1010)</option>
+                          <option value="111000">Cash on Hand (111000)</option>
+                          <option value="112000">Cash in Bank (112000)</option>
                         </select>
                       </div>
                       <div>
@@ -912,13 +912,13 @@ export default function LedgerTab({ ctx }) {
                         {/* Action buttons */}
                         <div className="grid grid-cols-3 gap-1.5 pt-1">
                           <button
-                            onClick={() => { setRfActiveFund(fund); setRfDisbForm({ amount: '', description: '', categoryCode: '6090' }); setRfDisbModal(true); }}
+                            onClick={() => { setRfActiveFund(fund); setRfDisbForm({ amount: '', description: '', categoryCode: '760000' }); setRfDisbModal(true); }}
                             className="bg-danger/10 text-danger border border-danger/20 rounded-xl py-2 font-bold text-[10px] uppercase tracking-wider hover:bg-danger/20 transition min-h-[40px]"
                           >
                             <Minus size={11} className="inline mr-1"/>Out
                           </button>
                           <button
-                            onClick={() => { setRfActiveFund(fund); setRfReplForm({ amount: (fund.initialAmount - fund.currentBalance).toFixed(2), note: '', sourceAccount: '1000' }); setRfReplModal(true); }}
+                            onClick={() => { setRfActiveFund(fund); setRfReplForm({ amount: (fund.initialAmount - fund.currentBalance).toFixed(2), note: '', sourceAccount: '111000' }); setRfReplModal(true); }}
                             className="bg-brand/10 text-brand border border-brand/20 rounded-xl py-2 font-bold text-[10px] uppercase tracking-wider hover:bg-brand/20 transition min-h-[40px]"
                           >
                             <Plus size={11} className="inline mr-1"/>In

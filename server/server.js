@@ -16,7 +16,7 @@ import crypto from 'crypto';
 import pino from 'pino';
 import pinoHttp from 'pino-http';
 import { assertBalanced, debitAccountFor, grossSalesAmount, suggestedSettleAccount } from './lib/ledger.js';
-import { ACCOUNTS, EXPENSE_CATEGORIES } from './lib/chartOfAccounts.js';
+import { ACCOUNTS, EXPENSE_CATEGORIES, CODE_MAP } from './lib/chartOfAccounts.js';
 import { resolveUnit, displayToBase, effectiveDisplay } from './lib/units.js';
 import { addBatch, consumeBatches, soonestExpiry, sortBatchesFEFO, batchesTotal } from './lib/expiry.js';
 
@@ -373,6 +373,28 @@ mongoose.connect(process.env.MONGO_URI, {
       if (backfill.modifiedCount > 0) log.info(`✅ Backfilled role=superadmin on ${backfill.modifiedCount} legacy admin doc(s)`);
     } catch (err) {
       log.error({ err }, 'Seeding error');
+    }
+
+    // ── ONE-TIME COA MIGRATION (4-digit → 6-digit SAP codes) ──────────────────
+    // Rewrites historical journal-entry line codes via CODE_MAP. Guarded by a
+    // Settings flag so it runs exactly once.
+    try {
+      const done = await Settings.findOne({ key: 'coaV2Migrated' }).lean();
+      if (!done) {
+        let migrated = 0;
+        for (const [oldC, newC] of Object.entries(CODE_MAP)) {
+          const r = await JournalEntry.updateMany(
+            { 'lines.accountCode': oldC },
+            { $set: { 'lines.$[el].accountCode': newC } },
+            { arrayFilters: [{ 'el.accountCode': oldC }] }
+          );
+          migrated += r.modifiedCount || 0;
+        }
+        await Settings.updateOne({ key: 'coaV2Migrated' }, { $set: { value: true } }, { upsert: true });
+        log.info({ entriesTouched: migrated }, '✅ COA v2: migrated journal entry account codes 4-digit → 6-digit');
+      }
+    } catch (err) {
+      log.error({ err }, 'COA migration error');
     }
 
     // Sync atomic Counters to the highest existing seq so new inserts never collide
@@ -815,11 +837,11 @@ const BankDeposit = mongoose.model('BankDeposit', BankDepositSchema);
 
 // Seed cash management accounts (codes match existing JournalEntry account codes)
 const DEFAULT_ACCOUNTS = [
-  { code: '1000', name: 'Cash on Hand',             type: 'Asset',   normalBalance: 'Debit'  },
-  { code: '1010', name: 'Cash in Bank',              type: 'Asset',   normalBalance: 'Debit'  },
-  { code: '4000', name: 'Sales Revenue',             type: 'Income',  normalBalance: 'Credit' },
-  { code: '5010', name: 'Cash Short & Over Expense', type: 'Expense', normalBalance: 'Debit'  },
-  { code: '4020', name: 'Cash Short & Over Income',  type: 'Income',  normalBalance: 'Credit' },
+  { code: '111000', name: 'Cash on Hand',             type: 'Asset',   normalBalance: 'Debit'  },
+  { code: '112000', name: 'Cash in Bank',              type: 'Asset',   normalBalance: 'Debit'  },
+  { code: '410000', name: 'Sales Revenue',             type: 'Income',  normalBalance: 'Credit' },
+  { code: '930000', name: 'Cash Short & Over Expense', type: 'Expense', normalBalance: 'Debit'  },
+  { code: '830000', name: 'Cash Short & Over Income',  type: 'Income',  normalBalance: 'Credit' },
 ];
 (async () => {
   for (const acct of DEFAULT_ACCOUNTS) {
@@ -1008,16 +1030,16 @@ app.post('/api/inventory/count', verifyToken, async (req, res) => {
             await JournalEntry.create([{
               reference, description: `Shrinkage (${specificReason}): ${item.itemName}`,
               lines: [
-                { accountCode: '5100', accountName: 'Spoilage, Variance & Waste Expense', debit: valueAbs, credit: 0 },
-                { accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: valueAbs }
+                { accountCode: '535000', accountName: 'Spoilage, Variance & Waste Expense', debit: valueAbs, credit: 0 },
+                { accountCode: '130000', accountName: 'Inventory Asset', debit: 0, credit: valueAbs }
               ], totalDebit: valueAbs, totalCredit: valueAbs
             }], { session });
           } else {
             await JournalEntry.create([{
               reference, description: `Gain (${specificReason}): ${item.itemName}`,
               lines: [
-                { accountCode: '1500', accountName: 'Inventory Asset', debit: valueAbs, credit: 0 },
-                { accountCode: '4200', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueAbs }
+                { accountCode: '130000', accountName: 'Inventory Asset', debit: valueAbs, credit: 0 },
+                { accountCode: '530000', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueAbs }
               ], totalDebit: valueAbs, totalCredit: valueAbs
             }], { session });
           }
@@ -1900,13 +1922,13 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
         // DR 5300 Complimentary Expense / CR 4000 Sales Revenue at selling price (keeps gross visible)
         const sellingPrice = order.subtotal || 0;
         if (sellingPrice > 0) {
-          lines.push({ accountCode: '5300', accountName: 'Complimentary Expense', debit: sellingPrice, credit: 0 });
-          lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: 0, credit: sellingPrice });
+          lines.push({ accountCode: '540000', accountName: 'Complimentary Expense', debit: sellingPrice, credit: 0 });
+          lines.push({ accountCode: '410000', accountName: 'Sales Revenue', debit: 0, credit: sellingPrice });
         }
         // DR 5000 COGS / CR 1500 Inventory at cost
         if (totalCogs > 0) {
-          lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
-          lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
+          lines.push({ accountCode: '510000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
+          lines.push({ accountCode: '130000', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
         }
         order.complimentaryCost = totalCogs;
       } else {
@@ -1918,15 +1940,15 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
           const acct = debitAccountFor(p.method);
           lines.push({ accountCode: acct.code, accountName: acct.name, debit: p.amount, credit: 0 });
         }
-        lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
+        lines.push({ accountCode: '430000', accountName: 'Sales Discounts', debit: order.discount || 0, credit: 0 });
 
         // Non-VAT: gross receipts = net collected + discount (no VAT separation)
         const grossSalesAmount = order.total + (order.discount || 0);
-        lines.push({ accountCode: '4000', accountName: 'Sales Revenue (Non-VAT)', debit: 0, credit: grossSalesAmount });
+        lines.push({ accountCode: '410000', accountName: 'Sales Revenue (Non-VAT)', debit: 0, credit: grossSalesAmount });
 
         if (totalCogs > 0) {
-          lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
-          lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
+          lines.push({ accountCode: '510000', accountName: 'Cost of Goods Sold', debit: totalCogs, credit: 0 });
+          lines.push({ accountCode: '130000', accountName: 'Inventory Asset', debit: 0, credit: totalCogs });
         }
       }
 
@@ -2024,15 +2046,15 @@ app.post('/api/orders/:id/void', verifyToken, requireSuperAdmin, async (req, res
     const grossSalesAmount = order.total + (order.discount || 0);
 
     if (!order.isComplimentary) {
-      lines.push({ accountCode: '4000', accountName: 'Sales Revenue (Non-VAT)', debit: grossSalesAmount, credit: 0 });
+      lines.push({ accountCode: '410000', accountName: 'Sales Revenue (Non-VAT)', debit: grossSalesAmount, credit: 0 });
       lines.push({ accountCode: cashAccount, accountName: cashAccountName, debit: 0, credit: order.total });
-      if (order.discount > 0) lines.push({ accountCode: '4150', accountName: 'Sales Discounts', debit: 0, credit: order.discount });
+      if (order.discount > 0) lines.push({ accountCode: '430000', accountName: 'Sales Discounts', debit: 0, credit: order.discount });
     } else {
       // Reverse the complimentary revenue recognition: DR 4000 / CR 5300 at selling price
       const sellingPrice = order.subtotal || 0;
       if (sellingPrice > 0) {
-        lines.push({ accountCode: '4000', accountName: 'Sales Revenue', debit: sellingPrice, credit: 0 });
-        lines.push({ accountCode: '5300', accountName: 'Complimentary Expense', debit: 0, credit: sellingPrice });
+        lines.push({ accountCode: '410000', accountName: 'Sales Revenue', debit: sellingPrice, credit: 0 });
+        lines.push({ accountCode: '540000', accountName: 'Complimentary Expense', debit: 0, credit: sellingPrice });
       }
     }
 
@@ -2105,15 +2127,15 @@ app.post('/api/orders/:id/void', verifyToken, requireSuperAdmin, async (req, res
 
     if (totalCogs > 0) {
       if (reason === 'Restock') {
-        lines.push({ accountCode: '1500', accountName: 'Inventory Asset', debit: totalCogs, credit: 0 });
+        lines.push({ accountCode: '130000', accountName: 'Inventory Asset', debit: totalCogs, credit: 0 });
         lines.push({
-          accountCode: '5000',
+          accountCode: '510000',
           accountName: 'Cost of Goods Sold',
           debit: 0, credit: totalCogs
         });
       } else if (reason === 'Spoilage' && !order.isComplimentary) {
-        lines.push({ accountCode: '5100', accountName: 'Spoilage, Variance & Waste Expense', debit: totalCogs, credit: 0 });
-        lines.push({ accountCode: '5000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
+        lines.push({ accountCode: '535000', accountName: 'Spoilage, Variance & Waste Expense', debit: totalCogs, credit: 0 });
+        lines.push({ accountCode: '510000', accountName: 'Cost of Goods Sold', debit: 0, credit: totalCogs });
       }
       // Complimentary + Spoilage: cost already expensed at completion, inventory gone, no reversal
     }
@@ -2214,8 +2236,8 @@ app.post('/api/inventory', verifyToken, async (req, res) => {
       }];
     }
     const { creditAccount: rawCreditCode } = req.body;
-    const CREDIT_ACCOUNTS = { '1000': 'Cash on Hand', '1010': 'Cash in Bank', '2000': 'Accounts Payable' };
-    const creditCode = CREDIT_ACCOUNTS[rawCreditCode] ? rawCreditCode : '1000';
+    const CREDIT_ACCOUNTS = { '111000': 'Cash on Hand', '112000': 'Cash in Bank', '220000': 'Accounts Payable' };
+    const creditCode = CREDIT_ACCOUNTS[rawCreditCode] ? rawCreditCode : '111000';
     const creditName = CREDIT_ACCOUNTS[creditCode];
 
     const newItem = await Inventory.create(req.body);
@@ -2225,7 +2247,7 @@ app.post('/api/inventory', verifyToken, async (req, res) => {
     if (totalCost > 0) {
       const reference = purchRef;
       const lines = [
-        { accountCode: '1500', accountName: 'Inventory Asset', debit: totalCost, credit: 0 },
+        { accountCode: '130000', accountName: 'Inventory Asset', debit: totalCost, credit: 0 },
         { accountCode: creditCode, accountName: creditName,   debit: 0, credit: totalCost }
       ];
       await JournalEntry.create({ reference, description: `Purchased ${newItem.stockQty}${newItem.unit} of ${newItem.itemName}`, lines, totalDebit: totalCost, totalCredit: totalCost });
@@ -2242,8 +2264,8 @@ app.post('/api/inventory', verifyToken, async (req, res) => {
 app.post('/api/inventory/restock/:id', verifyToken, async (req, res) => {
   try {
     const { addedStock, totalCost, expiryDate, creditAccount: rawCreditCode } = req.body;
-    const CREDIT_ACCOUNTS = { '1000': 'Cash on Hand', '1010': 'Cash in Bank', '2000': 'Accounts Payable' };
-    const creditCode = CREDIT_ACCOUNTS[rawCreditCode] ? rawCreditCode : '1000';
+    const CREDIT_ACCOUNTS = { '111000': 'Cash on Hand', '112000': 'Cash in Bank', '220000': 'Accounts Payable' };
+    const creditCode = CREDIT_ACCOUNTS[rawCreditCode] ? rawCreditCode : '111000';
     const creditName = CREDIT_ACCOUNTS[creditCode];
     const item = await Inventory.findById(req.params.id);
     if (!item) return res.status(404).json({ success: false, error: 'Item not found' });
@@ -2290,7 +2312,7 @@ app.post('/api/inventory/restock/:id', verifyToken, async (req, res) => {
     if (totalCost > 0) {
       const reference = rstRef;
       const lines = [
-        { accountCode: '1500', accountName: 'Inventory Asset', debit: totalCost, credit: 0 },
+        { accountCode: '130000', accountName: 'Inventory Asset', debit: totalCost, credit: 0 },
         { accountCode: creditCode, accountName: creditName,   debit: 0, credit: totalCost }
       ];
       await JournalEntry.create({ reference, description: `Restocked ${addedStock}${item.unit} of ${item.itemName}`, lines, totalDebit: totalCost, totalCredit: totalCost });
@@ -2421,8 +2443,8 @@ app.post('/api/inventory/:id/batches', verifyToken, requireSuperAdmin, async (re
       await JournalEntry.create({
         reference: batchRef, description: `Manual batch added: ${n}${item.unit} of ${item.itemName}`,
         lines: [
-          { accountCode: '1500', accountName: 'Inventory Asset',            debit: value, credit: 0 },
-          { accountCode: '4200', accountName: 'Inventory Adjustment Gain',  debit: 0, credit: value },
+          { accountCode: '130000', accountName: 'Inventory Asset',            debit: value, credit: 0 },
+          { accountCode: '530000', accountName: 'Inventory Adjustment Gain',  debit: 0, credit: value },
         ],
         totalDebit: value, totalCredit: value,
       });
@@ -2465,8 +2487,8 @@ app.delete('/api/inventory/:id/batches/:batchIdx', verifyToken, requireSuperAdmi
       await JournalEntry.create({
         reference: delRef, description: `Manual batch removed: ${removedQty}${item.unit} of ${item.itemName}`,
         lines: [
-          { accountCode: '5100', accountName: 'Spoilage, Variance & Waste Expense', debit: value, credit: 0 },
-          { accountCode: '1500', accountName: 'Inventory Asset',                     debit: 0, credit: value },
+          { accountCode: '535000', accountName: 'Spoilage, Variance & Waste Expense', debit: value, credit: 0 },
+          { accountCode: '130000', accountName: 'Inventory Asset',                     debit: 0, credit: value },
         ],
         totalDebit: value, totalCredit: value,
       });
@@ -2614,12 +2636,12 @@ app.post('/api/inventory/import', verifyToken, requireSuperAdmin, async (req, re
         if (Math.abs(valueImpact) > 0.001) {
           const lines = diff >= 0
             ? [
-                { accountCode: '1500', accountName: 'Inventory Asset', debit: valueImpact, credit: 0 },
-                { accountCode: '4200', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueImpact }
+                { accountCode: '130000', accountName: 'Inventory Asset', debit: valueImpact, credit: 0 },
+                { accountCode: '530000', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueImpact }
               ]
             : [
-                { accountCode: '5100', accountName: 'Spoilage, Variance & Waste Expense', debit: valueImpact, credit: 0 },
-                { accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: valueImpact }
+                { accountCode: '535000', accountName: 'Spoilage, Variance & Waste Expense', debit: valueImpact, credit: 0 },
+                { accountCode: '130000', accountName: 'Inventory Asset', debit: 0, credit: valueImpact }
               ];
           assertBalanced(lines, `IMPORT-${existing.itemName}`);
           await JournalEntry.create([{
@@ -2666,8 +2688,8 @@ app.post('/api/inventory/import', verifyToken, requireSuperAdmin, async (req, re
 
         if (valueImpact > 0.001) {
           const lines = [
-            { accountCode: '1500', accountName: 'Inventory Asset', debit: valueImpact, credit: 0 },
-            { accountCode: '4200', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueImpact }
+            { accountCode: '130000', accountName: 'Inventory Asset', debit: valueImpact, credit: 0 },
+            { accountCode: '530000', accountName: 'Inventory Adjustment Gain', debit: 0, credit: valueImpact }
           ];
           assertBalanced(lines, `IMPORT-NEW-${item.itemName}`);
           await JournalEntry.create([{
@@ -2736,7 +2758,7 @@ app.get('/api/finance/balances', verifyToken, requireSuperAdmin, async (req, res
     // Aggregate at MongoDB level — no full collection load, OOM-safe at scale
     const agg = await JournalEntry.aggregate([
       { $unwind: '$lines' },
-      { $match: { 'lines.accountCode': '1000' } },
+      { $match: { 'lines.accountCode': '111000' } },
       { $group: {
           _id: null,
           totalDebit:  { $sum: { $ifNull: ['$lines.debit',  0] } },
@@ -2769,10 +2791,10 @@ app.post('/api/expenses', verifyToken, requireSuperAdmin, async (req, res) => {
     if (!description?.trim()) return res.status(400).json({ success: false, error: 'Description required.' });
 
     // Pick the credit-side cash account
-    let credAcct = { code: '1000', name: 'Cash on Hand' };
-    if (paymentMethod === 'Bank Transfer' || paymentMethod === 'Cash in Bank') credAcct = { code: '1010', name: 'Cash in Bank' };
-    else if (['GCash', 'Maya', 'Maribank', 'E-Wallet', 'Other E-Wallet'].includes(paymentMethod)) credAcct = { code: '1015', name: 'E-Wallet' };
-    else if (paymentMethod === 'On Account') credAcct = { code: '2000', name: 'Accounts Payable' };
+    let credAcct = { code: '111000', name: 'Cash on Hand' };
+    if (paymentMethod === 'Bank Transfer' || paymentMethod === 'Cash in Bank') credAcct = { code: '112000', name: 'Cash in Bank' };
+    else if (['GCash', 'Maya', 'Maribank', 'E-Wallet', 'Other E-Wallet'].includes(paymentMethod)) credAcct = { code: '113000', name: 'E-Wallet' };
+    else if (paymentMethod === 'On Account') credAcct = { code: '220000', name: 'Accounts Payable' };
 
     const cat = EXPENSE_CATEGORIES.find(c => c.code === categoryCode);
     const acct = ACCOUNTS[categoryCode];
@@ -2822,15 +2844,15 @@ app.post('/api/orders/:id/settle-ar', verifyToken, requireSuperAdmin, async (req
     if (amt > order.total + 0.01)
       return res.status(400).json({ success: false, error: `Settlement amount exceeds outstanding A/R (₱${order.total.toFixed(2)}).` });
 
-    let debitAcct = { code: '1000', name: 'Cash on Hand' };
-    if (paymentMethod === 'Bank Transfer' || paymentMethod === 'Cash in Bank') debitAcct = { code: '1010', name: 'Cash in Bank' };
-    else if (['GCash', 'Maya', 'Maribank', 'E-Wallet'].includes(paymentMethod)) debitAcct = { code: '1015', name: 'E-Wallet' };
+    let debitAcct = { code: '111000', name: 'Cash on Hand' };
+    if (paymentMethod === 'Bank Transfer' || paymentMethod === 'Cash in Bank') debitAcct = { code: '112000', name: 'Cash in Bank' };
+    else if (['GCash', 'Maya', 'Maribank', 'E-Wallet'].includes(paymentMethod)) debitAcct = { code: '113000', name: 'E-Wallet' };
 
     const reference = mkRef('ARS', order.orderNumber);
 
     const lines = [
       { accountCode: debitAcct.code, accountName: debitAcct.name, debit: amt, credit: 0 },
-      { accountCode: '1200', accountName: 'Accounts Receivable', debit: 0, credit: amt },
+      { accountCode: '120000', accountName: 'Accounts Receivable', debit: 0, credit: amt },
     ];
     assertBalanced(lines, reference);
 
@@ -2875,7 +2897,7 @@ app.get('/api/finance/ar-outstanding', verifyToken, requireSuperAdmin, async (re
 
 // ──────────────────────────────────────────────────────────────────────────────
 // ACCOUNTS PAYABLE — outstanding balance + recent entries + payment
-// Payables are journal lines with accountCode '2000':
+// Payables are journal lines with accountCode '220000':
 //   DR 1500 Inventory / CR 2000 AP  → when goods received on credit
 //   DR 2000 AP / CR 1000 Cash       → when supplier is paid
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2883,7 +2905,7 @@ app.get('/api/finance/ap-outstanding', verifyToken, requireSuperAdmin, async (re
   try {
     const agg = await JournalEntry.aggregate([
       { $unwind: '$lines' },
-      { $match: { 'lines.accountCode': '2000' } },
+      { $match: { 'lines.accountCode': '220000' } },
       { $group: {
         _id: null,
         totalCredit: { $sum: '$lines.credit' }, // AP incurred
@@ -2896,7 +2918,7 @@ app.get('/api/finance/ap-outstanding', verifyToken, requireSuperAdmin, async (re
     // Recent AP journal entries (both directions)
     const recent = await JournalEntry.aggregate([
       { $unwind: '$lines' },
-      { $match: { 'lines.accountCode': '2000' } },
+      { $match: { 'lines.accountCode': '220000' } },
       { $group: {
         _id: '$_id',
         date:        { $first: '$date'        },
@@ -2922,15 +2944,15 @@ app.post('/api/finance/ap-payment', verifyToken, requireSuperAdmin, async (req, 
     const amt = parseFloat(amount);
     if (!amt || amt <= 0) return res.status(400).json({ success: false, error: 'Amount must be positive.' });
 
-    const VALID_SRC = { '1000': 'Cash on Hand', '1010': 'Cash in Bank' };
-    const srcCode = VALID_SRC[payFromAccount] ? payFromAccount : '1000';
+    const VALID_SRC = { '111000': 'Cash on Hand', '112000': 'Cash in Bank' };
+    const srcCode = VALID_SRC[payFromAccount] ? payFromAccount : '111000';
     const srcName = VALID_SRC[srcCode];
 
     const desc = description?.trim() || `AP payment${vendorName ? ` to ${vendorName}` : ''}`;
     const reference = await mkSeqRef('AP-PAY');
 
     const lines = [
-      { accountCode: '2000', accountName: 'Accounts Payable', debit: amt, credit: 0 },
+      { accountCode: '220000', accountName: 'Accounts Payable', debit: amt, credit: 0 },
       { accountCode: srcCode, accountName: srcName,           debit: 0,   credit: amt },
     ];
     assertBalanced(lines, reference);
@@ -2983,7 +3005,7 @@ app.get('/api/reports/pnl', verifyToken, requireSuperAdmin, async (req, res) => 
       const expBalance = (r.totalDebit || 0) - (r.totalCredit || 0); // expense = debit-balance
 
       if (!meta) continue;
-      if (meta.type === 'revenue') {
+      if (meta.type === 'revenue' || meta.type === 'other-income') {
         revenue.push({ code, name: meta.name, amount: +balance.toFixed(2) });
         totalRevenue += balance;
       } else if (meta.type === 'contra-revenue') {
@@ -3067,7 +3089,7 @@ app.get('/api/reports/balance-sheet', verifyToken, requireSuperAdmin, async (req
         const bal = credit - debit;
         equity.push({ code, name: meta.name, amount: +bal.toFixed(2) });
         totalEquity += bal;
-      } else if (meta.type === 'revenue') {
+      } else if (meta.type === 'revenue' || meta.type === 'other-income') {
         retainedEarnings += (credit - debit);
       } else if (meta.type === 'contra-revenue') {
         retainedEarnings -= (debit - credit);
@@ -3075,7 +3097,7 @@ app.get('/api/reports/balance-sheet', verifyToken, requireSuperAdmin, async (req
         retainedEarnings -= (debit - credit);
       }
     }
-    equity.push({ code: '3900', name: 'Retained Earnings (computed)', amount: +retainedEarnings.toFixed(2) });
+    equity.push({ code: '330000', name: 'Retained Earnings (computed)', amount: +retainedEarnings.toFixed(2) });
     totalEquity += retainedEarnings;
 
     const totalLiabAndEquity = totalLiabilities + totalEquity;
@@ -3388,12 +3410,12 @@ app.post('/api/shifts/end', verifyToken, async (req, res) => {
     if (Math.abs(variance) > 0.001) {
       const varLines = variance < 0
         ? [ // Short: cashier is missing money
-            { accountCode: '5010', accountName: 'Cash Short & Over Expense', debit: Math.abs(variance), credit: 0 },
-            { accountCode: '1000', accountName: 'Cash on Hand', debit: 0, credit: Math.abs(variance) },
+            { accountCode: '930000', accountName: 'Cash Short & Over Expense', debit: Math.abs(variance), credit: 0 },
+            { accountCode: '111000', accountName: 'Cash on Hand', debit: 0, credit: Math.abs(variance) },
           ]
         : [ // Over: cashier has extra money
-            { accountCode: '1000', accountName: 'Cash on Hand', debit: variance, credit: 0 },
-            { accountCode: '4020', accountName: 'Cash Short & Over Income', debit: 0, credit: variance },
+            { accountCode: '111000', accountName: 'Cash on Hand', debit: variance, credit: 0 },
+            { accountCode: '830000', accountName: 'Cash Short & Over Income', debit: 0, credit: variance },
           ];
       await JournalEntry.create({
         reference: await mkSeqRef('SHIFT-VAR'),
@@ -3437,8 +3459,8 @@ app.post('/api/bank-deposits', verifyToken, async (req, res) => {
       reference: depRef,
       description: `Bank deposit — ${shift.cashierName}${reference ? ` (${reference})` : ''}`,
       lines: [
-        { accountCode: '1010', accountName: 'Cash in Bank', debit: depositAmount, credit: 0 },
-        { accountCode: '1000', accountName: 'Cash on Hand',  debit: 0, credit: depositAmount },
+        { accountCode: '112000', accountName: 'Cash in Bank', debit: depositAmount, credit: 0 },
+        { accountCode: '111000', accountName: 'Cash on Hand',  debit: 0, credit: depositAmount },
       ],
       totalDebit: depositAmount,
       totalCredit: depositAmount,
@@ -3758,8 +3780,8 @@ app.post('/api/inventory/spoilage/:id', verifyToken, async (req, res) => {
         reference: spoilRef,
         description: `Spoilage/Waste — ${spoilQty}${item.unit} of ${item.itemName} (${reason})`,
         lines: [
-          { accountCode: '5100', accountName: 'Spoilage, Variance & Waste Expense', debit: spoilageCost, credit: 0 },
-          { accountCode: '1500', accountName: 'Inventory Asset', debit: 0, credit: spoilageCost }
+          { accountCode: '535000', accountName: 'Spoilage, Variance & Waste Expense', debit: spoilageCost, credit: 0 },
+          { accountCode: '130000', accountName: 'Inventory Asset', debit: 0, credit: spoilageCost }
         ],
         totalDebit: spoilageCost,
         totalCredit: spoilageCost
@@ -4317,7 +4339,7 @@ app.post('/api/orders/:id/refund', verifyToken, requireSuperAdmin, async (req, r
     const reference = mkRef('REFUND', order.orderNumber);
     const creditAcct = debitAccountFor(order.paymentMethod);
     const lines = [
-      { accountCode: '4000', accountName: 'Sales Revenue (Non-VAT)', debit: amt,  credit: 0   },
+      { accountCode: '410000', accountName: 'Sales Revenue (Non-VAT)', debit: amt,  credit: 0   },
       { accountCode: creditAcct.code, accountName: creditAcct.name,  debit: 0,    credit: amt },
     ];
     assertBalanced(lines, reference);
@@ -4451,7 +4473,7 @@ const RevolvingFundTxSchema = new mongoose.Schema({
   type:        { type: String, enum: ['disbursement', 'replenishment', 'adjustment'], required: true },
   amount:      { type: Number, required: true },       // always positive
   description: { type: String, required: true },
-  categoryCode:{ type: String, default: '6090' },      // expense account for disbursements
+  categoryCode:{ type: String, default: '760000' },      // expense account for disbursements
   performedBy: { type: String },
   date:        { type: Date, default: Date.now },
   balanceAfter:{ type: Number },                       // snapshot of fund balance after this tx
@@ -4480,8 +4502,8 @@ app.post('/api/revolving-funds', verifyToken, requireSuperAdmin, async (req, res
       return res.status(400).json({ success: false, error: 'Fund name and a positive initial amount are required.' });
 
     // "Paid from" — the cash account the fund is seeded out of (not from thin air).
-    const validSources = { '1000': 'Cash on Hand', '1010': 'Cash in Bank' };
-    const srcCode = validSources[sourceAccount] ? sourceAccount : '1000';
+    const validSources = { '111000': 'Cash on Hand', '112000': 'Cash in Bank' };
+    const srcCode = validSources[sourceAccount] ? sourceAccount : '111000';
     const srcName = validSources[srcCode];
     const amt = Number(initialAmount);
 
@@ -4496,7 +4518,7 @@ app.post('/api/revolving-funds', verifyToken, requireSuperAdmin, async (req, res
     const je = await JournalEntry.create({
       date: new Date(), description: `Revolving Fund established: ${name} (from ${srcName})`,
       lines: [
-        { accountCode: '1050', accountName: 'Petty Cash / Revolving Fund', debit: amt, credit: 0 },
+        { accountCode: '114000', accountName: 'Petty Cash / Revolving Fund', debit: amt, credit: 0 },
         { accountCode: srcCode, accountName: srcName,                      debit: 0, credit: amt },
       ],
       totalDebit: amt, totalCredit: amt,
@@ -4532,7 +4554,7 @@ app.post('/api/revolving-funds/:id/disburse', verifyToken, async (req, res) => {
     if (amt > fund.currentBalance)
       return res.status(400).json({ success: false, error: `Insufficient fund balance. Available: ₱${fund.currentBalance.toFixed(2)}` });
 
-    const expCode = categoryCode || '6090';
+    const expCode = categoryCode || '760000';
     const { ACCOUNTS } = await import('./lib/chartOfAccounts.js');
     const expName  = ACCOUNTS[expCode]?.name || 'Other Operating Expenses';
 
@@ -4544,7 +4566,7 @@ app.post('/api/revolving-funds/:id/disburse', verifyToken, async (req, res) => {
       date: new Date(), description: `Revolving Fund disbursement — ${fund.name}: ${description}`,
       lines: [
         { accountCode: expCode, accountName: expName,                    debit: amt, credit: 0 },
-        { accountCode: '1050',  accountName: 'Petty Cash / Revolving Fund', debit: 0, credit: amt },
+        { accountCode: '114000',  accountName: 'Petty Cash / Revolving Fund', debit: 0, credit: amt },
       ],
       totalDebit: amt, totalCredit: amt,
       reference: await mkSeqRef('RF-OUT'),
@@ -4572,9 +4594,9 @@ app.post('/api/revolving-funds/:id/replenish', verifyToken, requireSuperAdmin, a
     if (!fund || !fund.isActive) return res.status(404).json({ success: false, error: 'Fund not found.' });
 
     const { amount, note, sourceAccount } = req.body;
-    // sourceAccount: '1000' = Cash on Hand (default), '1010' = Cash in Bank
-    const validSources = { '1000': 'Cash on Hand', '1010': 'Cash in Bank' };
-    const srcCode = validSources[sourceAccount] ? sourceAccount : '1000';
+    // sourceAccount: '111000' = Cash on Hand (default), '112000' = Cash in Bank
+    const validSources = { '111000': 'Cash on Hand', '112000': 'Cash in Bank' };
+    const srcCode = validSources[sourceAccount] ? sourceAccount : '111000';
     const srcName = validSources[srcCode];
 
     // If amount not specified, replenish back to full initialAmount
@@ -4591,7 +4613,7 @@ app.post('/api/revolving-funds/:id/replenish', verifyToken, requireSuperAdmin, a
       date: new Date(),
       description: `Revolving Fund replenishment — ${fund.name} (from ${srcName})${note ? ': ' + note : ''}`,
       lines: [
-        { accountCode: '1050', accountName: 'Petty Cash / Revolving Fund', debit: amt, credit: 0 },
+        { accountCode: '114000', accountName: 'Petty Cash / Revolving Fund', debit: amt, credit: 0 },
         { accountCode: srcCode,  accountName: srcName,                      debit: 0, credit: amt },
       ],
       totalDebit: amt, totalCredit: amt,

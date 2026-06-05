@@ -28,16 +28,16 @@ export function assertBalanced(lines, ctx = '') {
 // Receivable (1200) until the merchant verifies the money has landed and
 // settles the receivable via /api/orders/:id/settle-ar.
 export function debitAccountFor(paymentMethod) {
-  if (paymentMethod === 'Cash') return { code: '1000', name: 'Cash on Hand' };
-  return { code: '1200', name: 'Accounts Receivable' };
+  if (paymentMethod === 'Cash') return { code: '111000', name: 'Cash on Hand' };
+  return { code: '120000', name: 'Accounts Receivable' };
 }
 
 // Cash-class accounts that the operator can "settle into" once the money
 // arrives. Used by the A/R settlement modal.
 export const SETTLE_DESTINATIONS = [
-  { code: '1000', name: 'Cash on Hand',  match: ['Cash'] },
-  { code: '1010', name: 'Cash in Bank',  match: ['Bank Transfer'] },
-  { code: '1015', name: 'E-Wallet',      match: ['GCash', 'Maya', 'Maribank', 'E-Wallet', 'Other E-Wallet'] },
+  { code: '111000', name: 'Cash on Hand',  match: ['Cash'] },
+  { code: '112000', name: 'Cash in Bank',  match: ['Bank Transfer'] },
+  { code: '113000', name: 'E-Wallet',      match: ['GCash', 'Maya', 'Maribank', 'E-Wallet', 'Other E-Wallet'] },
 ];
 
 // Suggest which cash account should receive the settlement based on the
@@ -48,9 +48,9 @@ export function suggestedSettleAccount(paymentMethod) {
   }
   // Delivery partners default to Cash in Bank (typical payout channel)
   if (['Grab Delivery', 'Foodpanda', 'Manual Delivery'].includes(paymentMethod)) {
-    return { code: '1010', name: 'Cash in Bank' };
+    return { code: '112000', name: 'Cash in Bank' };
   }
-  return { code: '1000', name: 'Cash on Hand' };
+  return { code: '111000', name: 'Cash on Hand' };
 }
 
 // Non-VAT gross receipts: total collected + discount given.
