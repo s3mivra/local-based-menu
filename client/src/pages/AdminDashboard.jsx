@@ -1,18 +1,27 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { io } from 'socket.io-client';
 import { Menu, Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, TrendingDown, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, AlertTriangle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Check, Clock, Coffee, Minus, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Building2, Printer, ArrowUp, ArrowDown, Gift, XCircle, Zap, BarChart2, CreditCard, Banknote, Smartphone, Truck, Bell, ShieldCheck, Search, Tag, Wifi, WifiOff, CloudOff } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { usePwa } from '../lib/usePwa';
 import { queueOrder } from '../lib/pwa';
 import * as auth from '../lib/auth';
-import AnalyticsTab  from '../components/tabs/AnalyticsTab';
-import OrdersTab     from '../components/tabs/OrdersTab';
-import HistoryTab    from '../components/tabs/HistoryTab';
-import InventoryTab  from '../components/tabs/InventoryTab';
-import LedgerTab     from '../components/tabs/LedgerTab';
-import PricingTab    from '../components/tabs/PricingTab';
-import AuditTab      from '../components/tabs/AuditTab';
-import ProductsTab   from '../components/tabs/ProductsTab';
+// Tabs are lazy-loaded so only the active tab's code ships on first dashboard
+// paint; the rest load on demand when the operator opens them.
+const AnalyticsTab  = lazy(() => import('../components/tabs/AnalyticsTab'));
+const OrdersTab     = lazy(() => import('../components/tabs/OrdersTab'));
+const HistoryTab    = lazy(() => import('../components/tabs/HistoryTab'));
+const InventoryTab  = lazy(() => import('../components/tabs/InventoryTab'));
+const LedgerTab     = lazy(() => import('../components/tabs/LedgerTab'));
+const PricingTab    = lazy(() => import('../components/tabs/PricingTab'));
+const AuditTab      = lazy(() => import('../components/tabs/AuditTab'));
+const ProductsTab   = lazy(() => import('../components/tabs/ProductsTab'));
+
+// Small fallback shown while a tab chunk loads.
+const TabFallback = () => (
+  <div className="p-12 flex items-center justify-center text-white/40 text-sm gap-2">
+    <RefreshCw size={16} className="animate-spin" /> Loading…
+  </div>
+);
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5002';
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
 
@@ -4019,21 +4028,21 @@ const updateStatus = async (orderId, newStatus) => {
       )}
 
       {/* --- ANALYTICS DASHBOARD TAB --- */}
-      {activeTab === 'analytics' && <AnalyticsTab ctx={ctx} />}
+      {activeTab === 'analytics' && <Suspense fallback={<TabFallback />}><AnalyticsTab ctx={ctx} /></Suspense>}
 
       {/* --- ACTIVE ORDERS TAB (Kitchen & Bar View) --- */}
       {/* --- ACTIVE ORDERS TAB (Kitchen & Bar View) --- */}
-      {activeTab === 'orders' && <OrdersTab ctx={ctx} />}
+      {activeTab === 'orders' && <Suspense fallback={<TabFallback />}><OrdersTab ctx={ctx} /></Suspense>}
 
       {/* --- SALES HISTORY & REGISTER TAB --- */}
-      {activeTab === 'history' && <HistoryTab ctx={ctx} />}
+      {activeTab === 'history' && <Suspense fallback={<TabFallback />}><HistoryTab ctx={ctx} /></Suspense>}
 
 
       {/* --- INVENTORY TAB --- */}
-      {activeTab === 'inventory' && <InventoryTab ctx={ctx} />}
+      {activeTab === 'inventory' && <Suspense fallback={<TabFallback />}><InventoryTab ctx={ctx} /></Suspense>}
 
       {/* --- ACCOUNTING & LEDGER TAB --- */}
-      {activeTab === 'ledger' && <LedgerTab ctx={ctx} />}
+      {activeTab === 'ledger' && <Suspense fallback={<TabFallback />}><LedgerTab ctx={ctx} /></Suspense>}
 
       {/* ===== REVOLVING FUND MODALS ===== */}
 
@@ -4324,13 +4333,13 @@ const updateStatus = async (orderId, newStatus) => {
       )}
 
       {/* --- PRICING & DISCOUNTS TAB --- */}
-      {activeTab === 'pricing' && <PricingTab ctx={ctx} />}
+      {activeTab === 'pricing' && <Suspense fallback={<TabFallback />}><PricingTab ctx={ctx} /></Suspense>}
 
 {/* --- AUDIT REPORT --- */}
-      {activeTab === 'audit' && <AuditTab ctx={ctx} />}
+      {activeTab === 'audit' && <Suspense fallback={<TabFallback />}><AuditTab ctx={ctx} /></Suspense>}
 
 {/* --- MENU SETUP (PRODUCTS/CATEGORIES) --- */}
-      {activeTab === 'products' && <ProductsTab ctx={ctx} />}
+      {activeTab === 'products' && <Suspense fallback={<TabFallback />}><ProductsTab ctx={ctx} /></Suspense>}
       
       {/* --- STOCK MOVEMENT HISTORY MODAL --- */}
       {historyModalOpen && (() => {
