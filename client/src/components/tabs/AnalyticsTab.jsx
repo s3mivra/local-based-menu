@@ -211,7 +211,7 @@ export default function AnalyticsTab({ ctx }) {
                         </span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                        {[['Daily Burn', `${((item.dailyAvg||0)/d.mult).toFixed(2)} ${d.displayUnit}`], ['Lasts', item.daysLeft === Infinity || !isFinite(item.daysLeft) ? '∞' : `${item.daysLeft}d`], ['Buy 1wk', `${((item.weeklyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`], ['Buy 1mo', `${((item.monthlyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`]].map(([lbl, val]) => (
+                        {[['Daily Burn', `${((item.dailyAvg||0)/d.mult).toFixed(2)} ${d.unit}`], ['Lasts', item.daysLeft === Infinity || !isFinite(item.daysLeft) ? '∞' : `${item.daysLeft}d`], ['Buy 1wk', `${((item.weeklyNeed||0)/d.mult).toFixed(2)} ${d.unit}`], ['Buy 1mo', `${((item.monthlyNeed||0)/d.mult).toFixed(2)} ${d.unit}`]].map(([lbl, val]) => (
                           <div key={lbl} className="bg-page-bg p-2 rounded flex flex-col items-center border border-gray-800/50">
                             <p className="text-[8px] text-gray-500 uppercase font-bold tracking-widest mb-1 text-center leading-tight">{lbl}</p>
                             <p className="text-xs font-black text-white">{val}</p>
@@ -234,7 +234,7 @@ export default function AnalyticsTab({ ctx }) {
                       <div key={item._id} className="flex justify-between items-center text-sm">
                         <div className="flex flex-col min-w-0 pr-2">
                           <span className="text-gray-300 truncate font-semibold">{item.itemName}</span>
-                          <span className="text-gray-600 text-[10px]">{(Number(item.stockQty)/effectiveDisplay(item).mult).toFixed(2)} {effectiveDisplay(item).displayUnit} left</span>
+                          <span className="text-gray-600 text-[10px]">{(Number(item.stockQty)/effectiveDisplay(item).mult).toFixed(2)} {effectiveDisplay(item).unit} left</span>
                         </div>
                         <span className={`font-black text-xs whitespace-nowrap px-2 py-1 rounded ${item.daysOfSupply <= 3 ? 'bg-red-900/40 text-red-400 animate-pulse' : item.daysOfSupply <= 7 ? 'bg-yellow-900/30 text-yellow-400' : 'bg-orange-900/20 text-orange-400'}`}>
                           {item.daysOfSupply <= 0 ? 'OUT' : `~${Math.floor(item.daysOfSupply)}d left`}
@@ -254,7 +254,7 @@ export default function AnalyticsTab({ ctx }) {
                       <div key={item._id} className="flex justify-between items-center text-sm">
                         <div className="flex flex-col min-w-0 pr-2">
                           <span className="text-gray-300 truncate font-semibold">{item.itemName}</span>
-                          <span className="text-gray-600 text-[10px]">{(Number(item.stockQty)/effectiveDisplay(item).mult).toFixed(2)} {effectiveDisplay(item).displayUnit}</span>
+                          <span className="text-gray-600 text-[10px]">{(Number(item.stockQty)/effectiveDisplay(item).mult).toFixed(2)} {effectiveDisplay(item).unit}</span>
                         </div>
                         <div className="flex flex-col items-end gap-0.5">
                           <span className="text-gray-400 font-bold text-xs">{isFinite(item.daysOfSupply) ? `~${Math.floor(item.daysOfSupply)}d supply` : '∞ supply'}</span>

@@ -2539,24 +2539,24 @@ const updateStatus = async (orderId, newStatus) => {
     // High Velocity & Forecast
     sect('High Velocity & Forecast', ['Item', 'Daily Burn', 'Lasts', 'Buy 1wk', 'Buy 1mo', 'Trend'],
       (ad.mostUsedStock || []).map(i => { const d = du(i); return [
-        i.name, `${((i.dailyAvg||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        i.name, `${((i.dailyAvg||0)/d.mult).toFixed(2)} ${d.unit}`,
         (!isFinite(i.daysLeft) ? '∞' : `${i.daysLeft}d`),
-        `${((i.weeklyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
-        `${((i.monthlyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        `${((i.weeklyNeed||0)/d.mult).toFixed(2)} ${d.unit}`,
+        `${((i.monthlyNeed||0)/d.mult).toFixed(2)} ${d.unit}`,
         `${i.trend > 0.1 ? 'rising' : i.trend < -0.1 ? 'easing' : 'stable'} ${Math.abs((i.trend||0)*100).toFixed(0)}%`,
       ]; }), [180, 130, 30]);
 
     // Low Stock (Risk)
     sect('Low Stock (Risk)', ['Item', 'On Hand', 'Days of Supply'],
       (ad.lowestStock || []).map(i => { const d = du(i); return [
-        i.itemName, `${(Number(i.stockQty||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        i.itemName, `${(Number(i.stockQty||0)/d.mult).toFixed(2)} ${d.unit}`,
         (i.daysOfSupply <= 0 ? 'OUT' : `~${Math.floor(i.daysOfSupply)}d`),
       ]; }), [180, 50, 50]);
 
     // Overstock Watch
     sect('Overstock Watch', ['Item', 'On Hand', 'Days of Supply', 'Tied-up Capital (PHP)'],
       (ad.highestStock || []).map(i => { const d = du(i); return [
-        i.itemName, `${(Number(i.stockQty||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        i.itemName, `${(Number(i.stockQty||0)/d.mult).toFixed(2)} ${d.unit}`,
         (isFinite(i.daysOfSupply) ? `~${Math.floor(i.daysOfSupply)}d` : '∞'),
         pdfMoney(i.tiedUpCapital || 0),
       ]; }), [90, 90, 90]);
