@@ -1211,11 +1211,12 @@ app.get('/api/products', async (req, res) => {
       products.forEach(p => {
         const recipe = p.baseRecipe || [];
         if (recipe.length === 0) { p.stockAvailable = true; return; }
-        // Every linked ingredient must have stock > 0
+        // Every linked ingredient must have enough stock to make at least one unit.
         p.stockAvailable = recipe.every(ing => {
           if (!ing.invId) return true;                  // unlinked — don't block the product
           const qty = invMap[ing.invId];
-          return qty !== undefined && qty > 0;
+          const need = Number(ing.qty) || 0;
+          return qty !== undefined && qty > 0 && qty >= need;
         });
       });
     } else {
