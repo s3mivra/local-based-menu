@@ -377,6 +377,13 @@ export default function AdminDashboard() {
     start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10),
     end: new Date().toISOString().slice(0,10)
   });
+  // Monthly P&L (per-month columns + ratios; period & matrix views)
+  const [pnlMonthly, setPnlMonthly] = useState(null);
+  const [pnlmRange, setPnlmRange] = useState({
+    start: new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0,10),
+    end: new Date().toISOString().slice(0,10)
+  });
+  const [pnlmView, setPnlmView] = useState('period'); // 'period' | 'matrix'
   const [bsData, setBsData] = useState(null);
   const [arOutstanding, setArOutstanding] = useState({ orders: [], totalOutstanding: 0 });
   const [expenseModal, setExpenseModal] = useState(false);
@@ -1240,6 +1247,48 @@ const updateStatus = async (orderId, newStatus) => {
       const data = await res.json();
       if (data.success) setPnlData(data);
     } catch (err) { console.error('fetchPnl', err); }
+  };
+  const fetchPnlMonthly = async () => {
+    if (activeAdmin?.role !== 'superadmin') return;
+    try {
+      const res = await apiFetch(`/api/reports/pnl-monthly?start=${pnlmRange.start}&end=${pnlmRange.end}`);
+      const data = await res.json();
+      if (data.success) setPnlMonthly(data);
+    } catch (err) { console.error('fetchPnlMonthly', err); }
+  };
+  const exportPnlMonthlyPDF = async () => {
+    if (!pnlMonthly) return alert('Load the Monthly P&L first.');
+    const { jsPDF, autoTable } = await loadPdfLibs();
+    const m = pnlMonthly;
+    const doc = new jsPDF(pnlmView === 'matrix' ? 'landscape' : 'portrait');
+    doc.setFontSize(16); doc.text(`${BIZ_NAME} — Profit & Loss`, 14, 14);
+    doc.setFontSize(9); doc.text(`${pnlmRange.start} to ${pnlmRange.end}  ·  ${pnlmView === 'matrix' ? 'Monthly' : 'Period'}`, 14, 20);
+    const SECTIONS = [['revenue','REVENUE'],['contra','LESS: DISCOUNTS/RETURNS'],['cogs','COST OF SALES'],['opex','OPERATING & OTHER EXPENSES']];
+    const nr = m.grandTotals.netRevenue || 0;
+    if (pnlmView === 'matrix') {
+      const head = ['Account', ...m.months, 'Total'];
+      const body = [];
+      for (const [sec, label] of SECTIONS) {
+        body.push([{ content: label, colSpan: head.length, styles: { fontStyle: 'bold', fillColor: [236,241,227] } }]);
+        m.accounts.filter(a => a.section === sec).forEach(a => body.push([`  ${a.code} ${a.name}`, ...m.months.map(mm => pdfMoney(a.byMonth[mm] || 0)), pdfMoney(a.total)]));
+      }
+      body.push(['NET INCOME', ...m.months.map(mm => pdfMoney(m.monthTotals.netIncome[mm] || 0)), pdfMoney(m.grandTotals.netIncome)]);
+      autoTable(doc, { startY: 24, head: [head], body, styles: { fontSize: 6 }, headStyles: { fillColor: [111,135,77] } });
+    } else {
+      const head = ['Account', 'Amount', '% Rev', '% Parent'];
+      const parentTotals = {};
+      m.accounts.forEach(a => { parentTotals[a.parentCode] = (parentTotals[a.parentCode] || 0) + a.total; });
+      const body = [];
+      for (const [sec, label] of SECTIONS) {
+        const rows = m.accounts.filter(a => a.section === sec);
+        if (!rows.length) continue;
+        body.push([{ content: label, colSpan: 4, styles: { fontStyle: 'bold', fillColor: [236,241,227] } }]);
+        rows.forEach(a => body.push([`  ${a.code} ${a.name}`, pdfMoney(a.total), nr ? `${(a.total/nr*100).toFixed(1)}%` : '—', parentTotals[a.parentCode] ? `${(a.total/parentTotals[a.parentCode]*100).toFixed(1)}%` : '—']));
+      }
+      body.push(['NET INCOME', pdfMoney(m.grandTotals.netIncome), nr ? `${(m.grandTotals.netIncome/nr*100).toFixed(1)}%` : '—', '']);
+      autoTable(doc, { startY: 24, head: [head], body, styles: { fontSize: 8 }, headStyles: { fillColor: [111,135,77] }, columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } } });
+    }
+    doc.save(`PnL-${pnlmRange.start}_to_${pnlmRange.end}.pdf`);
   };
   const fetchBalanceSheet = async () => {
     if (activeAdmin?.role !== 'superadmin') return;
@@ -3745,6 +3794,7 @@ const updateStatus = async (orderId, newStatus) => {
     // ── Ledger sub-tabs ─────────────────────────────────────────────────────
     ledgerSubTab, setLedgerSubTab, jeForm, setJeForm, cashOnHand, standardAccounts,
     pnlData, pnlRange, setPnlRange, fetchPnl, bsData, fetchBalanceSheet,
+    pnlMonthly, pnlmRange, setPnlmRange, pnlmView, setPnlmView, fetchPnlMonthly, exportPnlMonthlyPDF,
     arOutstanding, fetchArOutstanding,
     expenseModal, setExpenseModal, expenseCategories, fetchExpenseCategories,
     settleModal, setSettleModal, settleForm, setSettleForm, settleSubmitting, setSettleSubmitting,

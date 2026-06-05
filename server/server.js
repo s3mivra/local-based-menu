@@ -3047,6 +3047,82 @@ app.get('/api/reports/pnl', verifyToken, requireSuperAdmin, async (req, res) => 
 });
 
 // ============================================================
+// MONTHLY P&L — per-account amounts bucketed by month (parent/child + ratios computed client-side)
+// ============================================================
+app.get('/api/reports/pnl-monthly', verifyToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    const startDate = start ? new Date(start) : new Date(new Date().getFullYear(), 0, 1);
+    const endDate = end ? new Date(end) : new Date();
+    endDate.setHours(23, 59, 59, 999);
+
+    const agg = await JournalEntry.aggregate([
+      { $match: { date: { $gte: startDate, $lte: endDate } } },
+      { $unwind: '$lines' },
+      { $group: {
+        _id: { code: '$lines.accountCode', ym: { $dateToString: { format: '%Y-%m', date: '$date' } } },
+        name:   { $first: '$lines.accountName' },
+        debit:  { $sum: { $ifNull: ['$lines.debit', 0] } },
+        credit: { $sum: { $ifNull: ['$lines.credit', 0] } },
+      }},
+    ]);
+
+    // Ordered list of YYYY-MM buckets spanning the range (incl. empty months).
+    const months = [];
+    { const d = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      const last = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+      while (d <= last) { months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); d.setMonth(d.getMonth() + 1); } }
+
+    const sectionOf = (meta) => {
+      if (!meta) return null;
+      if (meta.type === 'revenue' || meta.type === 'other-income') return 'revenue';
+      if (meta.type === 'contra-revenue') return 'contra';
+      if (meta.type === 'expense' && meta.cogs) return 'cogs';
+      if (meta.type === 'expense') return 'opex';
+      return null; // balance-sheet accounts excluded from P&L
+    };
+
+    const accounts = {};
+    for (const r of agg) {
+      const { code, ym } = r._id;
+      const meta = ACCOUNTS[code];
+      const section = sectionOf(meta);
+      if (!section) continue;
+      const amt = section === 'revenue' ? (r.credit - r.debit) : (r.debit - r.credit);
+      if (!accounts[code]) {
+        const parentCode = meta.parent || code;
+        accounts[code] = { code, name: meta.name || r.name, section, parentCode,
+          parentName: ACCOUNTS[parentCode]?.name || meta.name || r.name, byMonth: {}, total: 0 };
+      }
+      accounts[code].byMonth[ym] = +( (accounts[code].byMonth[ym] || 0) + amt ).toFixed(2);
+      accounts[code].total = +(accounts[code].total + amt).toFixed(2);
+    }
+    const accountList = Object.values(accounts).sort((a, b) => a.code.localeCompare(b.code));
+
+    const blank = () => Object.fromEntries(months.map(m => [m, 0]));
+    const sec = { revenue: blank(), contra: blank(), cogs: blank(), opex: blank() };
+    for (const a of accountList) for (const [m, v] of Object.entries(a.byMonth)) if (sec[a.section] && m in sec[a.section]) sec[a.section][m] += v;
+    const netRevenue = blank(), grossProfit = blank(), netIncome = blank();
+    for (const m of months) {
+      netRevenue[m]  = +(sec.revenue[m] - sec.contra[m]).toFixed(2);
+      grossProfit[m] = +(netRevenue[m] - sec.cogs[m]).toFixed(2);
+      netIncome[m]   = +(grossProfit[m] - sec.opex[m]).toFixed(2);
+      for (const k of ['revenue', 'contra', 'cogs', 'opex']) sec[k][m] = +sec[k][m].toFixed(2);
+    }
+    const sum = (o) => +Object.values(o).reduce((s, v) => s + v, 0).toFixed(2);
+
+    res.json({
+      success: true, period: { start: startDate, end: endDate }, months, accounts: accountList,
+      monthTotals: { revenue: sec.revenue, contra: sec.contra, cogs: sec.cogs, opex: sec.opex, netRevenue, grossProfit, netIncome },
+      grandTotals: {
+        revenue: sum(sec.revenue), contra: sum(sec.contra), netRevenue: sum(netRevenue),
+        cogs: sum(sec.cogs), grossProfit: sum(grossProfit), opex: sum(sec.opex), netIncome: sum(netIncome),
+      },
+    });
+  } catch (err) { log.error({ err }, 'pnl-monthly failed'); res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }
+});
+
+// ============================================================
 // BALANCE SHEET (point-in-time: as-of date)
 // ============================================================
 app.get('/api/reports/balance-sheet', verifyToken, requireSuperAdmin, async (req, res) => {

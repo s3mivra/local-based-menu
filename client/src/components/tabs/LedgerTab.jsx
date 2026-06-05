@@ -42,7 +42,7 @@ export default function LedgerTab({ ctx }) {
     itemsPerPage, jeForm, journalEntries, ledgerSubTab, navMode,
     newDiscount, openEditInventory, openProductModal, orderFilter, orders,
     ordersItemsPerPage, ordersPage, parseImportFile, paymentSelections, peso,
-    physicalCounts, pnlData, pnlRange, posActiveAddOns, posActiveSize,
+    physicalCounts, pnlData, pnlRange, pnlMonthly, pnlmRange, setPnlmRange, pnlmView, setPnlmView, fetchPnlMonthly, exportPnlMonthlyPDF, posActiveAddOns, posActiveSize,
     posCart, posCashTendered, posCategory, posCheckoutModal, posCustomerName,
     posCustomerPhone, posDeliveryAddress, posDeliveryFee, posDeliveryFeeNum, posDiscountAmt,
     posDiscountType, posDiscountValue, posGrandTotal, posPage, posPayment,
@@ -103,6 +103,7 @@ export default function LedgerTab({ ctx }) {
             {[
               ['journal',   'Journal',          FileText],
               ['pnl',       'Profit & Loss',    TrendingUp],
+              ['pnlmonthly','Monthly P&L',      BarChart3],
               ['balance',   'Balance Sheet',    BarChart2],
               ['ar',        'A/R Outstanding',  Truck],
               ['ap',        'A/P Payables',     CreditCard],
@@ -120,6 +121,7 @@ export default function LedgerTab({ ctx }) {
                   if (id === 'expenses') { fetchExpenseCategories(); setExpenseModal(true); return; }
                   setLedgerSubTab(id);
                   if (id === 'pnl' && !pnlData) fetchPnl();
+                  if (id === 'pnlmonthly' && !pnlMonthly) fetchPnlMonthly();
                   if (id === 'balance' && !bsData) fetchBalanceSheet();
                   if (id === 'ar') fetchArOutstanding();
                   if (id === 'ap') fetchApData();
@@ -350,6 +352,77 @@ export default function LedgerTab({ ctx }) {
               )}
             </div>
           )}
+
+          {/* ===== MONTHLY P&L (period + matrix views, common-size & share-of-parent ratios) ===== */}
+          {ledgerSubTab === 'pnlmonthly' && (() => {
+            const SECTIONS = [['revenue','Revenue'],['contra','Less: Discounts / Returns'],['cogs','Cost of Sales'],['opex','Operating & Other Expenses']];
+            const m = pnlMonthly;
+            const nr = m?.grandTotals?.netRevenue || 0;
+            const parentTotals = {};
+            (m?.accounts || []).forEach(a => { parentTotals[a.parentCode] = (parentTotals[a.parentCode] || 0) + a.total; });
+            const peso = (n) => `₱${(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            return (
+            <div className="space-y-4 animate-fade-in">
+              <div className="flex flex-wrap gap-3 items-center">
+                <input type="date" value={pnlmRange.start} onChange={e => setPnlmRange(p => ({ ...p, start: e.target.value }))} className="bg-surface border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50" />
+                <span className="text-white/30 font-bold text-sm">→</span>
+                <input type="date" value={pnlmRange.end} onChange={e => setPnlmRange(p => ({ ...p, end: e.target.value }))} className="bg-surface border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50" />
+                <button onClick={fetchPnlMonthly} className="px-5 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:bg-brand/90 transition">Load</button>
+                <div className="flex rounded-xl overflow-hidden border border-white/10">
+                  {[['period','Period'],['matrix','Monthly']].map(([v,lbl]) => (
+                    <button key={v} onClick={() => setPnlmView(v)} className={`px-4 py-2 text-xs font-bold uppercase tracking-wider transition ${pnlmView === v ? 'bg-brand text-white' : 'bg-surface text-white/50 hover:text-white'}`}>{lbl}</button>
+                  ))}
+                </div>
+                {m && <button onClick={exportPnlMonthlyPDF} className="ml-auto bg-white/5 text-white/70 hover:text-white hover:bg-white/10 px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-1.5"><Download size={13}/> PDF</button>}
+              </div>
+
+              {!m ? <p className="text-white/30 text-sm text-center p-6 font-bold">Pick a range and click Load.</p> : (
+                <div className="bg-surface border border-white/8 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
+                      <thead className="text-white/25 text-[10px] font-black uppercase tracking-wider border-b border-white/5">
+                        <tr>
+                          <th className="px-3 py-2.5">Account</th>
+                          {pnlmView === 'matrix'
+                            ? <>{m.months.map(mm => <th key={mm} className="px-3 py-2.5 text-right">{mm}</th>)}<th className="px-3 py-2.5 text-right">Total</th></>
+                            : <><th className="px-3 py-2.5 text-right">Amount</th><th className="px-3 py-2.5 text-right">% Rev</th><th className="px-3 py-2.5 text-right">% Parent</th></>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {SECTIONS.map(([sec, label]) => {
+                          const rows = m.accounts.filter(a => a.section === sec);
+                          if (!rows.length) return null;
+                          const span = pnlmView === 'matrix' ? m.months.length + 2 : 4;
+                          return (
+                            <React.Fragment key={sec}>
+                              <tr className="bg-white/[0.03]"><td colSpan={span} className="px-3 py-2 font-black text-brand uppercase text-[10px] tracking-wider">{label}</td></tr>
+                              {rows.map(a => (
+                                <tr key={a.code} className="border-b border-white/5 hover:bg-white/[0.02]">
+                                  <td className="px-3 py-2 text-white/80 pl-6">{a.code} · {a.name}</td>
+                                  {pnlmView === 'matrix'
+                                    ? <>{m.months.map(mm => <td key={mm} className="px-3 py-2 text-right tabular-nums text-white/70">{a.byMonth[mm] ? peso(a.byMonth[mm]) : '—'}</td>)}<td className="px-3 py-2 text-right tabular-nums font-bold text-white">{peso(a.total)}</td></>
+                                    : <><td className="px-3 py-2 text-right tabular-nums font-bold text-white">{peso(a.total)}</td><td className="px-3 py-2 text-right tabular-nums text-white/50">{nr ? `${(a.total/nr*100).toFixed(1)}%` : '—'}</td><td className="px-3 py-2 text-right tabular-nums text-white/50">{parentTotals[a.parentCode] ? `${(a.total/parentTotals[a.parentCode]*100).toFixed(1)}%` : '—'}</td></>}
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-white/10 bg-brand/5 font-black text-white">
+                          <td className="px-3 py-3 uppercase text-[10px] tracking-wider">Net Income</td>
+                          {pnlmView === 'matrix'
+                            ? <>{m.months.map(mm => <td key={mm} className="px-3 py-3 text-right tabular-nums">{peso(m.monthTotals.netIncome[mm])}</td>)}<td className="px-3 py-3 text-right tabular-nums text-brand">{peso(m.grandTotals.netIncome)}</td></>
+                            : <><td className="px-3 py-3 text-right tabular-nums text-brand">{peso(m.grandTotals.netIncome)}</td><td className="px-3 py-3 text-right tabular-nums">{nr ? `${(m.grandTotals.netIncome/nr*100).toFixed(1)}%` : '—'}</td><td className="px-3 py-3"></td></>}
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+            );
+          })()}
 
           {/* ===== BALANCE SHEET SUB-TAB ===== */}
           {ledgerSubTab === 'balance' && (
