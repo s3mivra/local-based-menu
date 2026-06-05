@@ -2249,7 +2249,7 @@ const updateStatus = async (orderId, newStatus) => {
       const data = await res.json();
       const allHistory = data.success ? data.history : [];
       const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
-      doc.setFontSize(18); doc.text("Daily Inventory & Movement Report", 14, 15);
+      doc.setFontSize(18); doc.text(`${BIZ_NAME} — Daily Inventory & Movement Report`, 14, 15);
       const todayStr = new Date().toLocaleDateString();
       doc.setFontSize(10); doc.text(`Date: ${todayStr} | Generated: ${new Date().toLocaleString()}`, 14, 22);
       
@@ -2284,7 +2284,7 @@ const updateStatus = async (orderId, newStatus) => {
   const exportLedgerToPDF = async () => {
     if (journalEntries.length === 0) return alert("No entries to export.");
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
-    doc.setFontSize(18); doc.text("General Ledger Report", 14, 15);
+    doc.setFontSize(18); doc.text(`${BIZ_NAME} — General Ledger Report`, 14, 15);
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
     let currentY = 30;
     journalEntries.forEach(entry => {
@@ -2310,7 +2310,7 @@ const updateStatus = async (orderId, newStatus) => {
     if (allOrders.length === 0) return alert("No orders to export.");
     
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
-    doc.setFontSize(18); doc.text("Complete Sales History", 14, 15);
+    doc.setFontSize(18); doc.text(`${BIZ_NAME} — Complete Sales History`, 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
     
@@ -2417,7 +2417,7 @@ const updateStatus = async (orderId, newStatus) => {
   const exportDayToPDF = async (dateString, dayOrders) => {
     if (dayOrders.length === 0) return alert("No orders to export.");
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
-    doc.setFontSize(18); doc.text(`Sales Report: ${dateString}`, 14, 15);
+    doc.setFontSize(18); doc.text(`${BIZ_NAME} — Sales Report: ${dateString}`, 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
     
@@ -2487,7 +2487,7 @@ const updateStatus = async (orderId, newStatus) => {
     if (allCompletedOrders.length === 0) return alert("No analytics data to export.");
     
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
-    doc.setFontSize(18); doc.text("Daily Sales Trend & Summary", 14, 15);
+    doc.setFontSize(18); doc.text(`${BIZ_NAME} — Daily Sales Trend & Summary`, 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
     
@@ -2521,7 +2521,7 @@ const updateStatus = async (orderId, newStatus) => {
     if (allCompletedOrders.length === 0) return alert("No orders to export.");
     
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
-    doc.setFontSize(18); doc.text("Monthly Sales Summary", 14, 15);
+    doc.setFontSize(18); doc.text(`${BIZ_NAME} — Monthly Sales Summary`, 14, 15);
     const groupedByMonth = {};
     allCompletedOrders.forEach(o => {
       const month = new Date(o.createdAt).toLocaleString('default', { month: 'long', year: 'numeric' });
