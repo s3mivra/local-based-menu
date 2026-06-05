@@ -2997,27 +2997,23 @@ const updateStatus = async (orderId, newStatus) => {
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
     doc.setFontSize(16); doc.text(`${BIZ_NAME} — Sales Summary`, 14, 14);
     doc.setFontSize(9); doc.text(`${sssRange.start} to ${sssRange.end}  ·  ${sssGroup === 'day' ? 'Per Day' : 'Per Order'}`, 14, 20);
-    const methodLine = (r, keys) => keys.map(k => `${k}: ${pdfMoney(r.methods?.[k] || 0)}`).filter(s => !/: 0\.00$/.test(s)).join('  ');
-    const EW = ['GCash','Maya','Maribank','E-Wallet','Other E-Wallet'];
-    const BK = ['Bank Transfer'];
-    const DL = ['Grab Delivery','Foodpanda','Manual Delivery'];
-    const head = sssGroup === 'day'
-      ? ['Date','Orders','Cash','E-Wallet','Bank','Delivery','Total']
-      : ['Date','Order #','Cash','E-Wallet','Bank','Delivery','Total'];
+    // Dynamic per-method columns — only methods that occurred in the range.
+    const tm = salesSummary.totals?.methods || {};
+    const ALL = ['GCash','Maya','Maribank','E-Wallet','Other E-Wallet','Bank Transfer','Grab Delivery','Foodpanda','Manual Delivery'];
+    const cols = ALL.filter(m => (tm[m] || 0) !== 0);
+    const head = ['Date', sssGroup === 'day' ? 'Orders' : 'Order #', 'Cash', ...cols, 'Total'];
     const body = sssRows.map(r => [
       new Date(r.date).toLocaleDateString(),
       sssGroup === 'day' ? String(r.count) : r.orderNumber,
       pdfMoney(r.cash),
-      pdfMoney(r.ewallet) + (methodLine(r, EW) ? `\n${methodLine(r, EW)}` : ''),
-      pdfMoney(r.bank),
-      pdfMoney(r.delivery) + (methodLine(r, DL) ? `\n${methodLine(r, DL)}` : ''),
+      ...cols.map(m => pdfMoney(r.methods?.[m] || 0)),
       pdfMoney(r.total),
     ]);
     const t = salesSummary.totals || {};
     autoTable(doc, {
       startY: 24, head: [head], body,
-      foot: [[ 'TOTALS', '', pdfMoney(t.cash), pdfMoney(t.ewallet), pdfMoney(t.bank), pdfMoney(t.delivery), pdfMoney(t.total) ]],
-      styles: { fontSize: 8 }, headStyles: { fillColor: [111,135,77] }, footStyles: { fillColor: [61,74,42], textColor: 255 },
+      foot: [[ 'TOTALS', '', pdfMoney(t.cash), ...cols.map(m => pdfMoney(tm[m] || 0)), pdfMoney(t.total) ]],
+      styles: { fontSize: 7 }, headStyles: { fillColor: [111,135,77] }, footStyles: { fillColor: [61,74,42], textColor: 255 },
     });
     doc.save(`Sales-Summary_${sssRange.start}_to_${sssRange.end}.pdf`);
   };
