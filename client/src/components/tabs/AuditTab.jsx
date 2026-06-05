@@ -261,7 +261,7 @@ export default function AuditTab({ ctx }) {
                           <th className="px-5 py-2.5">Date / Time</th>
                           <th className="px-5 py-2.5">Customer</th>
                           <th className="px-5 py-2.5">Type</th>
-                          <th className="px-5 py-2.5">Cashier</th>
+                          <th className="px-5 py-2.5">Applied By</th>
                           <th className="px-5 py-2.5 text-right">Discount Amt</th>
                           <th className="px-5 py-2.5 text-right">Net Total</th>
                         </tr>
@@ -272,7 +272,7 @@ export default function AuditTab({ ctx }) {
                             <td className="px-5 py-2.5 text-xs text-white/40 font-mono">{fmtDate(o.createdAt)}</td>
                             <td className="px-5 py-2.5 text-xs text-white/70 font-bold">{o.customerName || '—'}</td>
                             <td className="px-5 py-2.5 text-xs text-brand/80 font-bold">{o.discountType || 'Promo'}</td>
-                            <td className="px-5 py-2.5 text-xs text-white/40">{o.cashier || '—'}</td>
+                            <td className="px-5 py-2.5 text-xs text-white/40">{o.discountBy || o.cashier || '—'}</td>
                             <td className="px-5 py-2.5 text-xs text-right font-mono text-brand">-₱{(o.discount || 0).toFixed(2)}</td>
                             <td className="px-5 py-2.5 text-xs text-right font-mono text-white/70">₱{(o.total || 0).toFixed(2)}</td>
                           </tr>

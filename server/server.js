@@ -611,7 +611,8 @@ items: [{
   // Strict Accounting Fields
   isVatInclusive: { type: Boolean, default: true }, // Enforces Rule 3 (System-wide standard)
   discountType: { type: String, default: 'None' },  // Enforces Rules 6 & 9
-  
+  discountBy: { type: String },                      // staff who applied the discount (logged-in user, not the order's cashier)
+
   subtotal: { type: Number, default: 0 },           // Gross Sales
   vatableSales: { type: Number, default: 0 },       // Base for VAT
   vatExemptSales: { type: Number, default: 0 },     // Base for SC/PWD
@@ -1639,6 +1640,13 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     if (discountPercent !== undefined) order.discountPercent = discountPercent;
     if (isVatExempt !== undefined) order.isVatExempt = isVatExempt;
     if (discountType !== undefined) order.discountType = discountType;
+
+    // Stamp WHO applied the discount with the logged-in user (not the order's
+    // original cashier, which may be 'System' for QR/customer-created orders).
+    if ((discountPercent !== undefined && discountPercent > 0) ||
+        (Array.isArray(discountedIndices) && discountedIndices.length > 0)) {
+      if (req.user?.name) order.discountBy = req.user.name;
+    }
 
     if (order.isComplimentary) {
         order.discountType = 'Complimentary';
