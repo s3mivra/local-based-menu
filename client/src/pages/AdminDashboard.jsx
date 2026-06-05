@@ -593,7 +593,12 @@ export default function AdminDashboard() {
   };
 
   // Final logout — clears all session data
-  const performLogout = () => {
+  const performLogout = async () => {
+    // Auto clock-out so staff aren't left "clocked in" after ending their shift.
+    // Must run BEFORE the session is revoked (apiFetch still has a valid token here).
+    if (clockStatus.isClockedIn) {
+      try { await apiFetch('/api/clock/out', { method: 'POST', body: '{}' }); } catch { /* non-blocking */ }
+    }
     auth.logout(API_URL); // revoke refresh session server-side + clear cookie
     auth.clearToken();
     setIsAuthenticated(false);
@@ -2496,7 +2501,7 @@ const updateStatus = async (orderId, newStatus) => {
     if (allCompletedOrders.length === 0) return alert("No analytics data to export.");
     
     const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
-    doc.setFontSize(18); doc.text(`${BIZ_NAME} — Daily Sales Trend & Summary`, 14, 15);
+    doc.setFontSize(18); doc.text(`${BIZ_NAME} — Analytics Report`, 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
     
@@ -2521,7 +2526,42 @@ const updateStatus = async (orderId, newStatus) => {
       startY: 28, head: [['Date', 'Orders', 'Gross Sales (VAT-Inc)', 'VATable Sales', 'VAT-Exempt (PWD/SC)', 'VAT (12%)', 'Discounts', 'Net Sales']],
       body: summaryBody, theme: 'grid', headStyles: { fillColor: [40, 40, 40] }
     });
-    doc.save(`Daily_Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
+
+    // ── Inventory analytics sections (display units: kg/L/pcs) ──
+    const ad = analyticsData || {};
+    const du = (item) => effectiveDisplay(item || {});
+    const sect = (title, head, body, fill) => {
+      if (!body.length) return;
+      doc.setFontSize(12); doc.text(title, 14, doc.lastAutoTable.finalY + 8);
+      autoTable(doc, { startY: doc.lastAutoTable.finalY + 11, head: [head], body, theme: 'grid', styles: { fontSize: 8 }, headStyles: { fillColor: fill } });
+    };
+
+    // High Velocity & Forecast
+    sect('High Velocity & Forecast', ['Item', 'Daily Burn', 'Lasts', 'Buy 1wk', 'Buy 1mo', 'Trend'],
+      (ad.mostUsedStock || []).map(i => { const d = du(i); return [
+        i.name, `${((i.dailyAvg||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        (!isFinite(i.daysLeft) ? '∞' : `${i.daysLeft}d`),
+        `${((i.weeklyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        `${((i.monthlyNeed||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        `${i.trend > 0.1 ? 'rising' : i.trend < -0.1 ? 'easing' : 'stable'} ${Math.abs((i.trend||0)*100).toFixed(0)}%`,
+      ]; }), [180, 130, 30]);
+
+    // Low Stock (Risk)
+    sect('Low Stock (Risk)', ['Item', 'On Hand', 'Days of Supply'],
+      (ad.lowestStock || []).map(i => { const d = du(i); return [
+        i.itemName, `${(Number(i.stockQty||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        (i.daysOfSupply <= 0 ? 'OUT' : `~${Math.floor(i.daysOfSupply)}d`),
+      ]; }), [180, 50, 50]);
+
+    // Overstock Watch
+    sect('Overstock Watch', ['Item', 'On Hand', 'Days of Supply', 'Tied-up Capital (PHP)'],
+      (ad.highestStock || []).map(i => { const d = du(i); return [
+        i.itemName, `${(Number(i.stockQty||0)/d.mult).toFixed(2)} ${d.displayUnit}`,
+        (isFinite(i.daysOfSupply) ? `~${Math.floor(i.daysOfSupply)}d` : '∞'),
+        pdfMoney(i.tiedUpCapital || 0),
+      ]; }), [90, 90, 90]);
+
+    doc.save(`Analytics_Report_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const exportMonthlyToPDF = async () => {
@@ -2847,6 +2887,49 @@ const updateStatus = async (orderId, newStatus) => {
       columnStyles: { 1: { halign: 'right' } },
     });
     doc.save(`Profit-Loss-${pnlRange.start}_to_${pnlRange.end}.pdf`);
+  };
+
+  const exportBalanceSheetPDF = async () => {
+    if (!bsData) return alert('Load the Balance Sheet first.');
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
+    const asOf = bsData.asOf ? new Date(bsData.asOf).toLocaleDateString() : new Date().toLocaleDateString();
+    doc.setFontSize(16); doc.text(BIZ_NAME, 105, 15, { align: 'center' });
+    doc.setFontSize(10); doc.text('BALANCE SHEET (Non-VAT)', 105, 22, { align: 'center' });
+    doc.setFontSize(9);  doc.text(`As of ${asOf}`, 105, 28, { align: 'center' });
+    const rowName = (r) => r.accountName || r.name || r.label || '';
+    const rowAmt = (r) => pdfMoney(r.amount ?? r.balance ?? r.total ?? 0);
+    const section = (title, rows, total, startY) => {
+      autoTable(doc, {
+        startY,
+        head: [[title, 'Amount (PHP)']],
+        body: [
+          ...(rows && rows.length ? rows.map(r => [rowName(r), rowAmt(r)]) : [['—', pdfMoney(0)]]),
+          [`Total ${title}`, pdfMoney(total ?? 0)],
+        ],
+        styles: { fontSize: 9 }, headStyles: { fillColor: [111, 135, 77] },
+        columnStyles: { 1: { halign: 'right' } },
+        didParseCell: (d) => { if (d.row.index === (rows?.length || 1)) d.cell.styles.fontStyle = 'bold'; },
+      });
+      return doc.lastAutoTable.finalY + 4;
+    };
+    const t = bsData.totals || {};
+    let y = 34;
+    y = section('Assets', bsData.assets, t.assets, y);
+    y = section('Liabilities', bsData.liabilities, t.liabilities, y);
+    y = section('Equity', bsData.equity, t.equity, y);
+    const balanced = Math.abs((t.assets || 0) - ((t.liabilities || 0) + (t.equity || 0))) < 0.01;
+    autoTable(doc, {
+      startY: y,
+      head: [['Accounting Equation', '']],
+      body: [
+        ['Assets', pdfMoney(t.assets)],
+        ['Liabilities + Equity', pdfMoney((t.liabilities || 0) + (t.equity || 0))],
+        ['Status', balanced ? 'BALANCED' : 'OUT OF BALANCE'],
+      ],
+      styles: { fontSize: 10, fontStyle: 'bold' }, headStyles: { fillColor: [61, 74, 42] },
+      columnStyles: { 1: { halign: 'right' } },
+    });
+    doc.save(`Balance-Sheet-${asOf.replace(/\//g, '-')}.pdf`);
   };
 
   // ── Settings / QR toggle ────────────────────────────────────────────────────
@@ -3695,7 +3778,7 @@ const updateStatus = async (orderId, newStatus) => {
     parkedOrders, parkedModalOpen, setParkedModalOpen, fetchParked, parkCurrentOrder, resumeParked,
     // ── Reports ──────────────────────────────────────────────────────────────
     menuEngineering, fetchMenuEngineering, cashierVariance, fetchCashierVariance, purchaseOrder, fetchPurchaseOrder,
-    exportPnlPDF, exportPurchaseOrderPDF,
+    exportPnlPDF, exportBalanceSheetPDF, exportPurchaseOrderPDF,
     // ── Multi-Payment ────────────────────────────────────────────────────────
     posPayments, setPosPayments, posGuestCount, setPosGuestCount,
     // ── Archive Search ───────────────────────────────────────────────────────
