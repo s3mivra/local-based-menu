@@ -191,6 +191,7 @@ export default function AdminDashboard() {
   const [refundSubmitting, setRefundSubmitting] = useState(false);
   // --- CLOCK IN/OUT ---
   const [clockStatus, setClockStatus] = useState({ isClockedIn: false, entry: null, onBreak: false, breakUsedMinutes: 0, breakRemainingMinutes: 60 });
+  const [clockStatusLoaded, setClockStatusLoaded] = useState(false); // gates the clock-in screen until status is known
   const [clockModalOpen, setClockModalOpen] = useState(false);
   const [clockEntries, setClockEntries] = useState([]);
   const [clockEntriesTotal, setClockEntriesTotal] = useState(0);
@@ -517,6 +518,8 @@ export default function AdminDashboard() {
 
   // Opens the End-of-Shift modal (does NOT clear session yet)
   const handleLogout = () => {
+    // Owner/superadmin isn't a tracked cashier — no register count required; log out directly.
+    if (activeAdmin?.role === 'superadmin') { performLogout(); return; }
     setShiftReconcile({ actualCash: '', result: null });
     setShiftEndModal(true);
   };
@@ -2884,6 +2887,7 @@ const updateStatus = async (orderId, newStatus) => {
       });
     }
     catch (err) { console.error('fetchClockStatus', err); }
+    finally { setClockStatusLoaded(true); }
   };
   const fetchClockEntries = async (page = 1) => {
     try { const res = await apiFetch(`/api/clock/entries?page=${page}&limit=30`); const d = await res.json(); if (d.success) { setClockEntries(d.entries||[]); setClockEntriesTotal(d.total||0); setClockEntriesPage(page); } }
@@ -3392,6 +3396,28 @@ const updateStatus = async (orderId, newStatus) => {
 
   const isSuperAdmin = activeAdmin?.role === 'superadmin';
 
+  // CLOCK-IN GATE: every non-superadmin must clock in before using the POS.
+  // (Superadmin/owner is exempt.) Shown once the clock status is known so we
+  // don't flash this screen at an already-clocked-in user on load.
+  if (!isSuperAdmin && clockStatusLoaded && !clockStatus.isClockedIn) {
+    return (
+      <div className="min-h-screen bg-page-bg flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-20 h-20 bg-brand/15 border border-brand/30 rounded-3xl flex items-center justify-center mb-6">
+          <Clock size={40} className="text-brand" />
+        </div>
+        <h1 className="text-white text-2xl font-black mb-1">Clock in to start</h1>
+        <p className="text-white/50 text-sm mb-8 max-w-xs">Hi {activeAdmin?.name} — you must clock in before taking orders or using the system.</p>
+        <button onClick={handleClockIn}
+          className="bg-brand text-white px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-sm hover:bg-brand/90 active:scale-98 transition shadow-lg shadow-brand/20 min-h-[56px] flex items-center gap-2">
+          <Clock size={18} /> Clock In
+        </button>
+        <button onClick={performLogout} className="mt-5 text-white/40 hover:text-white/70 text-xs font-bold uppercase tracking-wider transition">
+          Log out
+        </button>
+      </div>
+    );
+  }
+
   // Sidebar nav content (inlined twice: desktop + mobile)
   const renderSidebarNav = (closeFn) => (
     <>
@@ -3521,7 +3547,7 @@ const updateStatus = async (orderId, newStatus) => {
         )}
         <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition font-bold text-sm">
           <LogOut size={15} />
-          End Shift
+          {isSuperAdmin ? 'Log Out' : 'End Shift'}
         </button>
         <div className="px-3 py-2 border-t border-white/5 mt-1">
           <div className="flex items-center gap-3 p-2 rounded-xl bg-white/5">
@@ -3760,7 +3786,7 @@ const updateStatus = async (orderId, newStatus) => {
               <Settings size={13} />
             </button>
             <button onClick={handleLogout} className="flex items-center gap-1.5 bg-red-500/10 text-red-400 border border-red-500/20 px-3 py-2 rounded-xl font-bold text-xs hover:bg-red-500/20 transition">
-              End Shift
+              {isSuperAdmin ? 'Log Out' : 'End Shift'}
             </button>
           </div>
         </header>
