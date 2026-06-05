@@ -3868,8 +3868,9 @@ app.get('/api/analytics/dashboard', verifyToken, async (req, res) => {
         { items: 1, createdAt: 1 }
       ).lean(),
 
-      // 7. Inventory (needed for velocity + stock KPIs)
-      Inventory.find({}, { itemName: 1, stockQty: 1, unitCost: 1 }).lean(),
+      // 7. Inventory (needed for velocity + stock KPIs) — include unit fields so the
+      //    UI can display kg/L/pcs correctly (effectiveDisplay needs unit/displayUnit/unitMultiplier).
+      Inventory.find({}, { itemName: 1, stockQty: 1, unitCost: 1, unit: 1, displayUnit: 1, unitMultiplier: 1 }).lean(),
     ]);
 
     // ── Today KPIs ─────────────────────────────────────────────────────────────
