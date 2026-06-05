@@ -82,7 +82,7 @@ export default function LedgerTab({ ctx }) {
     salesByPayment, sbpRange, setSbpRange, fetchSalesByPayment,
     salesSummary, sssRange, setSssRange, sssGroup, setSssGroup, sssRows, fetchSalesSummary, exportSalesSummaryPDF,
     menuEngineering, fetchMenuEngineering, cashierVariance, fetchCashierVariance, purchaseOrder, fetchPurchaseOrder,
-    exportPnlPDF, exportBalanceSheetPDF, exportPurchaseOrderPDF,
+    exportPnlPDF, exportBalanceSheetPDF, exportPurchaseOrderPDF, reconcileInventory,
   } = ctx;
 
   // ── Report-table pagination (client-side, 10 rows/page) ──
@@ -357,7 +357,7 @@ export default function LedgerTab({ ctx }) {
 
           {/* ===== MONTHLY P&L (period + matrix views, common-size & share-of-parent ratios) ===== */}
           {ledgerSubTab === 'pnlmonthly' && (() => {
-            const SECTIONS = [['revenue','Revenue'],['contra','Less: Discounts / Returns'],['cogs','Cost of Sales'],['opex','Operating & Other Expenses']];
+            const SECTIONS = [['revenue','Revenue'],['contra','Less: Discounts / Returns'],['cogs','Cost of Sales'],['opex','Operating Expenses'],['otherincome','Other Income'],['otherexpense','Other Expenses']];
             const m = pnlMonthly;
             const nr = m?.grandTotals?.netRevenue || 0;
             const parentTotals = {};
@@ -435,6 +435,7 @@ export default function LedgerTab({ ctx }) {
                   <p className="text-white/40 text-xs font-bold uppercase tracking-widest mt-1">Snapshot as of {bsData ? new Date(bsData.asOf).toLocaleDateString() : 'today'}</p>
                 </div>
                 <div className="flex gap-2">
+                  <button onClick={reconcileInventory} title="Set book Inventory = actual on-hand value (fixes negative/opening inventory)" className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-amber-500/20 transition min-h-[44px] flex items-center gap-1.5"><Package size={13}/> Reconcile Inventory</button>
                   {bsData && <button onClick={exportBalanceSheetPDF} className="bg-white/5 text-white/70 hover:text-white hover:bg-white/10 px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition min-h-[44px] flex items-center gap-1.5"><Download size={13}/> PDF</button>}
                   <button onClick={fetchBalanceSheet} className="bg-brand text-white px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-brand/90 transition min-h-[44px] flex items-center gap-1.5"><RefreshCw size={13}/> Refresh</button>
                 </div>

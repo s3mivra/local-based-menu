@@ -2260,6 +2260,39 @@ app.post('/api/inventory', verifyToken, async (req, res) => {
   }
 });
 
+// --- INVENTORY REVALUATION: set book Inventory (130000) = actual on-hand value ---
+// Resolves negative/incorrect inventory caused by missing opening balance / purchases.
+// Offset defaults to Owner's Capital (opening contribution; no P&L impact); '530000'
+// books it as an Inventory Adjustment instead.
+app.post('/api/inventory/revalue', verifyToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const VALID = { '310000': "Owner's Capital", '530000': 'Inventory Adjustments' };
+    const offCode = VALID[req.body.offsetAccount] ? req.body.offsetAccount : '310000';
+    const offName = VALID[offCode];
+
+    const items = await Inventory.find({}, { stockQty: 1, unitCost: 1 }).lean();
+    const onHand = +items.reduce((s, i) => s + (i.stockQty || 0) * (i.unitCost || 0), 0).toFixed(2);
+
+    const agg = await JournalEntry.aggregate([
+      { $unwind: '$lines' },
+      { $match: { 'lines.accountCode': '130000' } },
+      { $group: { _id: null, debit: { $sum: { $ifNull: ['$lines.debit', 0] } }, credit: { $sum: { $ifNull: ['$lines.credit', 0] } } } },
+    ]);
+    const book = +(((agg[0]?.debit || 0) - (agg[0]?.credit || 0))).toFixed(2);
+    const diff = +(onHand - book).toFixed(2);
+    if (Math.abs(diff) < 0.01) return res.json({ success: true, onHand, book, diff: 0, message: 'Inventory already matches on-hand value.' });
+
+    const reference = await mkSeqRef('INV-REVAL');
+    const lines = diff > 0
+      ? [ { accountCode: '130000', accountName: 'Inventory Asset', debit: diff, credit: 0 }, { accountCode: offCode, accountName: offName, debit: 0, credit: diff } ]
+      : [ { accountCode: offCode, accountName: offName, debit: -diff, credit: 0 }, { accountCode: '130000', accountName: 'Inventory Asset', debit: 0, credit: -diff } ];
+    assertBalanced(lines, reference);
+    await JournalEntry.create({ date: new Date(), reference, description: `Inventory revaluation to on-hand value (offset: ${offName})`, lines, totalDebit: Math.abs(diff), totalCredit: Math.abs(diff) });
+    emitToMgr('erpUpdated');
+    res.json({ success: true, onHand, book, diff, offset: offCode, reference });
+  } catch (err) { res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }
+});
+
 // --- NEW: RESTOCK EXISTING INVENTORY (Weighted Average Cost) ---
 app.post('/api/inventory/restock/:id', verifyToken, async (req, res) => {
   try {
@@ -3073,12 +3106,13 @@ app.get('/api/reports/pnl-monthly', verifyToken, requireSuperAdmin, async (req, 
       const last = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
       while (d <= last) { months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); d.setMonth(d.getMonth() + 1); } }
 
-    const sectionOf = (meta) => {
+    const sectionOf = (code, meta) => {
       if (!meta) return null;
-      if (meta.type === 'revenue' || meta.type === 'other-income') return 'revenue';
+      if (meta.type === 'revenue') return 'revenue';
+      if (meta.type === 'other-income') return 'otherincome';
       if (meta.type === 'contra-revenue') return 'contra';
       if (meta.type === 'expense' && meta.cogs) return 'cogs';
-      if (meta.type === 'expense') return 'opex';
+      if (meta.type === 'expense') return String(code).startsWith('9') ? 'otherexpense' : 'opex';
       return null; // balance-sheet accounts excluded from P&L
     };
 
@@ -3086,9 +3120,9 @@ app.get('/api/reports/pnl-monthly', verifyToken, requireSuperAdmin, async (req, 
     for (const r of agg) {
       const { code, ym } = r._id;
       const meta = ACCOUNTS[code];
-      const section = sectionOf(meta);
+      const section = sectionOf(code, meta);
       if (!section) continue;
-      const amt = section === 'revenue' ? (r.credit - r.debit) : (r.debit - r.credit);
+      const amt = (section === 'revenue' || section === 'otherincome') ? (r.credit - r.debit) : (r.debit - r.credit);
       if (!accounts[code]) {
         const parentCode = meta.parent || code;
         accounts[code] = { code, name: meta.name || r.name, section, parentCode,
@@ -3100,23 +3134,25 @@ app.get('/api/reports/pnl-monthly', verifyToken, requireSuperAdmin, async (req, 
     const accountList = Object.values(accounts).sort((a, b) => a.code.localeCompare(b.code));
 
     const blank = () => Object.fromEntries(months.map(m => [m, 0]));
-    const sec = { revenue: blank(), contra: blank(), cogs: blank(), opex: blank() };
+    const sec = { revenue: blank(), contra: blank(), cogs: blank(), opex: blank(), otherincome: blank(), otherexpense: blank() };
     for (const a of accountList) for (const [m, v] of Object.entries(a.byMonth)) if (sec[a.section] && m in sec[a.section]) sec[a.section][m] += v;
     const netRevenue = blank(), grossProfit = blank(), netIncome = blank();
     for (const m of months) {
       netRevenue[m]  = +(sec.revenue[m] - sec.contra[m]).toFixed(2);
       grossProfit[m] = +(netRevenue[m] - sec.cogs[m]).toFixed(2);
-      netIncome[m]   = +(grossProfit[m] - sec.opex[m]).toFixed(2);
-      for (const k of ['revenue', 'contra', 'cogs', 'opex']) sec[k][m] = +sec[k][m].toFixed(2);
+      // Net income = gross profit − operating expenses + other income − other expenses
+      netIncome[m]   = +(grossProfit[m] - sec.opex[m] + sec.otherincome[m] - sec.otherexpense[m]).toFixed(2);
+      for (const k of Object.keys(sec)) sec[k][m] = +sec[k][m].toFixed(2);
     }
     const sum = (o) => +Object.values(o).reduce((s, v) => s + v, 0).toFixed(2);
 
     res.json({
       success: true, period: { start: startDate, end: endDate }, months, accounts: accountList,
-      monthTotals: { revenue: sec.revenue, contra: sec.contra, cogs: sec.cogs, opex: sec.opex, netRevenue, grossProfit, netIncome },
+      monthTotals: { revenue: sec.revenue, contra: sec.contra, cogs: sec.cogs, opex: sec.opex, otherincome: sec.otherincome, otherexpense: sec.otherexpense, netRevenue, grossProfit, netIncome },
       grandTotals: {
         revenue: sum(sec.revenue), contra: sum(sec.contra), netRevenue: sum(netRevenue),
-        cogs: sum(sec.cogs), grossProfit: sum(grossProfit), opex: sum(sec.opex), netIncome: sum(netIncome),
+        cogs: sum(sec.cogs), grossProfit: sum(grossProfit), opex: sum(sec.opex),
+        otherincome: sum(sec.otherincome), otherexpense: sum(sec.otherexpense), netIncome: sum(netIncome),
       },
     });
   } catch (err) { log.error({ err }, 'pnl-monthly failed'); res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }

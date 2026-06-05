@@ -1270,7 +1270,7 @@ const updateStatus = async (orderId, newStatus) => {
     const doc = new jsPDF(pnlmView === 'matrix' ? 'landscape' : 'portrait');
     doc.setFontSize(16); doc.text(`${BIZ_NAME} — Profit & Loss`, 14, 14);
     doc.setFontSize(9); doc.text(`${pnlmRange.start} to ${pnlmRange.end}  ·  ${pnlmView === 'matrix' ? 'Monthly' : 'Period'}`, 14, 20);
-    const SECTIONS = [['revenue','REVENUE'],['contra','LESS: DISCOUNTS/RETURNS'],['cogs','COST OF SALES'],['opex','OPERATING & OTHER EXPENSES']];
+    const SECTIONS = [['revenue','REVENUE'],['contra','LESS: DISCOUNTS/RETURNS'],['cogs','COST OF SALES'],['opex','OPERATING EXPENSES'],['otherincome','OTHER INCOME'],['otherexpense','OTHER EXPENSES']];
     const nr = m.grandTotals.netRevenue || 0;
     if (pnlmView === 'matrix') {
       const head = ['Account', ...m.months, 'Total'];
@@ -1344,6 +1344,18 @@ const updateStatus = async (orderId, newStatus) => {
       const data = await res.json();
       if (data.success) setBsData(data);
     } catch (err) { console.error('fetchBalanceSheet', err); }
+  };
+  // Resolve negative/incorrect book inventory by reconciling 130000 to actual on-hand value.
+  const reconcileInventory = async () => {
+    if (!window.confirm('Reconcile book Inventory (130000) to the ACTUAL on-hand value (Σ stock × unit cost)?\n\nThis posts a balancing journal entry offset to Owner\'s Capital — use it to set opening inventory / fix a negative inventory balance.')) return;
+    try {
+      const res = await apiFetch('/api/inventory/revalue', { method: 'POST', body: JSON.stringify({ offsetAccount: '310000' }) });
+      const d = await res.json();
+      if (!d.success) return alert(d.error || 'Reconcile failed.');
+      if (d.diff === 0) alert('Inventory already matches on-hand value — nothing to adjust.');
+      else alert(`Inventory reconciled.\n\nActual on-hand:  ₱${d.onHand.toFixed(2)}\nWas (book):      ₱${d.book.toFixed(2)}\nAdjustment:      ${d.diff >= 0 ? '+' : ''}₱${d.diff.toFixed(2)}`);
+      fetchBalanceSheet(); if (pnlMonthly) fetchPnlMonthly(); if (bsMonthly) fetchBsMonthly(); fetchERPData();
+    } catch { alert('Network error.'); }
   };
   const fetchArOutstanding = async () => {
     if (activeAdmin?.role !== 'superadmin') return;
@@ -3840,7 +3852,7 @@ const updateStatus = async (orderId, newStatus) => {
     activeTab, setActiveTab, navMode,
     // ── Ledger sub-tabs ─────────────────────────────────────────────────────
     ledgerSubTab, setLedgerSubTab, jeForm, setJeForm, cashOnHand, standardAccounts,
-    pnlData, pnlRange, setPnlRange, fetchPnl, bsData, fetchBalanceSheet,
+    pnlData, pnlRange, setPnlRange, fetchPnl, bsData, fetchBalanceSheet, reconcileInventory,
     pnlMonthly, pnlmRange, setPnlmRange, pnlmView, setPnlmView, fetchPnlMonthly, exportPnlMonthlyPDF,
     bsMonthly, bsmRange, setBsmRange, bsmView, setBsmView, fetchBsMonthly, exportBsMonthlyPDF,
     arOutstanding, fetchArOutstanding,
