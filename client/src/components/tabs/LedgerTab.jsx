@@ -42,7 +42,7 @@ export default function LedgerTab({ ctx }) {
     itemsPerPage, jeForm, journalEntries, ledgerSubTab, navMode,
     newDiscount, openEditInventory, openProductModal, orderFilter, orders,
     ordersItemsPerPage, ordersPage, parseImportFile, paymentSelections, peso,
-    physicalCounts, pnlData, pnlRange, pnlMonthly, pnlmRange, setPnlmRange, pnlmView, setPnlmView, fetchPnlMonthly, exportPnlMonthlyPDF, posActiveAddOns, posActiveSize,
+    physicalCounts, pnlData, pnlRange, pnlMonthly, pnlmRange, setPnlmRange, pnlmView, setPnlmView, fetchPnlMonthly, exportPnlMonthlyPDF, bsMonthly, bsmRange, setBsmRange, bsmView, setBsmView, fetchBsMonthly, exportBsMonthlyPDF, posActiveAddOns, posActiveSize,
     posCart, posCashTendered, posCategory, posCheckoutModal, posCustomerName,
     posCustomerPhone, posDeliveryAddress, posDeliveryFee, posDeliveryFeeNum, posDiscountAmt,
     posDiscountType, posDiscountValue, posGrandTotal, posPage, posPayment,
@@ -105,6 +105,7 @@ export default function LedgerTab({ ctx }) {
               ['pnl',       'Profit & Loss',    TrendingUp],
               ['pnlmonthly','Monthly P&L',      BarChart3],
               ['balance',   'Balance Sheet',    BarChart2],
+              ['bsmonthly', 'Monthly Bal. Sheet', BarChart3],
               ['ar',        'A/R Outstanding',  Truck],
               ['ap',        'A/P Payables',     CreditCard],
               ['payments',  'By Payment',       Banknote],
@@ -123,6 +124,7 @@ export default function LedgerTab({ ctx }) {
                   if (id === 'pnl' && !pnlData) fetchPnl();
                   if (id === 'pnlmonthly' && !pnlMonthly) fetchPnlMonthly();
                   if (id === 'balance' && !bsData) fetchBalanceSheet();
+                  if (id === 'bsmonthly' && !bsMonthly) fetchBsMonthly();
                   if (id === 'ar') fetchArOutstanding();
                   if (id === 'ap') fetchApData();
                   if (id === 'payments') fetchSalesByPayment();
@@ -505,6 +507,69 @@ export default function LedgerTab({ ctx }) {
               )}
             </div>
           )}
+
+          {/* ===== MONTHLY BALANCE SHEET (period + matrix, % of assets & % of parent) ===== */}
+          {ledgerSubTab === 'bsmonthly' && (() => {
+            const SECTIONS = [['assets','Assets'],['liabilities','Liabilities'],['equity','Equity']];
+            const b = bsMonthly;
+            const peso = (n) => `₱${(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const totalAssets = b?.monthTotals?.assets?.[b?.asOf] || 0;
+            const parentTotals = {};
+            if (b) [...b.assets, ...b.liabilities, ...b.equity].forEach(a => { parentTotals[a.parentCode] = (parentTotals[a.parentCode] || 0) + a.total; });
+            return (
+            <div className="space-y-4 animate-fade-in">
+              <div className="flex flex-wrap gap-3 items-center">
+                <input type="date" value={bsmRange.start} onChange={e => setBsmRange(p => ({ ...p, start: e.target.value }))} className="bg-surface border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50" />
+                <span className="text-white/30 font-bold text-sm">→</span>
+                <input type="date" value={bsmRange.end} onChange={e => setBsmRange(p => ({ ...p, end: e.target.value }))} className="bg-surface border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50" />
+                <button onClick={fetchBsMonthly} className="px-5 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:bg-brand/90 transition">Load</button>
+                <div className="flex rounded-xl overflow-hidden border border-white/10">
+                  {[['period','As-of'],['matrix','Monthly']].map(([v,lbl]) => (
+                    <button key={v} onClick={() => setBsmView(v)} className={`px-4 py-2 text-xs font-bold uppercase tracking-wider transition ${bsmView === v ? 'bg-brand text-white' : 'bg-surface text-white/50 hover:text-white'}`}>{lbl}</button>
+                  ))}
+                </div>
+                {b && <button onClick={exportBsMonthlyPDF} className="ml-auto bg-white/5 text-white/70 hover:text-white hover:bg-white/10 px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-1.5"><Download size={13}/> PDF</button>}
+              </div>
+              {!b ? <p className="text-white/30 text-sm text-center p-6 font-bold">Pick a range and click Load.</p> : (
+                <div className="bg-surface border border-white/8 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
+                      <thead className="text-white/25 text-[10px] font-black uppercase tracking-wider border-b border-white/5">
+                        <tr>
+                          <th className="px-3 py-2.5">Account</th>
+                          {bsmView === 'matrix'
+                            ? b.months.map(mm => <th key={mm} className="px-3 py-2.5 text-right">{mm}</th>)
+                            : <><th className="px-3 py-2.5 text-right">As of {b.asOf}</th><th className="px-3 py-2.5 text-right">% Assets</th><th className="px-3 py-2.5 text-right">% Parent</th></>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {SECTIONS.map(([sec, label]) => (
+                          <React.Fragment key={sec}>
+                            <tr className="bg-white/[0.03]"><td colSpan={bsmView === 'matrix' ? b.months.length + 1 : 4} className="px-3 py-2 font-black text-brand uppercase text-[10px] tracking-wider">{label}</td></tr>
+                            {b[sec].map(a => (
+                              <tr key={a.code} className="border-b border-white/5 hover:bg-white/[0.02]">
+                                <td className="px-3 py-2 text-white/80 pl-6">{a.code} · {a.name}</td>
+                                {bsmView === 'matrix'
+                                  ? b.months.map(mm => <td key={mm} className="px-3 py-2 text-right tabular-nums text-white/70">{a.byMonth[mm] ? peso(a.byMonth[mm]) : '—'}</td>)
+                                  : <><td className="px-3 py-2 text-right tabular-nums font-bold text-white">{peso(a.total)}</td><td className="px-3 py-2 text-right tabular-nums text-white/50">{totalAssets ? `${(a.total/totalAssets*100).toFixed(1)}%` : '—'}</td><td className="px-3 py-2 text-right tabular-nums text-white/50">{parentTotals[a.parentCode] ? `${(a.total/parentTotals[a.parentCode]*100).toFixed(1)}%` : '—'}</td></>}
+                              </tr>
+                            ))}
+                            <tr className="border-b border-white/10 font-bold text-white/90">
+                              <td className="px-3 py-2 pl-6 uppercase text-[10px] tracking-wider">Total {label}</td>
+                              {bsmView === 'matrix'
+                                ? b.months.map(mm => <td key={mm} className="px-3 py-2 text-right tabular-nums">{peso(b.monthTotals[sec][mm])}</td>)
+                                : <><td className="px-3 py-2 text-right tabular-nums">{peso(b.monthTotals[sec][b.asOf])}</td><td></td><td></td></>}
+                            </tr>
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+            );
+          })()}
 
           {/* ===== A/R OUTSTANDING SUB-TAB ===== */}
           {ledgerSubTab === 'ar' && (

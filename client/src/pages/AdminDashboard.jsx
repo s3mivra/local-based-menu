@@ -385,6 +385,13 @@ export default function AdminDashboard() {
   });
   const [pnlmView, setPnlmView] = useState('period'); // 'period' | 'matrix'
   const [bsData, setBsData] = useState(null);
+  // Monthly Balance Sheet (per-month-end columns + ratios; period & matrix views)
+  const [bsMonthly, setBsMonthly] = useState(null);
+  const [bsmRange, setBsmRange] = useState({
+    start: new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0,10),
+    end: new Date().toISOString().slice(0,10)
+  });
+  const [bsmView, setBsmView] = useState('period');
   const [arOutstanding, setArOutstanding] = useState({ orders: [], totalOutstanding: 0 });
   const [expenseModal, setExpenseModal] = useState(false);
   const [expenseCategories, setExpenseCategories] = useState([]);
@@ -1289,6 +1296,46 @@ const updateStatus = async (orderId, newStatus) => {
       autoTable(doc, { startY: 24, head: [head], body, styles: { fontSize: 8 }, headStyles: { fillColor: [111,135,77] }, columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } } });
     }
     doc.save(`PnL-${pnlmRange.start}_to_${pnlmRange.end}.pdf`);
+  };
+  const fetchBsMonthly = async () => {
+    if (activeAdmin?.role !== 'superadmin') return;
+    try {
+      const res = await apiFetch(`/api/reports/balance-sheet-monthly?start=${bsmRange.start}&end=${bsmRange.end}`);
+      const data = await res.json();
+      if (data.success) setBsMonthly(data);
+    } catch (err) { console.error('fetchBsMonthly', err); }
+  };
+  const exportBsMonthlyPDF = async () => {
+    if (!bsMonthly) return alert('Load the Monthly Balance Sheet first.');
+    const { jsPDF, autoTable } = await loadPdfLibs();
+    const b = bsMonthly;
+    const doc = new jsPDF(bsmView === 'matrix' ? 'landscape' : 'portrait');
+    doc.setFontSize(16); doc.text(`${BIZ_NAME} — Balance Sheet`, 14, 14);
+    doc.setFontSize(9); doc.text(`${bsmRange.start} to ${bsmRange.end}  ·  ${bsmView === 'matrix' ? 'Monthly' : 'As of ' + b.asOf}`, 14, 20);
+    const SECTIONS = [['assets','ASSETS'],['liabilities','LIABILITIES'],['equity','EQUITY']];
+    const totalAssets = b.monthTotals.assets[b.asOf] || 0;
+    if (bsmView === 'matrix') {
+      const head = ['Account', ...b.months];
+      const body = [];
+      for (const [sec, label] of SECTIONS) {
+        body.push([{ content: label, colSpan: head.length, styles: { fontStyle: 'bold', fillColor: [236,241,227] } }]);
+        b[sec].forEach(a => body.push([`  ${a.code} ${a.name}`, ...b.months.map(mm => pdfMoney(a.byMonth[mm] || 0))]));
+        body.push([`  Total ${label}`, ...b.months.map(mm => pdfMoney(b.monthTotals[sec][mm] || 0))]);
+      }
+      autoTable(doc, { startY: 24, head: [head], body, styles: { fontSize: 6 }, headStyles: { fillColor: [111,135,77] } });
+    } else {
+      const head = ['Account', 'Amount', '% Assets', '% Parent'];
+      const parentTotals = {};
+      [...b.assets, ...b.liabilities, ...b.equity].forEach(a => { parentTotals[a.parentCode] = (parentTotals[a.parentCode] || 0) + a.total; });
+      const body = [];
+      for (const [sec, label] of SECTIONS) {
+        body.push([{ content: label, colSpan: 4, styles: { fontStyle: 'bold', fillColor: [236,241,227] } }]);
+        b[sec].forEach(a => body.push([`  ${a.code} ${a.name}`, pdfMoney(a.total), totalAssets ? `${(a.total/totalAssets*100).toFixed(1)}%` : '—', parentTotals[a.parentCode] ? `${(a.total/parentTotals[a.parentCode]*100).toFixed(1)}%` : '—']));
+        body.push([`  Total ${label}`, pdfMoney(b.monthTotals[sec][b.asOf] || 0), '', '']);
+      }
+      autoTable(doc, { startY: 24, head: [head], body, styles: { fontSize: 8 }, headStyles: { fillColor: [111,135,77] }, columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } } });
+    }
+    doc.save(`BalanceSheet-${bsmRange.start}_to_${bsmRange.end}.pdf`);
   };
   const fetchBalanceSheet = async () => {
     if (activeAdmin?.role !== 'superadmin') return;
@@ -3795,6 +3842,7 @@ const updateStatus = async (orderId, newStatus) => {
     ledgerSubTab, setLedgerSubTab, jeForm, setJeForm, cashOnHand, standardAccounts,
     pnlData, pnlRange, setPnlRange, fetchPnl, bsData, fetchBalanceSheet,
     pnlMonthly, pnlmRange, setPnlmRange, pnlmView, setPnlmView, fetchPnlMonthly, exportPnlMonthlyPDF,
+    bsMonthly, bsmRange, setBsmRange, bsmView, setBsmView, fetchBsMonthly, exportBsMonthlyPDF,
     arOutstanding, fetchArOutstanding,
     expenseModal, setExpenseModal, expenseCategories, fetchExpenseCategories,
     settleModal, setSettleModal, settleForm, setSettleForm, settleSubmitting, setSettleSubmitting,

@@ -3198,6 +3198,64 @@ app.get('/api/reports/balance-sheet', verifyToken, requireSuperAdmin, async (req
 });
 
 // ============================================================
+// MONTHLY BALANCE SHEET — cumulative balance as-of each month-end across a range
+// ============================================================
+app.get('/api/reports/balance-sheet-monthly', verifyToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    const startDate = start ? new Date(start) : new Date(new Date().getFullYear(), 0, 1);
+    const endDate = end ? new Date(end) : new Date();
+    endDate.setHours(23, 59, 59, 999);
+
+    const agg = await JournalEntry.aggregate([
+      { $match: { date: { $lte: endDate } } }, // everything up to range end (balances are cumulative)
+      { $unwind: '$lines' },
+      { $group: {
+        _id: { code: '$lines.accountCode', ym: { $dateToString: { format: '%Y-%m', date: '$date' } } },
+        debit: { $sum: { $ifNull: ['$lines.debit', 0] } }, credit: { $sum: { $ifNull: ['$lines.credit', 0] } },
+      }},
+    ]);
+
+    const months = [];
+    { const d = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      const last = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+      while (d <= last) { months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); d.setMonth(d.getMonth() + 1); } }
+    const inRange = new Set(months);
+
+    const acct = {};            // code -> { meta, changes: {ym: signedDelta} }
+    const earnings = {};        // ym -> net income delta
+    for (const r of agg) {
+      const { code, ym } = r._id; const meta = ACCOUNTS[code]; if (!meta) continue;
+      if (meta.type === 'asset') (acct[code] ??= { meta, changes: {} }).changes[ym] = (acct[code].changes[ym] || 0) + (r.debit - r.credit);
+      else if (meta.type === 'liability' || meta.type === 'equity') (acct[code] ??= { meta, changes: {} }).changes[ym] = (acct[code].changes[ym] || 0) + (r.credit - r.debit);
+      else {
+        let d;
+        if (meta.type === 'revenue' || meta.type === 'other-income') d = r.credit - r.debit;
+        else d = -(r.debit - r.credit); // contra + expense reduce earnings
+        earnings[ym] = (earnings[ym] || 0) + d;
+      }
+    }
+
+    const allMonths = [...new Set([...Object.values(acct).flatMap(a => Object.keys(a.changes)), ...Object.keys(earnings), ...months])].sort();
+    const lastM = months[months.length - 1];
+
+    const mk = (type) => Object.entries(acct).filter(([, a]) => a.meta.type === type).map(([code, a]) => {
+      const byMonth = {}; let run = 0;
+      for (const ym of allMonths) { run += a.changes[ym] || 0; if (inRange.has(ym)) byMonth[ym] = +run.toFixed(2); }
+      return { code, name: a.meta.name, parentCode: a.meta.parent || code, parentName: ACCOUNTS[a.meta.parent || code]?.name || a.meta.name, byMonth, total: byMonth[lastM] || 0 };
+    }).sort((x, y) => x.code.localeCompare(y.code));
+
+    const assets = mk('asset'), liabilities = mk('liability'), equity = mk('equity');
+    { const byMonth = {}; let run = 0; for (const ym of allMonths) { run += earnings[ym] || 0; if (inRange.has(ym)) byMonth[ym] = +run.toFixed(2); }
+      equity.push({ code: '330000', name: 'Retained Earnings (computed)', parentCode: '300000', parentName: 'Equity', byMonth, total: byMonth[lastM] || 0 }); }
+
+    const tot = (rows) => months.reduce((o, m) => { o[m] = +rows.reduce((s, r) => s + (r.byMonth[m] || 0), 0).toFixed(2); return o; }, {});
+    res.json({ success: true, period: { start: startDate, end: endDate }, months, asOf: lastM, assets, liabilities, equity,
+      monthTotals: { assets: tot(assets), liabilities: tot(liabilities), equity: tot(equity) } });
+  } catch (err) { log.error({ err }, 'bs-monthly failed'); res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }
+});
+
+// ============================================================
 // JOURNAL CSV EXPORT
 // ============================================================
 app.get('/api/journal/export', verifyToken, requireSuperAdmin, async (req, res) => {
