@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import { Menu, Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, TrendingDown, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, AlertTriangle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Check, Clock, Coffee, Minus, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Building2, Printer, ArrowUp, ArrowDown, Gift, XCircle, Zap, BarChart2, CreditCard, Banknote, Smartphone, Truck, Bell, ShieldCheck, Search, Tag, Wifi, WifiOff, CloudOff } from 'lucide-react';
-import jsPDF from 'jspdf';
 import QRCode from 'react-qr-code';
-import autoTable from 'jspdf-autotable';
 import { usePwa } from '../lib/usePwa';
 import { queueOrder } from '../lib/pwa';
 import * as auth from '../lib/auth';
@@ -17,6 +15,18 @@ import AuditTab      from '../components/tabs/AuditTab';
 import ProductsTab   from '../components/tabs/ProductsTab';
 const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.100.2:5002';
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || 'http://192.168.100.2:3000';
+
+// Lazy-load the PDF libraries (jspdf + jspdf-autotable, ~600KB) only when a PDF is
+// actually generated — keeps them out of the initial dashboard load. Cached after
+// first use. Every export/print fn does: const { jsPDF, autoTable } = await loadPdfLibs();
+let _pdfLibsPromise = null;
+const loadPdfLibs = () => {
+  if (!_pdfLibsPromise) {
+    _pdfLibsPromise = Promise.all([import('jspdf'), import('jspdf-autotable')])
+      .then(([m1, m2]) => ({ jsPDF: m1.default, autoTable: m2.default }));
+  }
+  return _pdfLibsPromise;
+};
 
 const COMP_REASON_LABELS = {
   VIP_CUSTOMER:         'VIP Customer',
@@ -1403,8 +1413,8 @@ const updateStatus = async (orderId, newStatus) => {
     } catch (err) { alert('CSV export failed.'); }
   };
 
-  const printXReading = () => {
-    const doc = new jsPDF();
+  const printXReading = async () => {
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
     const today = new Date().toLocaleDateString();
     const now = new Date().toLocaleTimeString();
     doc.setFontSize(16); doc.text(`${BIZ_NAME}`, 105, 18, { align: 'center' });
@@ -2238,7 +2248,7 @@ const updateStatus = async (orderId, newStatus) => {
       const res = await apiFetch(`/api/inventory/history`);
       const data = await res.json();
       const allHistory = data.success ? data.history : [];
-      const doc = new jsPDF('landscape');
+      const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
       doc.setFontSize(18); doc.text("Daily Inventory & Movement Report", 14, 15);
       const todayStr = new Date().toLocaleDateString();
       doc.setFontSize(10); doc.text(`Date: ${todayStr} | Generated: ${new Date().toLocaleString()}`, 14, 22);
@@ -2271,9 +2281,9 @@ const updateStatus = async (orderId, newStatus) => {
     } catch (err) { alert("Failed to generate PDF: " + err.message); }
   };
 
-  const exportLedgerToPDF = () => {
+  const exportLedgerToPDF = async () => {
     if (journalEntries.length === 0) return alert("No entries to export.");
-    const doc = new jsPDF();
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
     doc.setFontSize(18); doc.text("General Ledger Report", 14, 15);
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
     let currentY = 30;
@@ -2295,11 +2305,11 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // 1. COMPLETE SALES HISTORY (Master Summary + Daily Breakdown)
-  const exportAllToPDF = () => {
+  const exportAllToPDF = async () => {
     const allOrders = [...orders.filter(o => o.status !== 'Pending' && o.status !== 'Preparing' && o.status !== 'Ready'), ...archivedOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     if (allOrders.length === 0) return alert("No orders to export.");
     
-    const doc = new jsPDF('landscape');
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text("Complete Sales History", 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
@@ -2404,9 +2414,9 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // 2. EXPORT SPECIFIC DAY 
-  const exportDayToPDF = (dateString, dayOrders) => {
+  const exportDayToPDF = async (dateString, dayOrders) => {
     if (dayOrders.length === 0) return alert("No orders to export.");
-    const doc = new jsPDF('landscape');
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text(`Sales Report: ${dateString}`, 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
@@ -2471,12 +2481,12 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // 3. DAILY SALES SUMMARY (Analytics Trend Export)
-  const exportAnalyticsToPDF = () => {
+  const exportAnalyticsToPDF = async () => {
     // STRICT FILTER: Analytics must ONLY track Completed orders. Voided orders must never touch analytics.
     const allCompletedOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders.filter(o => o.status === 'Completed')].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     if (allCompletedOrders.length === 0) return alert("No analytics data to export.");
     
-    const doc = new jsPDF('landscape');
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF('landscape');
     doc.setFontSize(18); doc.text("Daily Sales Trend & Summary", 14, 15);
     const timeGenerated = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(10); doc.text(`Generated: ${new Date().toLocaleDateString()} at ${timeGenerated}`, 14, 22);
@@ -2505,12 +2515,12 @@ const updateStatus = async (orderId, newStatus) => {
     doc.save(`Daily_Sales_Trend_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  const exportMonthlyToPDF = () => {
+  const exportMonthlyToPDF = async () => {
     // STRICT FILTER: Only Completed orders.
     const allCompletedOrders = [...orders.filter(o => o.status === 'Completed'), ...archivedOrders.filter(o => o.status === 'Completed')].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     if (allCompletedOrders.length === 0) return alert("No orders to export.");
     
-    const doc = new jsPDF();
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
     doc.setFontSize(18); doc.text("Monthly Sales Summary", 14, 15);
     const groupedByMonth = {};
     allCompletedOrders.forEach(o => {
@@ -2768,9 +2778,9 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // Purchase Order → PDF in the requested "Product | Qty Unit" format
-  const exportPurchaseOrderPDF = () => {
+  const exportPurchaseOrderPDF = async () => {
     if (!purchaseOrder || !(purchaseOrder.lines || []).length) return alert('Generate a purchase order first.');
-    const doc = new jsPDF();
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
     const today = new Date().toLocaleDateString('en-PH');
     doc.setFontSize(16); doc.text(BIZ_NAME, 105, 15, { align: 'center' });
     doc.setFontSize(10); doc.text('PURCHASE ORDER', 105, 22, { align: 'center' });
@@ -2793,9 +2803,9 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // Profit & Loss → PDF (replaces CSV export)
-  const exportPnlPDF = () => {
+  const exportPnlPDF = async () => {
     if (!pnlData) return alert('Run the P&L report first.');
-    const doc = new jsPDF();
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
     const range = `${pnlRange.start} to ${pnlRange.end}`;
     doc.setFontSize(16); doc.text(BIZ_NAME, 105, 15, { align: 'center' });
     doc.setFontSize(10); doc.text('PROFIT & LOSS STATEMENT (Non-VAT)', 105, 22, { align: 'center' });
@@ -2970,8 +2980,8 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // ── Z-Reading PDF ─────────────────────────────────────────────────────────────
-  const printZReading = () => {
-    const doc = new jsPDF();
+  const printZReading = async () => {
+    const { jsPDF, autoTable } = await loadPdfLibs(); const doc = new jsPDF();
     const today = new Date().toLocaleDateString('en-PH');
     const now   = new Date().toLocaleTimeString('en-PH');
     doc.setFontSize(16); doc.text(BIZ_NAME, 105, 15, { align: 'center' });
