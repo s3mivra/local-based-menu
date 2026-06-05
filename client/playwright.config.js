@@ -11,7 +11,7 @@ import { defineConfig, devices } from '@playwright/test';
 // Run:  npm run e2e          (set E2E_ADMIN_PASS if not the dev default)
 export default defineConfig({
   testDir: './e2e',
-  timeout: 30_000,
+  timeout: 60_000,             // headroom for the cold first compile/login
   fullyParallel: false,        // POS flows mutate shared server state — keep serial
   workers: 1,
   retries: 0,

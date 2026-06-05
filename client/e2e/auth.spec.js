@@ -11,11 +11,12 @@ const loginVisible = (page) => page.getByLabel('Password', { exact: true });
 
 async function login(page) {
   await page.goto('/admin');
-  await expect(page.getByText(/restoring session/i)).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByText(/restoring session/i)).toHaveCount(0, { timeout: 30000 });
   await page.getByLabel('Staff Name').fill(ADMIN);
   await page.getByLabel('Password', { exact: true }).fill(PASS);
   await page.locator('form button[type="submit"]').click();
-  await expect(loginVisible(page)).toHaveCount(0, { timeout: 15000 }); // dashboard reached
+  // Generous timeout: the first login of a run is slow (cold dev-server compile + cold backend).
+  await expect(loginVisible(page)).toHaveCount(0, { timeout: 30000 }); // dashboard reached
 }
 
 test.describe('Dual-token authentication', () => {
