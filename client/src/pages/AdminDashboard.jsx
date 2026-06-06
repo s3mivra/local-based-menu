@@ -452,6 +452,17 @@ export default function AdminDashboard() {
   // --- FULLSCREEN LOGIC ---
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Collapse the sidebar's utility tools (Fullscreen/QR/Password/toggles/Install)
+  // to reclaim space. Persisted so the choice sticks across reloads.
+  const [opsToolsOpen, setOpsToolsOpen] = useState(() => {
+    try { return localStorage.getItem('semivra_ops_tools_open') === '1'; } catch { return false; }
+  });
+  const toggleOpsTools = () => setOpsToolsOpen(v => {
+    const next = !v;
+    try { localStorage.setItem('semivra_ops_tools_open', next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  });
+
   const [isStatusMenuOpen, setIsStatusMenuOpen] = useState(false);
 
   // --- PAGINATION STATE ---
@@ -3859,19 +3870,7 @@ const updateStatus = async (orderId, newStatus) => {
           <span className="text-[10px] text-white/25 font-bold uppercase tracking-wider">Auto-Close</span>
           <MidnightCountdown />
         </div>
-        <button onClick={toggleFullScreen} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition font-bold text-sm">
-          {isFullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
-          {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-        </button>
-        <button onClick={e => { e.preventDefault(); handleShowQR(); closeFn?.(); }} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-brand/60 hover:text-brand hover:bg-brand/10 transition font-bold text-sm">
-          <QrCode size={15} />
-          Show QR
-        </button>
-        <button onClick={() => { setChangePwModal(true); setChangePwError(''); }} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition font-bold text-sm">
-          <Settings size={15} />
-          Change Password
-        </button>
-        {/* Clock In/Out/Break */}
+        {/* Clock In/Out/Break — always visible (frequent, critical action) */}
         <button onClick={handleClockButton}
           className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${clockStatus.onBreak ? 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/20' : clockStatus.isClockedIn ? 'text-green-400 bg-green-500/10 hover:bg-green-500/20' : 'text-white/40 hover:text-white hover:bg-white/5'}`}>
           <Clock size={15} />
@@ -3881,29 +3880,52 @@ const updateStatus = async (orderId, newStatus) => {
               ? `Clocked In · ${clockStatus.entry ? Math.round((Date.now()-new Date(clockStatus.entry.clockIn))/60000) : 0}m`
               : 'Clock In'}
         </button>
-        {/* QR Orders toggle (superadmin only) */}
-        {isSuperAdmin && (
-          <button onClick={toggleQROrders}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${systemSettings.isAcceptingQROrders ? 'text-green-400/70 hover:text-green-400 hover:bg-green-500/10' : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'}`}>
-            {systemSettings.isAcceptingQROrders ? <Unlock size={15} /> : <Lock size={15} />}
-            {systemSettings.isAcceptingQROrders ? 'QR Orders: OPEN' : 'QR Orders: CLOSED'}
-          </button>
-        )}
-        {/* Auto midnight close toggle (superadmin only) */}
-        {isSuperAdmin && (
-          <button onClick={toggleAutoClose}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${systemSettings.autoCloseEnabled !== false ? 'text-green-400/70 hover:text-green-400 hover:bg-green-500/10' : 'text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20'}`}>
-            <Clock size={15} />
-            {systemSettings.autoCloseEnabled !== false ? 'Auto Close: ON' : 'Auto Close: OFF (manual)'}
-          </button>
-        )}
-        {/* Install as app (only when the browser offers it) */}
-        {installable && (
-          <button onClick={() => { install(); closeFn?.(); }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-brand/70 hover:text-brand hover:bg-brand/10 transition font-bold text-sm">
-            <Download size={15} />
-            Install App
-          </button>
+
+        {/* Collapsible utility tools — Fullscreen / QR / Password / toggles / Install */}
+        <button onClick={toggleOpsTools}
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition font-bold text-[11px] uppercase tracking-wider">
+          {opsToolsOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          Tools &amp; Settings
+        </button>
+        {opsToolsOpen && (
+          <div className="space-y-0.5">
+            <button onClick={toggleFullScreen} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition font-bold text-sm">
+              {isFullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
+              {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            </button>
+            <button onClick={e => { e.preventDefault(); handleShowQR(); closeFn?.(); }} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-brand/60 hover:text-brand hover:bg-brand/10 transition font-bold text-sm">
+              <QrCode size={15} />
+              Show QR
+            </button>
+            <button onClick={() => { setChangePwModal(true); setChangePwError(''); }} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition font-bold text-sm">
+              <Settings size={15} />
+              Change Password
+            </button>
+            {/* QR Orders toggle (superadmin only) */}
+            {isSuperAdmin && (
+              <button onClick={toggleQROrders}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${systemSettings.isAcceptingQROrders ? 'text-green-400/70 hover:text-green-400 hover:bg-green-500/10' : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'}`}>
+                {systemSettings.isAcceptingQROrders ? <Unlock size={15} /> : <Lock size={15} />}
+                {systemSettings.isAcceptingQROrders ? 'QR Orders: OPEN' : 'QR Orders: CLOSED'}
+              </button>
+            )}
+            {/* Auto midnight close toggle (superadmin only) */}
+            {isSuperAdmin && (
+              <button onClick={toggleAutoClose}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition ${systemSettings.autoCloseEnabled !== false ? 'text-green-400/70 hover:text-green-400 hover:bg-green-500/10' : 'text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20'}`}>
+                <Clock size={15} />
+                {systemSettings.autoCloseEnabled !== false ? 'Auto Close: ON' : 'Auto Close: OFF (manual)'}
+              </button>
+            )}
+            {/* Install as app (only when the browser offers it) */}
+            {installable && (
+              <button onClick={() => { install(); closeFn?.(); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-brand/70 hover:text-brand hover:bg-brand/10 transition font-bold text-sm">
+                <Download size={15} />
+                Install App
+              </button>
+            )}
+          </div>
         )}
         <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition font-bold text-sm">
           <LogOut size={15} />
