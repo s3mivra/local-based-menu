@@ -22,6 +22,13 @@ export const getToken = () => accessToken;
 export const setToken = (t) => { accessToken = t || null; };
 export const clearToken = () => { accessToken = null; };
 
+// Lightweight offline identity (NO token) — lets the installed app know who is
+// signed in when reloaded offline, so the POS and clock can run in a degraded,
+// queue-everything mode until the connection returns. Cleared on logout.
+const USER_KEY = 'semivra_user';
+export const getUser = () => { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; } };
+export const setUser = (u) => { try { u ? localStorage.setItem(USER_KEY, JSON.stringify(u)) : localStorage.removeItem(USER_KEY); } catch { /* ignore */ } };
+
 export const decodeToken = (t = accessToken) => {
   if (!t) return null;
   try { return JSON.parse(atob(t.split('.')[1])); } catch { return null; }
@@ -35,7 +42,7 @@ export function refreshSession(API_URL) {
   if (!refreshing) {
     refreshing = fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { accessToken = d?.token || null; return d?.token ? d : null; })
+      .then((d) => { accessToken = d?.token || null; if (d?.user) setUser(d.user); return d?.token ? d : null; })
       .catch(() => { accessToken = null; return null; })
       .finally(() => { refreshing = null; });
   }
@@ -45,7 +52,7 @@ export function refreshSession(API_URL) {
 export async function logout(API_URL) {
   try { await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' }); }
   catch { /* best-effort */ }
-  finally { accessToken = null; }
+  finally { accessToken = null; setUser(null); }
 }
 
 // Drop-in replacement for the old per-page apiFetch. Attaches the in-memory token,

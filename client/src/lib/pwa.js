@@ -49,6 +49,30 @@ export async function promptInstall() {
   return outcome === 'accepted';
 }
 
+// ── Offline clock-in/out queue ───────────────────────────────────────────────
+// Clock events made offline are stored with their real timestamp and replayed
+// (in order) when back online, so payroll hours stay accurate.
+const CLOCK_QUEUE_KEY = 'semivra_offline_clock';
+export function getQueuedClock() {
+  try { return JSON.parse(localStorage.getItem(CLOCK_QUEUE_KEY) || '[]'); } catch { return []; }
+}
+export function queueClock(type) { // type: 'in' | 'out' | 'break-start' | 'break-end'
+  const q = getQueuedClock();
+  q.push({ id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, type, at: new Date().toISOString() });
+  localStorage.setItem(CLOCK_QUEUE_KEY, JSON.stringify(q));
+  return q.length;
+}
+export async function flushClockQueue(sender) {
+  const q = getQueuedClock();
+  if (!q.length) return { sent: 0 };
+  let sent = 0; const survivors = [];
+  for (const e of q) {
+    try { (await sender(e)) ? sent++ : survivors.push(e); } catch { survivors.push(e); }
+  }
+  localStorage.setItem(CLOCK_QUEUE_KEY, JSON.stringify(survivors));
+  return { sent, remaining: survivors.length };
+}
+
 // ── Notifications ────────────────────────────────────────────────────────────
 // Ask once for permission; show alerts via the service worker so they appear even
 // when the installed app is backgrounded.
