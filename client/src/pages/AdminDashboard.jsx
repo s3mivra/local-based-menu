@@ -4025,8 +4025,8 @@ const updateStatus = async (orderId, newStatus) => {
         <div className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={() => setDashDrawerOpen(false)} />
       )}
 
-      {/* Mobile drawer */}
-      <aside className={`lg:hidden fixed top-0 left-0 h-full w-64 bg-sidebar-bg z-50 flex flex-col border-r border-white/5 transition-transform duration-300 ${dashDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      {/* Mobile drawer — capped width on small phones, scrollable on short screens */}
+      <aside className={`lg:hidden fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-sidebar-bg z-50 flex flex-col border-r border-white/5 overflow-y-auto overscroll-contain transition-transform duration-300 ${dashDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {renderSidebarNav(() => setDashDrawerOpen(false))}
       </aside>
 
@@ -4038,8 +4038,8 @@ const updateStatus = async (orderId, newStatus) => {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
 
-        {/* Mobile top bar */}
-        <header className="lg:hidden flex items-center gap-3 px-4 h-16 bg-sidebar-bg border-b border-white/5 flex-shrink-0">
+        {/* Mobile top bar — sticky so the menu button is always reachable */}
+        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 h-16 bg-sidebar-bg border-b border-white/5 flex-shrink-0">
           <button
             onClick={() => setDashDrawerOpen(true)}
             className="p-2 rounded-xl text-white/50 hover:text-white hover:bg-white/10 transition"
