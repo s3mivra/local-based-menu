@@ -49,6 +49,26 @@ export async function promptInstall() {
   return outcome === 'accepted';
 }
 
+// ── Notifications ────────────────────────────────────────────────────────────
+// Ask once for permission; show alerts via the service worker so they appear even
+// when the installed app is backgrounded.
+export async function requestNotificationPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  try { return (await Notification.requestPermission()) === 'granted'; } catch { return false; }
+}
+
+export async function notify(title, body, opts = {}) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const options = { body, icon: '/icon-192.png', badge: '/icon-192.png', vibrate: [200, 100, 200], ...opts };
+  try {
+    const reg = await navigator.serviceWorker?.ready;
+    if (reg?.showNotification) await reg.showNotification(title, options);
+    else new Notification(title, options);
+  } catch { /* ignore */ }
+}
+
 // ── Offline order queue ──────────────────────────────────────────────────────
 // Orders placed while offline are stashed in localStorage and replayed when the
 // connection returns. Keeps the cafe taking orders even when WiFi drops.

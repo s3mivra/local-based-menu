@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { Menu, Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, TrendingDown, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, AlertTriangle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Check, Clock, Coffee, Minus, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Building2, Printer, ArrowUp, ArrowDown, Gift, XCircle, Zap, BarChart2, CreditCard, Banknote, Smartphone, Truck, Bell, ShieldCheck, Search, Tag, Wifi, WifiOff, CloudOff } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { usePwa } from '../lib/usePwa';
-import { queueOrder } from '../lib/pwa';
+import { queueOrder, requestNotificationPermission, notify } from '../lib/pwa';
 import * as auth from '../lib/auth';
 // Tabs are lazy-loaded so only the active tab's code ships on first dashboard
 // paint; the rest load on demand when the operator opens them.
@@ -902,11 +902,18 @@ export default function AdminDashboard() {
     fetchData();
     fetchERPData();
     fetchUsers();
+    requestNotificationPermission(); // ask once so new-order alerts can show in the installed app
 
     // Join the correct room based on role so server can send targeted events
     socket.emit('joinRoom', activeAdmin?.role || 'staff');
 
-    const handleNewOrder    = (order) => { setOrders(prev => [order, ...prev]); playKitchenDing(); pushOrderToast(order); };
+    const handleNewOrder    = (order) => {
+      setOrders(prev => [order, ...prev]); playKitchenDing(); pushOrderToast(order);
+      // OS notification (mainly useful when the app is backgrounded/installed)
+      if (typeof document !== 'undefined' && document.hidden) {
+        notify('New order', `${order.orderNumber || ''} · ${order.table || 'Takeout'}${order.customerName ? ' · ' + order.customerName : ''}`.trim());
+      }
+    };
     const handleOrderUpdate = (updated) => setOrders(prev => prev.map(o => o._id === updated._id ? updated : o));
     const handleMenuUpdate  = () => fetchData();
     const handleArchived    = () => fetchOrders();
