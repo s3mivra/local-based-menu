@@ -3672,6 +3672,8 @@ const updateStatus = async (orderId, newStatus) => {
   const totalPricingPages = Math.ceil(products.length / pricingItemsPerPage);
 
   const isSuperAdmin = activeAdmin?.role === 'superadmin';
+  // Void / refund are allowed for superadmin OR admin (case-insensitive).
+  const canVoidRefund = ['superadmin', 'admin'].includes(String(activeAdmin?.role || '').toLowerCase());
 
   // CLOCK-IN GATE: every non-superadmin must clock in before using the POS.
   // (Superadmin/owner is exempt.) Shown once the clock status is known so we
@@ -3852,7 +3854,7 @@ const updateStatus = async (orderId, newStatus) => {
   const ctx = {
     // ── Shared data ─────────────────────────────────────────────────────────
     orders, archivedOrders, products, categories, inventory, discounts, globalAddOns,
-    users, activeAdmin, isSuperAdmin,
+    users, activeAdmin, isSuperAdmin, canVoidRefund,
     // ── Core helpers ────────────────────────────────────────────────────────
     fetchOrders, fetchData, fetchERPData, fetchEODData,
     apiFetch, updateStatus, printOrderSlip, handleVoidOrder,

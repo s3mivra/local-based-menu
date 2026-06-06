@@ -476,6 +476,13 @@ mongoose.connect(process.env.MONGO_URI, {
     next();
   };
 
+  // Allows superadmin OR admin (e.g. for void / refund). Role match is case-insensitive.
+  const requireSuperOrAdmin = (req, res, next) => {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role === 'superadmin' || role === 'admin') return next();
+    return res.status(403).json({ success: false, error: 'Forbidden: Admin or Superadmin role required.' });
+  };
+
   // Accepts valid JWT (staff/admin) OR active QR session (customer dine-in).
   const verifyOrderAuth = async (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -2002,7 +2009,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 });
 
 // --- 🚨 SAFE VOID & REFUND ENGINE 🚨 ---
-app.post('/api/orders/:id/void', verifyToken, requireSuperAdmin, async (req, res) => {
+app.post('/api/orders/:id/void', verifyToken, requireSuperOrAdmin, async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -4495,7 +4502,7 @@ app.get('/api/reports/sales-summary', verifyToken, requireSuperAdmin, async (req
 });
 
 // ── REFUND FLOW ───────────────────────────────────────────────────────────────
-app.post('/api/orders/:id/refund', verifyToken, requireSuperAdmin, async (req, res) => {
+app.post('/api/orders/:id/refund', verifyToken, requireSuperOrAdmin, async (req, res) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
