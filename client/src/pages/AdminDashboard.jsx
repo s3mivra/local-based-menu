@@ -3802,7 +3802,7 @@ const updateStatus = async (orderId, newStatus) => {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+      <nav className="p-3 space-y-0.5 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
         <p className="text-[9px] text-white/20 font-bold uppercase tracking-[0.2em] px-4 pt-2 pb-1">Operations</p>
         {[
           { id: 'orders', label: 'Orders & POS', icon: ShoppingCart },
@@ -4112,7 +4112,7 @@ const updateStatus = async (orderId, newStatus) => {
       </aside>
 
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex flex-col w-64 flex-shrink-0 bg-sidebar-bg border-r border-white/5 h-screen sticky top-0 overflow-y-auto">
+      <aside className="hidden lg:flex flex-col w-64 flex-shrink-0 bg-sidebar-bg border-r border-white/5 h-screen sticky top-0 overflow-hidden">
         {renderSidebarNav()}
       </aside>
 
