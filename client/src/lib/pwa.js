@@ -49,6 +49,50 @@ export async function promptInstall() {
   return outcome === 'accepted';
 }
 
+// ── Offline clock-in/out queue ───────────────────────────────────────────────
+// Clock events made offline are stored with their real timestamp and replayed
+// (in order) when back online, so payroll hours stay accurate.
+const CLOCK_QUEUE_KEY = 'semivra_offline_clock';
+export function getQueuedClock() {
+  try { return JSON.parse(localStorage.getItem(CLOCK_QUEUE_KEY) || '[]'); } catch { return []; }
+}
+export function queueClock(type) { // type: 'in' | 'out' | 'break-start' | 'break-end'
+  const q = getQueuedClock();
+  q.push({ id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, type, at: new Date().toISOString() });
+  localStorage.setItem(CLOCK_QUEUE_KEY, JSON.stringify(q));
+  return q.length;
+}
+export async function flushClockQueue(sender) {
+  const q = getQueuedClock();
+  if (!q.length) return { sent: 0 };
+  let sent = 0; const survivors = [];
+  for (const e of q) {
+    try { (await sender(e)) ? sent++ : survivors.push(e); } catch { survivors.push(e); }
+  }
+  localStorage.setItem(CLOCK_QUEUE_KEY, JSON.stringify(survivors));
+  return { sent, remaining: survivors.length };
+}
+
+// ── Notifications ────────────────────────────────────────────────────────────
+// Ask once for permission; show alerts via the service worker so they appear even
+// when the installed app is backgrounded.
+export async function requestNotificationPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  try { return (await Notification.requestPermission()) === 'granted'; } catch { return false; }
+}
+
+export async function notify(title, body, opts = {}) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const options = { body, icon: '/icon-192.png', badge: '/icon-192.png', vibrate: [200, 100, 200], ...opts };
+  try {
+    const reg = await navigator.serviceWorker?.ready;
+    if (reg?.showNotification) await reg.showNotification(title, options);
+    else new Notification(title, options);
+  } catch { /* ignore */ }
+}
+
 // ── Offline order queue ──────────────────────────────────────────────────────
 // Orders placed while offline are stashed in localStorage and replayed when the
 // connection returns. Keeps the cafe taking orders even when WiFi drops.

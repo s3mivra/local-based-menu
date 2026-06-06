@@ -476,6 +476,13 @@ mongoose.connect(process.env.MONGO_URI, {
     next();
   };
 
+  // Allows superadmin OR admin (e.g. for void / refund). Role match is case-insensitive.
+  const requireSuperOrAdmin = (req, res, next) => {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role === 'superadmin' || role === 'admin') return next();
+    return res.status(403).json({ success: false, error: 'Forbidden: Admin or Superadmin role required.' });
+  };
+
   // Accepts valid JWT (staff/admin) OR active QR session (customer dine-in).
   const verifyOrderAuth = async (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -2002,7 +2009,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
 });
 
 // --- 🚨 SAFE VOID & REFUND ENGINE 🚨 ---
-app.post('/api/orders/:id/void', verifyToken, requireSuperAdmin, async (req, res) => {
+app.post('/api/orders/:id/void', verifyToken, requireSuperOrAdmin, async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -4495,7 +4502,7 @@ app.get('/api/reports/sales-summary', verifyToken, requireSuperAdmin, async (req
 });
 
 // ── REFUND FLOW ───────────────────────────────────────────────────────────────
-app.post('/api/orders/:id/refund', verifyToken, requireSuperAdmin, async (req, res) => {
+app.post('/api/orders/:id/refund', verifyToken, requireSuperOrAdmin, async (req, res) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
@@ -4530,12 +4537,28 @@ app.post('/api/orders/:id/refund', verifyToken, requireSuperAdmin, async (req, r
 });
 
 // ── STAFF CLOCK-IN / CLOCK-OUT ────────────────────────────────────────────────
+// Parse an optional client-supplied timestamp for offline clock events. Only
+// accepts a valid date within the last 24h and not in the future; otherwise null
+// (caller falls back to server "now"). Prevents backdating abuse.
+const parseClockAt = (raw) => {
+  if (!raw) return null;
+  const t = new Date(raw);
+  if (isNaN(t.getTime())) return null;
+  const now = Date.now();
+  if (t.getTime() > now + 60000) return null;            // not in the future
+  if (t.getTime() < now - 24 * 60 * 60 * 1000) return null; // not older than 24h
+  return t;
+};
+
 app.post('/api/clock/in', verifyToken, async (req, res) => {
   try {
     const existing = await ClockEntry.findOne({ staffId: req.user._id.toString(), clockOut: { $exists: false } });
     if (existing) return res.status(400).json({ success: false, error: 'Already clocked in.' });
-    const manilaDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-    const entry = await ClockEntry.create({ staffId: req.user._id.toString(), staffName: req.user.name, date: manilaDate });
+    const at = parseClockAt(req.body?.at);
+    const manilaDate = (at || new Date()).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    const doc = { staffId: req.user._id.toString(), staffName: req.user.name, date: manilaDate };
+    if (at) doc.clockIn = at;
+    const entry = await ClockEntry.create(doc);
     res.json({ success: true, entry });
   } catch (err) { res.status(500).json({ success: false, error: IS_PROD ? 'Internal server error' : err.message }); }
 });
@@ -4550,7 +4573,9 @@ app.post('/api/clock/out', verifyToken, async (req, res) => {
     const { notes } = req.body;
     const entry = await ClockEntry.findOne({ staffId: req.user._id.toString(), clockOut: { $exists: false } });
     if (!entry) return res.status(400).json({ success: false, error: 'Not clocked in.' });
-    const now = new Date();
+    // Honor an offline timestamp, but never let clock-out precede clock-in.
+    const at = parseClockAt(req.body?.at);
+    const now = (at && at.getTime() >= new Date(entry.clockIn).getTime()) ? at : new Date();
     // If still on break, close it out first.
     const ob = openBreak(entry);
     if (ob) { ob.end = now; ob.minutes = Math.round((now - ob.start) / 60000); entry.markModified('breaks'); }

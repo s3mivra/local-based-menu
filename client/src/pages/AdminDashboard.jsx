@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { Menu, Maximize, Minimize, X, Lock, Unlock, QrCode, TrendingUp, TrendingDown, Package, Users, Settings, DollarSign, ShoppingCart, ChefHat, BarChart3, FileText, AlertCircle, AlertTriangle, Plus, Edit, Trash2, Eye, Download, RefreshCw, CheckCircle, Check, Clock, Coffee, Minus, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Building2, Printer, ArrowUp, ArrowDown, Gift, XCircle, Zap, BarChart2, CreditCard, Banknote, Smartphone, Truck, Bell, ShieldCheck, Search, Tag, Wifi, WifiOff, CloudOff } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { usePwa } from '../lib/usePwa';
-import { queueOrder } from '../lib/pwa';
+import { queueOrder, requestNotificationPermission, notify, queueClock, getQueuedClock, flushClockQueue } from '../lib/pwa';
 import * as auth from '../lib/auth';
 // Tabs are lazy-loaded so only the active tab's code ships on first dashboard
 // paint; the rest load on demand when the operator opens them.
@@ -309,7 +309,15 @@ export default function AdminDashboard() {
     let cancelled = false;
     auth.refreshSession(API_URL).then((data) => {
       if (cancelled) return;
-      if (data?.user) { setActiveAdmin(data.user); setIsAuthenticated(true); }
+      if (data?.user) {
+        setActiveAdmin(data.user); setIsAuthenticated(true);
+      } else if (!navigator.onLine) {
+        // OFFLINE on reload: the refresh cookie can't reach the server. Fall back to
+        // the last signed-in user so the installed app keeps working (degraded mode:
+        // reads come from cache, writes are queued and synced when back online).
+        const u = auth.getUser();
+        if (u) { setActiveAdmin(u); setIsAuthenticated(true); }
+      }
       setAuthBootstrapping(false);
     });
     return () => { cancelled = true; };
@@ -533,6 +541,7 @@ export default function AdminDashboard() {
       }
 
       auth.setToken(data.token);
+      auth.setUser(data.user); // persist identity for offline use
       setIsAuthenticated(true);
       setActiveAdmin(data.user);
 
@@ -680,32 +689,45 @@ export default function AdminDashboard() {
     }
   };
 
+  const MENU_CACHE_KEY = 'semivra_menu_cache';
   const fetchData = async () => {
+    // OFFLINE: hydrate the menu from the last cached snapshot so the POS still works.
+    if (!navigator.onLine) {
+      try {
+        const c = JSON.parse(localStorage.getItem(MENU_CACHE_KEY) || 'null');
+        if (c) {
+          setProducts(c.products || []); setCategories(c.categories || []);
+          setDiscounts(c.discounts || []); setGlobalAddOns(c.addons || []);
+          setModifierGroups(c.modifierGroups || []); setCombos(c.combos || []);
+        }
+      } catch { /* ignore */ }
+      return;
+    }
     try {
-      // Fetch Products
-      const pRes = await apiFetch(`/api/products`);
-      if (pRes.ok) setProducts((await pRes.json()).products || []);
-      
-      // Fetch Categories
-      const cRes = await apiFetch(`/api/categories`);
-      if (cRes.ok) setCategories((await cRes.json()).categories || []);
-      
-      // Fetch Discounts
-      const dRes = await apiFetch(`/api/discounts`);
-      if (dRes.ok) setDiscounts((await dRes.json()).discounts || []);
+      const get = async (url, key) => { const r = await apiFetch(url); return r.ok ? ((await r.json())[key] || []) : null; };
+      const products       = await get('/api/products', 'products');
+      const categories     = await get('/api/categories', 'categories');
+      const discounts      = await get('/api/discounts', 'discounts');
+      const addons         = await get('/api/addons', 'addons');
+      const modifierGroups = await get('/api/modifier-groups', 'groups');
+      const combos         = await get('/api/combos?all=1', 'combos');
 
-      // Fetch Global Add-Ons
-      const aRes = await apiFetch(`/api/addons`);
-      if (aRes.ok) setGlobalAddOns((await aRes.json()).addons || []);
+      if (products)       setProducts(products);
+      if (categories)     setCategories(categories);
+      if (discounts)      setDiscounts(discounts);
+      if (addons)         setGlobalAddOns(addons);
+      if (modifierGroups) setModifierGroups(modifierGroups);
+      if (combos)         setCombos(combos);
 
-      // Fetch Modifier Groups
-      const mgRes = await apiFetch('/api/modifier-groups');
-      if (mgRes.ok) setModifierGroups((await mgRes.json()).groups || []);
-
-      // Fetch Combos / Bundles
-      const cbRes = await apiFetch('/api/combos?all=1');
-      if (cbRes.ok) setCombos((await cbRes.json()).combos || []);
-
+      // Cache a snapshot for offline use (keep prior values for any part that failed).
+      try {
+        const prev = JSON.parse(localStorage.getItem(MENU_CACHE_KEY) || '{}');
+        localStorage.setItem(MENU_CACHE_KEY, JSON.stringify({
+          products: products ?? prev.products, categories: categories ?? prev.categories,
+          discounts: discounts ?? prev.discounts, addons: addons ?? prev.addons,
+          modifierGroups: modifierGroups ?? prev.modifierGroups, combos: combos ?? prev.combos,
+        }));
+      } catch { /* quota / private mode — ignore */ }
     } catch (err) { console.error('Failed to fetch menu data', err); }
   };
 
@@ -805,9 +827,23 @@ export default function AdminDashboard() {
     } catch { return false; }
   };
 
+  // Replay a queued offline clock event against the server, backdating it to when
+  // it actually happened (`at`) so payroll hours stay accurate.
+  const sendQueuedClock = async (e) => {
+    const path = e.type === 'out' ? '/api/clock/out' : '/api/clock/in';
+    try {
+      const res = await apiFetch(path, { method: 'POST', body: JSON.stringify({ at: e.at }) });
+      const d = await res.json().catch(() => ({}));
+      return res.ok && d.success !== false;
+    } catch { return false; }
+  };
+
   const flushOfflineQueue = () => {
     if (!navigator.onLine || !isAuthenticated) return;
     syncQueue(sendQueuedOrder).then(({ sent }) => { if (sent > 0) fetchOrders(); });
+    if (getQueuedClock().length > 0) {
+      flushClockQueue(sendQueuedClock).then(({ sent }) => { if (sent > 0) fetchClockStatus(); });
+    }
   };
 
   // Auto-flush the offline order queue: on reconnect/login, whenever the queue
@@ -902,11 +938,18 @@ export default function AdminDashboard() {
     fetchData();
     fetchERPData();
     fetchUsers();
+    requestNotificationPermission(); // ask once so new-order alerts can show in the installed app
 
     // Join the correct room based on role so server can send targeted events
     socket.emit('joinRoom', activeAdmin?.role || 'staff');
 
-    const handleNewOrder    = (order) => { setOrders(prev => [order, ...prev]); playKitchenDing(); pushOrderToast(order); };
+    const handleNewOrder    = (order) => {
+      setOrders(prev => [order, ...prev]); playKitchenDing(); pushOrderToast(order);
+      // OS notification (mainly useful when the app is backgrounded/installed)
+      if (typeof document !== 'undefined' && document.hidden) {
+        notify('New order', `${order.orderNumber || ''} · ${order.table || 'Takeout'}${order.customerName ? ' · ' + order.customerName : ''}`.trim());
+      }
+    };
     const handleOrderUpdate = (updated) => setOrders(prev => prev.map(o => o._id === updated._id ? updated : o));
     const handleMenuUpdate  = () => fetchData();
     const handleArchived    = () => fetchOrders();
@@ -3154,14 +3197,39 @@ const updateStatus = async (orderId, newStatus) => {
   };
 
   // ── Clock in/out ─────────────────────────────────────────────────────────────
+  // Apply any queued offline clock events on top of a base status so the gate /
+  // button reflect the staff member's optimistic state until the queue syncs.
+  const applyQueuedClock = (base) => {
+    let s = { ...base };
+    for (const e of getQueuedClock()) {
+      if (e.type === 'in')  s = { ...s, isClockedIn: true,  onBreak: false };
+      if (e.type === 'out') s = { ...s, isClockedIn: false, onBreak: false };
+    }
+    return s;
+  };
+  const CLOCK_STATE_KEY = 'semivra_clock_state';
   const fetchClockStatus = async () => {
+    // OFFLINE: rebuild status from the last cached server snapshot + queued events.
+    if (!navigator.onLine) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(CLOCK_STATE_KEY) || 'null')
+          || { isClockedIn: false, entry: null, onBreak: false, breakUsedMinutes: 0, breakRemainingMinutes: 60 };
+        setClockStatus(applyQueuedClock(cached));
+      } catch { /* ignore */ }
+      finally { setClockStatusLoaded(true); }
+      return;
+    }
     try {
       const res = await apiFetch('/api/clock/status'); const d = await res.json();
-      if (d.success) setClockStatus({
-        isClockedIn: d.isClockedIn, entry: d.entry,
-        onBreak: !!d.onBreak, breakStartedAt: d.breakStartedAt || null,
-        breakUsedMinutes: d.breakUsedMinutes || 0, breakRemainingMinutes: d.breakRemainingMinutes ?? 60,
-      });
+      if (d.success) {
+        const st = {
+          isClockedIn: d.isClockedIn, entry: d.entry,
+          onBreak: !!d.onBreak, breakStartedAt: d.breakStartedAt || null,
+          breakUsedMinutes: d.breakUsedMinutes || 0, breakRemainingMinutes: d.breakRemainingMinutes ?? 60,
+        };
+        setClockStatus(st);
+        try { localStorage.setItem(CLOCK_STATE_KEY, JSON.stringify(st)); } catch { /* ignore */ }
+      }
     }
     catch (err) { console.error('fetchClockStatus', err); }
     finally { setClockStatusLoaded(true); }
@@ -3171,6 +3239,12 @@ const updateStatus = async (orderId, newStatus) => {
     catch (err) { console.error('fetchClockEntries', err); }
   };
   const handleClockIn = async () => {
+    if (!navigator.onLine) {
+      queueClock('in');
+      setClockStatus((s) => ({ ...s, isClockedIn: true, onBreak: false }));
+      alert('Clocked in (offline — will sync when back online).');
+      return;
+    }
     try { const res = await apiFetch('/api/clock/in', { method: 'POST', body: '{}' }); const d = await res.json(); if (d.success) { fetchClockStatus(); alert('Clocked in.'); } else alert(d.error||'Clock-in failed.'); }
     catch { alert('Network error.'); }
   };
@@ -3196,6 +3270,13 @@ const updateStatus = async (orderId, newStatus) => {
     } catch { alert('Network error.'); }
   };
   const handleClockOut = async () => {
+    if (!navigator.onLine) {
+      queueClock('out');
+      setClockStatus((s) => ({ ...s, isClockedIn: false, onBreak: false }));
+      setClockModalOpen(false);
+      alert('Clocked out (offline — will sync when back online).');
+      return;
+    }
     try {
       const res = await apiFetch('/api/clock/out', { method: 'POST', body: '{}' });
       const d = await res.json();
@@ -3672,6 +3753,8 @@ const updateStatus = async (orderId, newStatus) => {
   const totalPricingPages = Math.ceil(products.length / pricingItemsPerPage);
 
   const isSuperAdmin = activeAdmin?.role === 'superadmin';
+  // Void / refund are allowed for superadmin OR admin (case-insensitive).
+  const canVoidRefund = ['superadmin', 'admin'].includes(String(activeAdmin?.role || '').toLowerCase());
 
   // CLOCK-IN GATE: every non-superadmin must clock in before using the POS.
   // (Superadmin/owner is exempt.) Shown once the clock status is known so we
@@ -3852,7 +3935,7 @@ const updateStatus = async (orderId, newStatus) => {
   const ctx = {
     // ── Shared data ─────────────────────────────────────────────────────────
     orders, archivedOrders, products, categories, inventory, discounts, globalAddOns,
-    users, activeAdmin, isSuperAdmin,
+    users, activeAdmin, isSuperAdmin, canVoidRefund,
     // ── Core helpers ────────────────────────────────────────────────────────
     fetchOrders, fetchData, fetchERPData, fetchEODData,
     apiFetch, updateStatus, printOrderSlip, handleVoidOrder,
@@ -4023,8 +4106,8 @@ const updateStatus = async (orderId, newStatus) => {
         <div className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={() => setDashDrawerOpen(false)} />
       )}
 
-      {/* Mobile drawer */}
-      <aside className={`lg:hidden fixed top-0 left-0 h-full w-64 bg-sidebar-bg z-50 flex flex-col border-r border-white/5 transition-transform duration-300 ${dashDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      {/* Mobile drawer — capped width on small phones, scrollable on short screens */}
+      <aside className={`lg:hidden fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-sidebar-bg z-50 flex flex-col border-r border-white/5 overflow-y-auto overscroll-contain transition-transform duration-300 ${dashDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {renderSidebarNav(() => setDashDrawerOpen(false))}
       </aside>
 
@@ -4036,8 +4119,8 @@ const updateStatus = async (orderId, newStatus) => {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
 
-        {/* Mobile top bar */}
-        <header className="lg:hidden flex items-center gap-3 px-4 h-16 bg-sidebar-bg border-b border-white/5 flex-shrink-0">
+        {/* Mobile top bar — sticky so the menu button is always reachable */}
+        <header className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 h-16 bg-sidebar-bg border-b border-white/5 flex-shrink-0">
           <button
             onClick={() => setDashDrawerOpen(true)}
             className="p-2 rounded-xl text-white/50 hover:text-white hover:bg-white/10 transition"
