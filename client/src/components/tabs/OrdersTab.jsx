@@ -36,7 +36,7 @@ export default function OrdersTab({ ctx }) {
     handleSaveCategory, handleSaveProduct, handleVoidOrder, historyItemName, historyModalOpen,
     historyPage, historySubTab, importModal, importRows, importSubmitting,
     invBadgeCount, invForm, invItemsPerPage, invPage, invSubTab,
-    inventory, isPosOpen, isStatusMenuOpen, isSuperAdmin, itemDisplay,
+    inventory, isPosOpen, isStatusMenuOpen, isSuperAdmin, canVoidRefund, itemDisplay,
     itemsPerPage, jeForm, journalEntries, ledgerSubTab, navMode,
     newDiscount, openEditInventory, openProductModal, orderFilter, orders,
     ordersItemsPerPage, ordersPage, parseImportFile, paymentSelections, peso,
@@ -1045,7 +1045,7 @@ export default function OrdersTab({ ctx }) {
                                 </div>
                               )}
 
-                              {order.status === 'Completed' && departmentFilter === 'All' && isSuperAdmin && (
+                              {order.status === 'Completed' && departmentFilter === 'All' && canVoidRefund && (
                                 <div className="flex gap-2">
                                   <button onClick={() => handleVoidOrder(order._id)} className="flex-1 bg-red-500/10 border border-red-500/20 text-red-400 py-2 rounded-lg hover:bg-red-500 hover:text-white font-bold text-xs uppercase tracking-widest transition">
                                     Void
