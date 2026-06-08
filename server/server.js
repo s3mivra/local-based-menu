@@ -692,7 +692,9 @@ items: [{
   arSettledAt:      { type: Date },
   arSettledAmount:  { type: Number, default: 0 },
   arSettledMethod:  { type: String, default: '' },
-  arSettledNote:    { type: String, default: '' }
+  arSettledNote:    { type: String, default: '' },
+  // Set true once inventory deduction + journal entry have been written, so we never double-post.
+  erpProcessed:     { type: Boolean, default: false }
 }, { timestamps: true });
 OrderSchema.index({ createdAt: -1 });
 OrderSchema.index({ status: 1, isArchived: 1 });
@@ -1758,11 +1760,19 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, error: `SYSTEM AUDIT REJECTED: ${validation.error}` });
     }
 
+    // ERP fires when the cashier records payment (Preparing + paymentMethod) so the
+    // journal entry is booked immediately on payment, not after a separate "Mark Completed" click.
+    // Falls back to Completed in case an order reaches Completed without going through the Pay step.
+    const isErpTrigger = wasNotCompleted && !order.erpProcessed && (
+      (status === 'Preparing' && req.body.paymentMethod) ||
+      (status === 'Completed')
+    );
+
     // --- POS GUARDRAIL: CHECK IF EOD IS LOCKED ---
-    if (status === 'Completed' && wasNotCompleted) {
+    if (isErpTrigger) {
       const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
       const currentEOD = await EODRecord.findOne({ dateString: todayStr }).session(session);
-      
+
       if (currentEOD && currentEOD.status === 'LOCKED') {
         await session.abortTransaction();
         session.endSession();
@@ -1771,7 +1781,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
     }
 
     // --- THE STRICT ERP ENGINE ---
-    if (status === 'Completed' && wasNotCompleted) {
+    if (isErpTrigger) {
       log.info(`\n[ERP ENGINE] Processing Order: ${order.orderNumber}...`);
       let totalCogs = 0;
       const stockCardBatch = [];
@@ -1977,6 +1987,7 @@ app.put('/api/orders/:id', verifyToken, async (req, res) => {
       }], { session });
 
       log.info(`[ERP LEDGER] Single AUTO Entry ${reference} created.`);
+      order.erpProcessed = true;
       emitToMgr('erpUpdated');
     }
 
@@ -4523,6 +4534,7 @@ app.post('/api/orders/:id/refund', verifyToken, requireSuperOrAdmin, async (req,
     assertBalanced(lines, reference);
     await JournalEntry.create([{ date: new Date(), reference, description: `Refund — ${order.orderNumber}: ${reason}`, lines, totalDebit: amt, totalCredit: amt }], { session });
     order.transactionType = 'REFUND';
+    order.status = 'Refunded';
     order.voidReason = `REFUND: ${reason}`;
     await order.save({ session });
     await AuditLog.create({ userId: req.user?.name, action: 'ORDER_REFUNDED', targetReference: order.orderNumber, details: { reason, refundAmount: amt, refundedBy: req.user?.name } });

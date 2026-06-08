@@ -435,7 +435,7 @@ export default function OrdersTab({ ctx }) {
                       
                       {isStatusMenuOpen && (
                         <div className="absolute right-0 top-full mt-2 w-48 bg-surface-2 border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
-                          {['All', 'Pending', 'Preparing', 'Completed', 'Cancelled', 'Parked'].map(filter => (
+                          {['All', 'Pending', 'Preparing', 'Completed', 'Refunded', 'Cancelled', 'Parked'].map(filter => (
                             <button
                               key={filter}
                               onClick={() => { setOrderFilter(filter); setIsStatusMenuOpen(false); if (filter === 'Parked') fetchParked(); }}
@@ -515,12 +515,13 @@ export default function OrdersTab({ ctx }) {
                       order.status === 'Ready'               ? 'border-l-blue-500' :
                       order.status === 'Partially Delivered' ? 'border-l-orange-500' :
                       order.status === 'Preparing'           ? 'border-l-yellow-500' :
+                      order.status === 'Refunded'                               ? 'border-l-purple-500' :
                       (order.status === 'Cancelled' || order.status === 'Voided') ? 'border-l-gray-600' :
                       'border-l-red-500';
                     return (
                       <div key={order._id} className={`bg-surface rounded-xl border border-l-4 flex flex-col shadow-lg transition-all
                         ${allDeptDone && order.status !== 'Completed' ? 'border-green-500/40 border-l-green-500' : `border-white/5 ${statusBorderColor}`}
-                        ${(order.status === 'Cancelled' || order.status === 'Voided') ? 'opacity-60' : ''}`}>
+                        ${(order.status === 'Cancelled' || order.status === 'Voided' || order.status === 'Refunded') ? 'opacity-60' : ''}`}>
 
                         {/* HEADER — only chevron collapses */}
                         <div className="flex justify-between items-center px-4 pt-4 pb-3 gap-2">
@@ -550,6 +551,7 @@ export default function OrdersTab({ ctx }) {
                                 order.status === 'Ready'               ? 'bg-blue-500/15 text-blue-400' :
                                 order.status === 'Partially Delivered' ? 'bg-orange-500/15 text-orange-400' :
                                 order.status === 'Completed'           ? 'bg-green-500/15 text-green-400' :
+                                order.status === 'Refunded'            ? 'bg-purple-500/15 text-purple-400' :
                                 'bg-gray-500/15 text-gray-500'
                               }`}>{order.status}</span>
                               <span className="text-gray-600 text-[9px]">{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
