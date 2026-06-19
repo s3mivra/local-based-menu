@@ -3402,99 +3402,129 @@ const generateNextSequence = async (_Model, prefix, _fieldName) => {
 };
 
 // --- MIDNIGHT AUTO-ARCHIVE SYSTEM ---
-function scheduleMidnightArchive() {
-  const now = new Date();
-  
-  // 1. Calculate precise time to Midnight in the Philippines (Asia/Manila)
-  const manilaDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Manila" }));
-  const manilaMidnight = new Date(manilaDate);
-  manilaMidnight.setHours(24, 0, 0, 0); 
-  const msToMidnight = manilaMidnight.getTime() - manilaDate.getTime();
 
-  // 2. Set the countdown timer
-  setTimeout(async () => {
-    // Superadmin-controlled toggle: when autoCloseEnabled is explicitly false,
-    // skip the automatic cancel/archive/lock and leave the day open for a manual
-    // close. The timer still reschedules for the next midnight.
-    const acSetting = await Settings.findOne({ key: 'autoCloseEnabled' }).lean();
-    if (acSetting && acSetting.value === false) {
-      log.info('  Midnight reached (PH Time): auto-close is DISABLED — leaving the day open for manual close.');
-      scheduleMidnightArchive();
-      return;
+// Core archive logic — runs the actual close for a given Manila date string (YYYY-MM-DD).
+async function runMidnightArchive(closedDateStr) {
+  const acSetting = await Settings.findOne({ key: 'autoCloseEnabled' }).lean();
+  if (acSetting && acSetting.value === false) {
+    log.info('  Midnight reached (PH Time): auto-close is DISABLED — leaving the day open for manual close.');
+    return;
+  }
+
+  // Check if this date was already auto-closed (prevents double-run on restart).
+  const existing = await EODRecord.findOne({ dateString: closedDateStr, status: 'LOCKED', lockedBy: 'SYSTEM AUTO-CLOSE' }).lean();
+  if (existing) {
+    log.info(`  Auto-close: ${closedDateStr} already locked — skipping.`);
+    return;
+  }
+
+  log.info(`  Midnight reached (PH Time): Auto-closing the day for ${closedDateStr}...`);
+
+  try {
+    // Step A: Force any hanging order to Cancelled — Pending/Preparing/Ready
+    //         plus Parked (held unpaid tabs); clear isParked so none linger.
+    await Order.updateMany(
+      { status: { $in: ['Pending', 'Preparing', 'Ready', 'Parked'] }, isArchived: false },
+      { $set: { status: 'Cancelled', isParked: false } }
+    );
+
+    // Step B: Sweep everything active into the archive (incl. the just-cancelled
+    //         Parked tabs and any existing Cancelled/Voided orders).
+    await Order.updateMany({ isArchived: false }, { $set: { isArchived: true, isParked: false } });
+    emitToAll('ordersArchived'); // Tell all iPads/phones to clear their screens
+
+    // Step C: Take the Midnight Inventory Snapshot
+    const allItems = await Inventory.find();
+    const snapshotDate = new Date(closedDateStr + 'T00:00:00.000');
+    for (const item of allItems) {
+      await InventoryMovement.create({
+        date: snapshotDate,
+        inventoryId: item._id,
+        itemName: item.itemName,
+        systemEndingBalance: item.stockQty,
+      });
     }
-    log.info('  Midnight reached (PH Time): Auto-closing the day...');
 
-    try {
-      // Step A: Force any hanging order to Cancelled — Pending/Preparing/Ready
-      //         plus Parked (held unpaid tabs); clear isParked so none linger.
-      await Order.updateMany(
-        { status: { $in: ['Pending', 'Preparing', 'Ready', 'Parked'] }, isArchived: false },
-        { $set: { status: 'Cancelled', isParked: false } }
-      );
+    // Step D: 🚨 LOCK THE REGISTER IN THE EOD RECORD 🚨
+    await EODRecord.findOneAndUpdate(
+      { dateString: closedDateStr },
+      { status: 'LOCKED', lockedAt: new Date(), lockedBy: 'SYSTEM AUTO-CLOSE' },
+      { upsert: true, new: true }
+    );
 
-      // Step B: Sweep everything active into the archive (incl. the just-cancelled
-      //         Parked tabs and any existing Cancelled/Voided orders).
-      await Order.updateMany({ isArchived: false }, { $set: { isArchived: true, isParked: false } });
-      emitToAll('ordersArchived'); // Tell all iPads/phones to clear their screens
+    log.info(`  Register locked automatically for ${closedDateStr}`);
+    emitToMgr('erpUpdated'); // Refreshes the Admin UI to show "EOD Locked"
 
-      // Step C: Take the Midnight Inventory Snapshot
-      const allItems = await Inventory.find();
-      const todayDate = new Date();
-      todayDate.setHours(0, 0, 0, 0); 
-      for (const item of allItems) {
-        await InventoryMovement.create({
-          date: todayDate,
-          inventoryId: item._id,
-          itemName: item.itemName,
-          systemEndingBalance: item.stockQty,
+    // Step E: Telegram daily summary webhook (set TELEGRAM_WEBHOOK_URL in .env)
+    if (process.env.TELEGRAM_WEBHOOK_URL) {
+      try {
+        const todayStart = new Date(closedDateStr + 'T00:00:00.000');
+        const todayOrds  = await Order.find({ isArchived: true, createdAt: { $gte: todayStart } }).lean();
+        const completed  = todayOrds.filter(o => o.status === 'Completed' && !o.isComplimentary);
+        const revenue    = completed.reduce((s, o) => s + (o.total || 0), 0);
+        const cashSales  = completed.filter(o => o.paymentMethod === 'Cash').reduce((s, o) => s + (o.total || 0), 0);
+        const voids      = todayOrds.filter(o => o.status === 'Voided').length;
+        const prodCount  = {};
+        completed.forEach(o => (o.items || []).forEach(i => { const n = (i.name || '').replace(/\s*\(.*?\)\s*/g, '').trim(); prodCount[n] = (prodCount[n] || 0) + i.quantity; }));
+        const topProd    = Object.entries(prodCount).sort(([, a], [, b]) => b - a)[0];
+        const msg = [
+          `📊 *${closedDateStr} — Daily Summary*`,
+          `💰 Revenue: ₱${revenue.toFixed(2)}`,
+          `📦 Orders: ${completed.length} completed${voids > 0 ? `, ${voids} voided` : ''}`,
+          `💵 Cash: ₱${cashSales.toFixed(2)} | Non-Cash: ₱${(revenue - cashSales).toFixed(2)}`,
+          topProd ? `🏆 Top item: ${topProd[0]} (${topProd[1]}x)` : '',
+        ].filter(Boolean).join('\n');
+        await fetch(process.env.TELEGRAM_WEBHOOK_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: msg, parse_mode: 'Markdown' })
         });
-      }
-
-      // Step D: 🚨 LOCK THE REGISTER IN THE EOD RECORD 🚨
-      const closedDateStr = manilaDate.toLocaleDateString('en-CA'); // YYYY-MM-DD
-      await EODRecord.findOneAndUpdate(
-        { dateString: closedDateStr },
-        { status: 'LOCKED', lockedAt: new Date(), lockedBy: 'SYSTEM AUTO-CLOSE' },
-        { upsert: true, new: true }
-      );
-
-      log.info(`  Register locked automatically for ${closedDateStr}`);
-      emitToMgr('erpUpdated'); // Refreshes the Admin UI to show "EOD Locked"
-
-      // Step E: Telegram daily summary webhook (set TELEGRAM_WEBHOOK_URL in .env)
-      if (process.env.TELEGRAM_WEBHOOK_URL) {
-        try {
-          const todayStart = new Date(closedDateStr + 'T00:00:00.000');
-          const todayOrds  = await Order.find({ isArchived: true, createdAt: { $gte: todayStart } }).lean();
-          const completed  = todayOrds.filter(o => o.status === 'Completed' && !o.isComplimentary);
-          const revenue    = completed.reduce((s, o) => s + (o.total || 0), 0);
-          const cashSales  = completed.filter(o => o.paymentMethod === 'Cash').reduce((s, o) => s + (o.total || 0), 0);
-          const voids      = todayOrds.filter(o => o.status === 'Voided').length;
-          const prodCount  = {};
-          completed.forEach(o => (o.items || []).forEach(i => { const n = (i.name || '').replace(/\s*\(.*?\)\s*/g, '').trim(); prodCount[n] = (prodCount[n] || 0) + i.quantity; }));
-          const topProd    = Object.entries(prodCount).sort(([, a], [, b]) => b - a)[0];
-          const msg = [
-            `📊 *${closedDateStr} — Daily Summary*`,
-            `💰 Revenue: ₱${revenue.toFixed(2)}`,
-            `📦 Orders: ${completed.length} completed${voids > 0 ? `, ${voids} voided` : ''}`,
-            `💵 Cash: ₱${cashSales.toFixed(2)} | Non-Cash: ₱${(revenue - cashSales).toFixed(2)}`,
-            topProd ? `🏆 Top item: ${topProd[0]} (${topProd[1]}x)` : '',
-          ].filter(Boolean).join('\n');
-          await fetch(process.env.TELEGRAM_WEBHOOK_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: msg, parse_mode: 'Markdown' })
-          });
-          log.info('Telegram daily summary sent');
-        } catch (tErr) { log.warn({ err: tErr }, 'Telegram webhook failed (non-fatal)'); }
-      }
-
-    } catch (error) {
-      console.error("Auto-Archive Error:", error);
+        log.info('Telegram daily summary sent');
+      } catch (tErr) { log.warn({ err: tErr }, 'Telegram webhook failed (non-fatal)'); }
     }
 
-    // 3. Schedule it again for tomorrow!
-    scheduleMidnightArchive();
-  }, msToMidnight);
+  } catch (error) {
+    console.error("Auto-Archive Error:", error);
+  }
+}
+
+// Returns the current Manila date string (YYYY-MM-DD) and whether it is past midnight
+// (i.e., we are in the first 5 minutes of a new Manila day — the close window).
+function getManilaDateInfo() {
+  const manilaStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' });
+  const manila    = new Date(manilaStr);
+  const dateStr   = `${manila.getFullYear()}-${String(manila.getMonth() + 1).padStart(2, '0')}-${String(manila.getDate()).padStart(2, '0')}`;
+  // "yesterday" in Manila = the day we are closing
+  const yesterday = new Date(manila);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const prevDateStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+  return { dateStr, prevDateStr, manilaHour: manila.getHours(), manilaMinute: manila.getMinutes() };
+}
+
+// Polls every 60 seconds. At 00:00–00:04 Manila time, attempts to run the close for
+// the previous day. The idempotency check inside runMidnightArchive prevents double runs.
+// This also catches up automatically on server restarts that happened at/after midnight.
+function scheduleMidnightArchive() {
+  setInterval(async () => {
+    try {
+      const { manilaHour, manilaMinute, prevDateStr } = getManilaDateInfo();
+      if (manilaHour === 0 && manilaMinute < 5) {
+        await runMidnightArchive(prevDateStr);
+      }
+    } catch (err) {
+      console.error('scheduleMidnightArchive poll error:', err);
+    }
+  }, 60 * 1000); // check every minute
+
+  // Also run a catch-up immediately on boot: if it's already past midnight and
+  // yesterday's EOD was never auto-closed, close it now.
+  (async () => {
+    try {
+      const { prevDateStr } = getManilaDateInfo();
+      await runMidnightArchive(prevDateStr);
+    } catch (err) {
+      console.error('scheduleMidnightArchive boot catch-up error:', err);
+    }
+  })();
 }
 
 // --- 🛡️ STRICT ORDER VALIDATION ENGINE (VAT-INCLUSIVE) 🛡️ ---
